@@ -70,3 +70,35 @@ func TestAlpineRootfs(t *testing.T) {
 		t.Error("no error when the list has no mini root filesystem")
 	}
 }
+
+func TestParseDistros(t *testing.T) {
+	sum := strings.Repeat("ab", 32)
+	raw := `{"ModernDistributions":{
+	 "Ubuntu":[
+	  {"Name":"Ubuntu","FriendlyName":"Ubuntu","Default":true,"Amd64Url":{"Url":"https://x/ubuntu-26.04.1-wsl-amd64.wsl","Sha256":"` + sum + `"},"Arm64Url":{"Url":"https://x/ubuntu-26.04.1-wsl-arm64.wsl","Sha256":"` + sum + `"}},
+	  {"Name":"Ubuntu-26.04","FriendlyName":"Ubuntu 26.04 LTS","Amd64Url":{"Url":"https://x/ubuntu-26.04.1-wsl-amd64.wsl","Sha256":"` + sum + `"},"Arm64Url":{"Url":"https://x/ubuntu-26.04.1-wsl-arm64.wsl","Sha256":"` + sum + `"}},
+	  {"Name":"Ubuntu-24.04","FriendlyName":"Ubuntu 24.04 LTS","Amd64Url":{"Url":"https://x/ubuntu-24.04.5-wsl-amd64.wsl","Sha256":"0x` + strings.ToUpper(sum) + `"},"Arm64Url":{"Url":"https://x/ubuntu-24.04.5-wsl-arm64.wsl","Sha256":"` + sum + `"}},
+	  {"Name":"Ubuntu-20.04","FriendlyName":"Ubuntu 20.04 LTS","Amd64Url":{"Url":"https://x/focal.wsl","Sha256":"` + sum + `"},"Arm64Url":{"Url":"https://x/focal-arm.wsl","Sha256":"` + sum + `"}}],
+	 "Debian":[{"Name":"Debian","FriendlyName":"Debian GNU/Linux","Amd64Url":{"Url":"https://d/Debian.wsl","Sha256":"` + sum + `"},"Arm64Url":{"Url":"https://d/Debian-arm.wsl","Sha256":"` + sum + `"}}],
+	 "Fedora":[{"Name":"FedoraLinux-45","FriendlyName":"Fedora Linux 45","Amd64Url":{"Url":"https://f/F.wsl","Sha256":"` + sum + `"},"Arm64Url":{"Url":"https://f/F-arm.wsl","Sha256":"` + sum + `"}}],
+	 "archlinux":[{"Name":"archlinux","FriendlyName":"Arch Linux","Amd64Url":{"Url":"https://a/a.wsl","Sha256":"nope"}}]}}`
+	byID, flavors := parseDistros(raw)
+	var ids []string
+	for _, f := range flavors {
+		ids = append(ids, f.ID)
+	}
+	// One entry per download, newest Ubuntu first, the retired 20.04 and
+	// the families with no installer left out.
+	if got := strings.Join(ids, ","); got != "ms:Ubuntu,ms:Ubuntu-24.04,ms:Debian" {
+		t.Errorf("flavors = %s", got)
+	}
+	if !strings.HasPrefix(flavors[0].Label, "ubuntu-26.04.1-wsl-") {
+		t.Errorf("the plain Ubuntu entry should say its version: %q", flavors[0].Label)
+	}
+	if _, sum24 := byID["ms:Ubuntu-24.04"].download(); sum24 != sum {
+		t.Errorf("0x-prefixed upper-case checksum not normalised: %q", sum24)
+	}
+	if _, f := parseDistros("not json"); f != nil {
+		t.Error("garbage gave flavors")
+	}
+}

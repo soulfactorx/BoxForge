@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { call, type Container, type Run, type Volume } from "./bridge";
 import { ago, bytes } from "./format";
+import EngineCopy from "./EngineCopy";
 import { Dialog, Icon, IconButton } from "./ui";
 import VolumeBrowser from "./VolumeBrowser";
 
@@ -26,6 +27,7 @@ export default function Volumes({ volumes, containers, run, showCli, onOpen }: P
   const [pruning, setPruning] = useState(false);
   const [note, setNote] = useState("");
   const [browsing, setBrowsing] = useState<string | null>(null);
+  const [copying, setCopying] = useState<Volume | null>(null);
 
   const names = volumes.map((v) => v.name).sort().join(",");
   useEffect(() => {
@@ -149,6 +151,7 @@ export default function Volumes({ volumes, containers, run, showCli, onOpen }: P
                 <td className="muted nowrap">{ago(v.created)}</td>
                 <td className="actions">
                   <IconButton icon="folder" label="내용 보기" onClick={() => setBrowsing(v.name)} />
+                  <IconButton icon="send" label="다른 엔진으로 복사" onClick={() => setCopying(v)} />
                   <IconButton icon="trash" label="삭제" tone="danger" onClick={() => setRemoving(v)} />
                 </td>
               </tr>
@@ -165,6 +168,28 @@ export default function Volumes({ volumes, containers, run, showCli, onOpen }: P
           run={run}
           showCli={showCli}
           onClose={() => setBrowsing(null)}
+        />
+      )}
+
+      {copying && (
+        <EngineCopy
+          title="볼륨을 다른 엔진으로 복사"
+          what={
+            <p>
+              <strong>{anonymous(copying.name) ? copying.name.slice(0, 12) : copying.name}</strong> 볼륨과 그 안의 데이터를 다른 엔진에 넣습니다. 받는
+              쪽에 같은 이름의 볼륨이 있으면 그 안에 채워 넣고, 이름이 같은 파일은 덮어씁니다. 여기 있는 볼륨은 그대로 남습니다.
+            </p>
+          }
+          run={run}
+          command={(other) =>
+            `docker run --rm -v ${copying.name}:/v:ro alpine tar -cf - -C /v . | ${other} run --rm -i -v ${copying.name}:/v alpine tar -xf - -C /v`
+          }
+          copy={(key, target) => call<void>("CopyVolume", key, copying.name, target)}
+          onClose={() => setCopying(null)}
+          onDone={(label) => {
+            setNote(`${anonymous(copying.name) ? copying.name.slice(0, 12) : copying.name} 볼륨을 "${label}"(으)로 복사했습니다.`);
+            setCopying(null);
+          }}
         />
       )}
 

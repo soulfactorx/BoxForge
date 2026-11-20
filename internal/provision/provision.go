@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,12 +68,104 @@ type Flavor struct {
 	Note  string `json:"note"`
 }
 
-// Flavors are the choices offered. "custom" takes a root filesystem the
+// The choices that are always there. "custom" takes a root filesystem the
 // user names: a file on this PC or a URL.
-var Flavors = []Flavor{
-	{ID: "ubuntu", Label: "Ubuntu 24.04 LTS", Note: "가장 널리 쓰여 문제가 적습니다. 약 340MB를 내려받습니다."},
-	{ID: "alpine", Label: "Alpine Linux (최신 안정판)", Note: "아주 작고 빨리 설치됩니다. 약 4MB를 내려받습니다."},
-	{ID: "custom", Label: "다른 배포판 (직접 지정)", Note: "WSL용 루트 파일시스템(.tar, .tar.gz, .wsl)의 경로나 주소를 적습니다. Ubuntu · Debian · Alpine 계열이어야 Docker를 설치할 수 있습니다."},
+var (
+	alpineFlavor = Flavor{ID: "alpine", Label: "Alpine Linux (최신 안정판)", Note: "아주 작고 빨리 설치됩니다. 약 4MB를 내려받습니다."}
+	customFlavor = Flavor{ID: "custom", Label: "직접 지정", Note: "WSL용 루트 파일시스템(.tar, .tar.gz, .wsl)의 경로나 주소를 적습니다. Ubuntu · Debian · Alpine 계열이어야 Docker를 설치할 수 있습니다."}
+	// What is offered when Microsoft's list can't be read.
+	fallbackUbuntu = Flavor{ID: "ubuntu", Label: "Ubuntu 24.04 LTS", Note: "가장 널리 쓰여 문제가 적습니다. 약 340MB를 내려받습니다."}
+)
+
+// The list `wsl --list --online` shows: every distribution made for WSL,
+// with where to download each and its checksum.
+func distroListURL() string {
+	if u := os.Getenv("BOXFORGE_DISTROS_URL"); u != "" {
+		return u
+	}
+	return "https://raw.githubusercontent.com/microsoft/WSL/master/distributions/DistributionInfo.json"
+}
+
+// listed is one distribution of that list.
+type listed struct {
+	Name         string
+	FriendlyName string
+	Default      bool
+	Amd64Url     *struct{ Url, Sha256 string }
+	Arm64Url     *struct{ Url, Sha256 string }
+}
+
+func (l listed) download() (url, sum string) {
+	d := l.Amd64Url
+	if runtime.GOARCH == "arm64" {
+		d = l.Arm64Url
+	}
+	if d == nil {
+		return "", ""
+	}
+	return d.Url, strings.ToLower(strings.TrimPrefix(d.Sha256, "0x"))
+}
+
+// The families of that list BoxForge knows how to put Docker into: the
+// ones Docker publishes packages for and whose install has been written
+// here. The others can run Docker too, but would need steps of their own.
+var installable = map[string]string{
+	"Ubuntu": "Docker 공식 패키지를 설치합니다.",
+	"Debian": "Docker 공식 패키지를 설치합니다.",
+}
+
+// parseDistros picks the installable distributions out of Microsoft's list.
+func parseDistros(raw string) (map[string]listed, []Flavor) {
+	var doc struct {
+		ModernDistributions map[string][]listed
+	}
+	if json.Unmarshal([]byte(raw), &doc) != nil {
+		return nil, nil
+	}
+	byID := map[string]listed{}
+	var flavors []Flavor
+	for _, family := range []string{"Ubuntu", "Debian"} {
+		seen := map[string]bool{}
+		first := true
+		for _, d := range doc.ModernDistributions[family] {
+			url, sum := d.download()
+			// The same download under two names ("Ubuntu" and its
+			// version) is offered once; one with no checksum, not at all.
+			if url == "" || len(sum) != 64 || seen[url] || strings.Contains(d.FriendlyName, "20.04") {
+				continue
+			}
+			seen[url] = true
+			label := d.FriendlyName
+			if label == family { // "Ubuntu": say which one it is
+				label = strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".wsl")
+			}
+			note := installable[family]
+			if first && family == "Ubuntu" {
+				note = "최신 버전입니다. " + note
+			}
+			first = false
+			id := "ms:" + d.Name
+			byID[id] = d
+			flavors = append(flavors, Flavor{ID: id, Label: label, Note: note})
+		}
+	}
+	return byID, flavors
+}
+
+// flavors returns the choices, reading Microsoft's list the first time.
+func (in *Installer) flavors() []Flavor {
+	in.listOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if raw, err := fetch(ctx, distroListURL()); err == nil {
+			in.listed, in.choices = parseDistros(raw)
+		}
+		if len(in.choices) == 0 {
+			in.choices = []Flavor{fallbackUbuntu}
+		}
+		in.choices = append(in.choices, alpineFlavor, customFlavor)
+	})
+	return in.choices
 }
 
 // Options says which Linux to install into.
@@ -120,7 +213,12 @@ func alpineBase() string {
 }
 
 // resolve finds what to download for the chosen flavor.
-func resolve(ctx context.Context, o Options, dir string) (source, error) {
+func (in *Installer) resolve(ctx context.Context, o Options, dir string) (source, error) {
+	if d, ok := in.listed[o.Flavor]; ok {
+		url, sum := d.download()
+		name := url[strings.LastIndex(url, "/")+1:]
+		return source{url: url, file: filepath.Join(dir, name), sha256: sum}, nil
+	}
 	switch o.Flavor {
 	case "", "ubuntu":
 		arch := "amd64"
@@ -228,24 +326,57 @@ alpine)
   echo "[3/5] Docker Engine 내려받아 설치"
   apk add --no-cache docker docker-cli-compose docker-cli-buildx
   echo "[4/5] 자동 시작 설정"
-  # No systemd here: WSL runs this command each time it starts the distribution.
-  if ! grep -q 'boxforge-start' /etc/wsl.conf 2>/dev/null; then printf '\n[boot]\ncommand = /usr/local/bin/boxforge-start\n' >> /etc/wsl.conf; fi
   ;;
 *)
   echo "이 배포판($ID)에는 Docker를 자동으로 설치하지 못합니다. Ubuntu, Debian, Alpine 계열을 지원합니다." >&2
   exit 4
   ;;
 esac
-# Starts the engine where there is no systemd to do it.
-mkdir -p /usr/local/bin
+echo "[5/5] 설치 완료"
+`
+
+// The script that starts the engine, run as root inside the distribution
+// each time the installer reaches its last step (so a fix to it reaches
+// an installation made by an earlier version). With systemd it asks
+// systemd. Without (Alpine) it puts a starter where WSL's boot command
+// finds it, runs it, and waits for the engine's socket; when the engine
+// does not come up it prints the end of the engine's own log, which says why.
+const startScript = `mkdir -p /usr/local/bin /var/log
 cat > /usr/local/bin/boxforge-start <<'EOS'
 #!/bin/sh
+# Starts the Docker engine where there is no systemd to do it.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 pgrep -x dockerd >/dev/null 2>&1 && exit 0
-mkdir -p /var/log
-nohup dockerd >/var/log/dockerd.log 2>&1 &
+# dockerd wants the cgroup controllers mounted; systemd or OpenRC would have.
+if ! mountpoint -q /sys/fs/cgroup; then mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || mount -t tmpfs -o mode=0755 cgroup /sys/fs/cgroup; fi
+if [ ! -e /sys/fs/cgroup/cgroup.controllers ]; then
+  for sys in $(awk '!/^#/ { if ($4 == 1) print $1 }' /proc/cgroups); do
+    mkdir -p "/sys/fs/cgroup/$sys"
+    mountpoint -q "/sys/fs/cgroup/$sys" || mount -n -t cgroup -o "$sys" cgroup "/sys/fs/cgroup/$sys" 2>/dev/null || true
+  done
+fi
+rm -f /var/run/docker.pid
+# In a session of its own, so that it outlives the command that started it.
+setsid nohup /usr/bin/dockerd >/var/log/dockerd.log 2>&1 </dev/null &
 EOS
 chmod 755 /usr/local/bin/boxforge-start
-echo "[5/5] 설치 완료"
+if [ -d /run/systemd/system ]; then
+  systemctl start docker && exit 0
+  journalctl -u docker -n 25 --no-pager 2>/dev/null >&2
+  exit 1
+fi
+if ! grep -q 'boxforge-start' /etc/wsl.conf 2>/dev/null; then printf '\n[boot]\ncommand = /usr/local/bin/boxforge-start\n' >> /etc/wsl.conf; fi
+/usr/local/bin/boxforge-start
+i=0
+while [ $i -lt 40 ]; do
+  [ -S /var/run/docker.sock ] && docker info >/dev/null 2>&1 && exit 0
+  pgrep -x dockerd >/dev/null 2>&1 || break
+  sleep 1
+  i=$((i + 1))
+done
+echo "--- 엔진이 시작되지 않았습니다. 엔진의 로그 끝부분:" >&2
+tail -n 25 /var/log/dockerd.log >&2
+exit 1
 `
 
 // Installer runs the installation, one at a time.
@@ -256,6 +387,10 @@ type Installer struct {
 	mu     sync.Mutex
 	st     Status
 	cancel context.CancelFunc
+
+	listOnce sync.Once
+	listed   map[string]listed // Microsoft's distributions, by flavor ID
+	choices  []Flavor
 }
 
 func wslExe() string {
@@ -347,13 +482,14 @@ func engineAnswers(ctx context.Context) bool {
 // Status returns where the installation stands, looking at the PC afresh
 // when no run is under way.
 func (in *Installer) Status() Status {
+	flavors := in.flavors()
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.st.Running {
 		return in.snapshot()
 	}
 	ok, why := supported()
-	st := Status{Supported: ok, Reason: why, Steps: append([]Step{}, plan...), NeedsRestart: in.st.NeedsRestart, Error: in.st.Error, Log: in.st.Log, Flavors: Flavors}
+	st := Status{Supported: ok, Reason: why, Steps: append([]Step{}, plan...), NeedsRestart: in.st.NeedsRestart, Error: in.st.Error, Log: in.st.Log, Flavors: flavors}
 	for i := range st.Steps {
 		st.Steps[i].State = "todo"
 	}
@@ -424,6 +560,7 @@ func (in *Installer) Cancel() {
 // Start begins the installation in the background. It returns false when
 // one is already running or this PC is not supported.
 func (in *Installer) Start(o Options) bool {
+	flavors := in.flavors()
 	in.mu.Lock()
 	if ok, _ := supported(); !ok || in.st.Running {
 		in.mu.Unlock()
@@ -431,7 +568,7 @@ func (in *Installer) Start(o Options) bool {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	in.cancel = cancel
-	in.st = Status{Supported: true, Running: true, Steps: append([]Step{}, plan...), Flavors: Flavors}
+	in.st = Status{Supported: true, Running: true, Steps: append([]Step{}, plan...), Flavors: flavors}
 	for i := range in.st.Steps {
 		in.st.Steps[i].State = "todo"
 	}
@@ -492,7 +629,7 @@ func (in *Installer) run(ctx context.Context, o Options) (string, error) {
 	} else {
 		// 2. The root filesystem, checked against the publisher's checksum.
 		in.step("download", "active", "무엇을 받을지 확인하는 중")
-		src, err := resolve(ctx, o, dir)
+		src, err := in.resolve(ctx, o, dir)
 		if err != nil {
 			return "download", err
 		}
@@ -551,19 +688,35 @@ func (in *Installer) run(ctx context.Context, o Options) (string, error) {
 	// settings (systemd) are the ones in effect.
 	in.step("start", "active", "엔진을 시작하는 중")
 	_, _ = wsl(ctx, "--terminate", Distro)
-	if _, err := inDistro(ctx, "systemctl", "start", "docker"); err != nil {
-		// No systemd (Alpine): WSL's boot command has started the engine,
-		// or this does.
-		in.logf("systemd 없이 엔진을 시작합니다")
-		_, _ = inDistro(ctx, "/usr/local/bin/boxforge-start")
+	starter := filepath.Join(dir, "start-docker.sh")
+	if err := os.WriteFile(starter, []byte(startScript), 0o644); err != nil {
+		return "start", err
 	}
-	deadline := time.Now().Add(90 * time.Second)
+	defer os.Remove(starter)
+	name, args := engines.InWSL(Distro, "sh", engines.WSLPath(starter))
+	var said []string
+	err = clirunner.Run(ctx, "", []string{"WSL_UTF8=1"}, name, args, func(line string) {
+		said = append(said, line)
+		in.logf("%s", line)
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return "start", ctx.Err()
+		}
+		why := "엔진을 설치했지만 시작되지 않았습니다."
+		if n := len(said); n > 0 {
+			// The engine's own last words are the reason.
+			why += " 엔진이 남긴 말: " + said[n-1]
+		}
+		return "start", errors.New(why + " 아래 \"자세한 진행 내용\"에 엔진의 로그가 있습니다.")
+	}
+	deadline := time.Now().Add(60 * time.Second)
 	for !engineAnswers(ctx) {
 		if ctx.Err() != nil {
 			return "start", ctx.Err()
 		}
 		if time.Now().After(deadline) {
-			return "start", errors.New("엔진을 설치했지만 시작되지 않았습니다. 다시 시도해 주세요.")
+			return "start", errors.New("엔진이 시작됐지만 응답하지 않습니다. 다시 시도해 주세요.")
 		}
 		time.Sleep(2 * time.Second)
 	}

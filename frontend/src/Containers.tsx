@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Avatar } from "./brand";
 import { call, openURL, type Container, type Image, type Run, type Size } from "./bridge";
 import { ago, bytes, isUp, stateLabel, statusText } from "./format";
+import EngineCopy, { explain } from "./EngineCopy";
 import { Dialog, IconButton, Menu, type MenuItem } from "./ui";
 
 type Filter = "all" | "running" | "stopped" | "failed";
@@ -45,6 +46,8 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
   const [removing, setRemoving] = useState<{ c: Container; volumes: boolean } | null>(null);
+  const [copying, setCopying] = useState<Container | null>(null);
+  const [copied, setCopied] = useState<{ text: string; notes: string[] } | null>(null);
   // What is being done to each container right now, by ID: shown in its
   // row until the engine has answered.
   const [pending, setPending] = useState<Record<string, string>>({});
@@ -147,6 +150,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
     if (c.state === "running") {
       items.push({ label: "외부 터미널 열기", onClick: () => run(`docker exec -it ${c.name} sh`, () => call("OpenTerminal", c.name)) });
     }
+    items.push({ label: "다른 엔진으로 복사", onClick: () => setCopying(c) });
     if (isUp(c)) items.push({ label: "강제 종료", onClick: () => act(c, "kill"), danger: true });
     return items;
   };
@@ -348,6 +352,50 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
             {showSystem ? "숨기기" : "보기"}
           </button>
         </p>
+      )}
+
+      {copied && (
+        <div className="note-box copied" role="status" data-testid="copied">
+          <strong>{copied.text}</strong>
+          {copied.notes.length > 0 && (
+            <ul>
+              {copied.notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          )}
+          <button className="link" onClick={() => setCopied(null)}>
+            닫기
+          </button>
+        </div>
+      )}
+
+      {copying && (
+        <EngineCopy
+          title="컨테이너를 다른 엔진으로 복사"
+          what={
+            <p>
+              <strong>{copying.name}</strong>과 같은 컨테이너를 다른 엔진에 만듭니다. 받는 쪽에서는 시작하지 않은 상태로 만들어지고, 여기 있는
+              컨테이너는 그대로 남습니다.
+            </p>
+          }
+          options={[
+            { key: "changes", label: "컨테이너 안에서 바뀐 파일도 가져가기", help: "지금 상태를 이미지로 만들어 보냅니다. 끄면 원래 이미지 그대로 새로 만듭니다." },
+            {
+              key: "volumes",
+              label: `연결된 볼륨의 데이터도 복사${copying.volumes.length ? ` (${copying.volumes.length}개)` : ""}`,
+              help: copying.volumes.length ? "데이터베이스 같은 볼륨의 내용이 함께 갑니다. 크면 오래 걸립니다." : "이 컨테이너에는 볼륨이 없습니다.",
+            },
+          ]}
+          run={run}
+          command={(other) => `docker commit ${copying.name} copy:tmp && docker save copy:tmp | ${other} load && ${other} create --name ${copying.name} copy:tmp`}
+          copy={(key, target, chosen) => call<string[]>("CopyContainer", key, copying.id, target, { changes: chosen.changes, volumes: chosen.volumes })}
+          onClose={() => setCopying(null)}
+          onDone={(label, notes) => {
+            setCopied({ text: `${copying.name} 컨테이너를 "${label}"에 만들었습니다. 그 엔진으로 바꿔서 시작하면 됩니다.`, notes: explain(notes) });
+            setCopying(null);
+          }}
+        />
       )}
 
       {removing && (

@@ -30,7 +30,7 @@ const mark: Record<Step["state"], string> = { todo: "○", active: "", done: "�
 export default function SetupWizard({ onClose, onInstalled }: { onClose: () => void; onInstalled: () => void }) {
   const [st, setSt] = useState<SetupStatus | null>(null);
   const [switching, setSwitching] = useState("");
-  const [flavor, setFlavor] = useState("ubuntu");
+  const [flavor, setFlavor] = useState("");
   const [source, setSource] = useState("");
   const told = useRef(false);
 
@@ -39,6 +39,11 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
     call<SetupStatus>("SetupStatus").then(setSt, () => {});
     return off;
   }, []);
+
+  // The first choice in the list is the suggested one.
+  useEffect(() => {
+    if (!flavor && st?.flavors?.length) setFlavor(st.flavors[0].id);
+  }, [st?.flavors]);
 
   // Once it is in, BoxForge moves over to the new engine by itself.
   useEffect(() => {
@@ -58,7 +63,7 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
   return (
     <Dialog title="Docker Engine 설치" onClose={st?.running ? () => {} : onClose} wide>
       <p className="muted">
-        이 PC에 BoxForge 전용 Docker Engine을 설치합니다. 설치하는 것은 모두 무료이고(WSL 2, Ubuntu, Docker Engine · Compose · Buildx), 이미 쓰고
+        이 PC에 BoxForge 전용 Docker Engine을 설치합니다. 설치하는 것은 모두 무료이고(WSL 2, 고른 Linux, Docker Engine · Compose · Buildx), 이미 쓰고
         있는 WSL 배포판이나 다른 엔진은 건드리지 않습니다. 디스크 약 2GB와 인터넷 연결이 필요합니다.
       </p>
       {st && !st.supported && <p className="warn">{st.reason}</p>}
@@ -105,6 +110,10 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
               </span>
             </label>
           ))}
+          <p className="help">
+            Docker는 Fedora, Arch 같은 다른 배포판에서도 돌아가지만, BoxForge가 설치까지 해 주는 것은 위 배포판입니다. 다른 배포판에 직접 Docker를
+            설치했다면 엔진 선택 창에서 "WSL: … 안의 Docker"로 고르면 됩니다.
+          </p>
         </fieldset>
       )}
       {st?.needsRestart && (
@@ -131,7 +140,7 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
           <button onClick={onClose}>닫기</button>
         )}
         {st?.supported && !st.installed && (
-          <button className="primary" disabled={st.running || (flavor === "custom" && !source.trim())} onClick={() => call("SetupStart", { flavor, source })}>
+          <button className="primary" disabled={st.running || !flavor || (flavor === "custom" && !source.trim())} onClick={() => call("SetupStart", { flavor, source })}>
             {st.running ? "설치하는 중…" : st.error || st.needsRestart ? "설치 계속" : "설치 시작"}
           </button>
         )}

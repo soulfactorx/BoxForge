@@ -979,3 +979,173 @@ func (a *App) MemoryUsed() int64 {
 	wg.Wait()
 	return total
 }
+
+// Transfer is the payload of a "transfer" event: what a copy to another
+// engine is doing now.
+type Transfer struct {
+	Key  string `json:"key"`
+	Text string `json:"text"`
+}
+
+// other opens the engine a copy goes to. The caller closes it.
+func (a *App) other(ctx context.Context, targetID string) (engine.Runtime, error) {
+	a.emu.RLock()
+	current := a.target.ID
+	a.emu.RUnlock()
+	if targetID == current {
+		return nil, fmt.Errorf("that is the engine it is already on")
+	}
+	t := engines.Find(targetID)
+	if t.ID != targetID {
+		return nil, fmt.Errorf("that engine is no longer in the list")
+	}
+	dst, err := connect(t)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := dst.Info(ctx); err != nil {
+		dst.Close()
+		return nil, fmt.Errorf("the other engine does not answer: %w", err)
+	}
+	return dst, nil
+}
+
+// sendImage moves one image from src to dst.
+func sendImage(ctx context.Context, src, dst engine.Runtime, ref string, sent func(int64)) error {
+	rc, err := src.Images().Save(ctx, ref)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	return dst.Images().Load(ctx, &counting{r: rc, tell: sent})
+}
+
+// smallImage picks an image to make helper containers from: a small one
+// with a shell if there is one, else the smallest.
+func smallImage(list []engine.Image) string {
+	best, score := "", int64(-1)
+	for _, im := range list {
+		for _, tag := range im.Tags {
+			s := im.Size
+			if strings.Contains(tag, "busybox") || strings.Contains(tag, "alpine") {
+				s = 0
+			}
+			if score < 0 || s < score {
+				best, score = tag, s
+			}
+		}
+	}
+	return best
+}
+
+// sendVolume copies a volume's data from src to dst.
+func sendVolume(ctx context.Context, src, dst engine.Runtime, name string, say func(string)) error {
+	// Writing into a volume takes a container, and a container an image:
+	// an engine with none is lent a small one.
+	if have, err := dst.Images().List(ctx); err == nil && smallImage(have) == "" {
+		mine, _ := src.Images().List(ctx)
+		if tool := smallImage(mine); tool != "" {
+			say("받는 쪽에 이미지가 하나도 없어 도구용 이미지(" + tool + ")를 먼저 보냅니다")
+			if err := sendImage(ctx, src, dst, tool, func(int64) {}); err != nil {
+				return err
+			}
+		}
+	}
+	say("볼륨 " + name + "의 데이터를 보내는 중")
+	rc, err := src.Volumes().Archive(ctx, name, "/")
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	return dst.Volumes().Restore(ctx, name, rc)
+}
+
+// CopyVolume copies a volume and its data to another engine. A volume of
+// that name there is filled, files of the same name replaced.
+func (a *App) CopyVolume(key, name, targetID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
+	defer cancel()
+	dst, err := a.other(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	return sendVolume(ctx, a.eng(), dst, name, func(text string) { a.emit("transfer", Transfer{Key: key, Text: text}) })
+}
+
+// CopyOptions says how much of a container goes along.
+type CopyOptions struct {
+	Changes bool `json:"changes"` // the files written in the container since it was made
+	Volumes bool `json:"volumes"` // the data of the volumes it uses
+}
+
+// CopyContainer makes a container like this one on another engine, without
+// starting it there. It returns notes on what could not be carried over:
+// "network:<name>" for a network of the user's making, "bind:<path>" for a
+// folder of this PC it mounts.
+func (a *App) CopyContainer(key, id, targetID string, o CopyOptions) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
+	defer cancel()
+	say := func(text string) { a.emit("transfer", Transfer{Key: key, Text: text}) }
+	dst, err := a.other(ctx, targetID)
+	if err != nil {
+		return nil, err
+	}
+	defer dst.Close()
+	src := a.eng()
+	raw, err := src.Containers().Inspect(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	var info struct {
+		Name   string
+		Config struct{ Image string }
+		Mounts []struct{ Type, Name string }
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return nil, err
+	}
+	name := strings.TrimPrefix(info.Name, "/")
+
+	ref := info.Config.Image
+	if o.Changes {
+		// The container as it is now, made into an image for the journey.
+		ref = "boxforge-copy/" + strings.ToLower(name) + ":" + time.Now().Format("20060102-150405")
+		say("컨테이너의 지금 상태를 이미지로 만드는 중")
+		if err := src.Containers().Commit(ctx, id, ref); err != nil {
+			return nil, err
+		}
+		defer func() {
+			// Its own context: the copy's may be spent.
+			ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+			defer cancel()
+			_ = src.Images().Remove(ctx, ref, false)
+		}()
+	}
+	say("이미지를 보내는 중")
+	var last time.Time
+	err = sendImage(ctx, src, dst, ref, func(n int64) {
+		if time.Since(last) > 500*time.Millisecond {
+			last = time.Now()
+			say(fmt.Sprintf("이미지를 보내는 중 · %.1f MB", float64(n)/(1<<20)))
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if o.Volumes {
+		for _, m := range info.Mounts {
+			if m.Type == "volume" && m.Name != "" {
+				if err := sendVolume(ctx, src, dst, m.Name, say); err != nil {
+					return nil, fmt.Errorf("volume %s: %w", m.Name, err)
+				}
+			}
+		}
+	}
+	say("받는 쪽에 컨테이너를 만드는 중")
+	_, notes, err := dst.Containers().CreateFrom(ctx, raw, ref)
+	if notes == nil {
+		notes = []string{}
+	}
+	return notes, err
+}

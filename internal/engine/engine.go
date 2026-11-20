@@ -199,6 +199,13 @@ type ContainerService interface {
 	// Stats calls each with a new sample about once a second until ctx
 	// ends or the container stops.
 	Stats(ctx context.Context, id string, each func(Stats)) error
+	// Commit makes an image of the container as it is now: its image plus
+	// everything written in it since.
+	Commit(ctx context.Context, id, ref string) error
+	// CreateFrom makes, without starting it, a container like the one an
+	// Inspect of this kind of runtime describes, from the named image. The
+	// notes say what could not be carried over.
+	CreateFrom(ctx context.Context, inspect []byte, image string) (id string, notes []string, err error)
 	// StatsOnce returns one sample at once. Its CPU is not filled in:
 	// that takes two samples.
 	StatsOnce(ctx context.Context, id string) (Stats, error)
@@ -217,6 +224,9 @@ type VolumeService interface {
 	Files(ctx context.Context, name, path string) ([]FileEntry, error)
 	// Archive returns the file or directory at path as a tar stream.
 	Archive(ctx context.Context, name, path string) (io.ReadCloser, error)
+	// Restore fills the volume, made if need be, from what Archive(name,
+	// "/") gave on another engine.
+	Restore(ctx context.Context, name string, tar io.Reader) error
 }
 
 // FileEntry is one name in a directory listing.

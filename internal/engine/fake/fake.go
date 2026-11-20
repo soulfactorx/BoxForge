@@ -313,6 +313,13 @@ func (c containers) Stats(ctx context.Context, _ string, each func(engine.Stats)
 	}
 }
 
+func (c containers) Commit(context.Context, string, string) error { return nil }
+
+func (c containers) CreateFrom(ctx context.Context, _ []byte, img string) (string, []string, error) {
+	id, err := c.Run(ctx, engine.RunSpec{Image: img})
+	return id, nil, err
+}
+
 func (c containers) StatsOnce(context.Context, string) (engine.Stats, error) {
 	return engine.Stats{MemUsed: 128 << 20, MemLimit: 2 << 30}, nil
 }
@@ -618,4 +625,9 @@ func (v volumes) Archive(_ context.Context, _, p string) (io.ReadCloser, error) 
 	_, _ = tw.Write(body)
 	_ = tw.Close()
 	return io.NopCloser(&buf), nil
+}
+
+func (v volumes) Restore(ctx context.Context, name string, r io.Reader) error {
+	_, _ = io.Copy(io.Discard, r)
+	return v.Create(ctx, name)
 }

@@ -272,6 +272,59 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 	return created.ID, nil
 }
 
+func (c containers) Commit(ctx context.Context, id, ref string) error {
+	_, err := c.cli.ContainerCommit(ctx, id, container.CommitOptions{Reference: ref, Pause: true})
+	return err
+}
+
+func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) (string, []string, error) {
+	var in container.InspectResponse
+	if err := json.Unmarshal(inspect, &in); err != nil {
+		return "", nil, err
+	}
+	if in.ContainerJSONBase == nil || in.Config == nil || in.HostConfig == nil {
+		return "", nil, errors.New("the container's description is incomplete")
+	}
+	cfg, host := in.Config, in.HostConfig
+	var notes []string
+	cfg.Image = img
+	// A hostname the engine made from the old ID would be a stale one.
+	if cfg.Hostname != "" && strings.HasPrefix(in.ID, cfg.Hostname) {
+		cfg.Hostname = ""
+	}
+	// Networks are the other engine's own: a container on one that the
+	// user made starts on the default one there instead.
+	switch mode := string(host.NetworkMode); {
+	case mode == "" || mode == "default" || mode == "bridge" || mode == "host" || mode == "none":
+	default:
+		notes = append(notes, "network:"+mode)
+		host.NetworkMode = ""
+	}
+	host.Links, host.VolumesFrom = nil, nil
+	named := map[string]bool{}
+	for _, b := range host.Binds {
+		named[strings.SplitN(b, ":", 2)[0]] = true
+	}
+	for _, m := range host.Mounts {
+		named[m.Source] = true
+	}
+	for _, m := range in.Mounts {
+		switch {
+		case m.Type == "bind":
+			notes = append(notes, "bind:"+m.Source)
+		case m.Type == "volume" && m.Name != "" && !named[m.Name]:
+			// A volume the image asked for, with a name the engine made
+			// up: named here, so that the copy uses the copied data.
+			host.Binds = append(host.Binds, m.Name+":"+m.Destination)
+		}
+	}
+	created, err := c.cli.ContainerCreate(ctx, cfg, host, nil, nil, strings.TrimPrefix(in.Name, "/"))
+	if err != nil {
+		return "", notes, err
+	}
+	return created.ID, notes, nil
+}
+
 func (c containers) Sizes(ctx context.Context) (map[string]engine.Size, error) {
 	list, err := c.cli.ContainerList(ctx, container.ListOptions{All: true, Size: true})
 	if err != nil {
@@ -690,6 +743,12 @@ func (v volumes) helperImage(ctx context.Context) (string, error) {
 // helper creates, without starting it, a container that mounts the volume
 // read-only. The caller removes it with the returned function.
 func (v volumes) helper(ctx context.Context, name string, entrypoint []string) (string, func(), error) {
+	return v.helperMode(ctx, name, entrypoint, ":ro")
+}
+
+// helperMode is helper with the volume mounted as mode says: ":ro" to
+// look, "" to write.
+func (v volumes) helperMode(ctx context.Context, name string, entrypoint []string, mode string) (string, func(), error) {
 	img, err := v.helperImage(ctx)
 	if err != nil {
 		return "", nil, err
@@ -698,7 +757,7 @@ func (v volumes) helper(ctx context.Context, name string, entrypoint []string) (
 	_, _ = rand.Read(suffix)
 	created, err := v.cli.ContainerCreate(ctx,
 		&container.Config{Image: img, Entrypoint: entrypoint, Cmd: []string{}, NetworkDisabled: true},
-		&container.HostConfig{Binds: []string{name + ":" + helperMount + ":ro"}, NetworkMode: "none"},
+		&container.HostConfig{Binds: []string{name + ":" + helperMount + mode}, NetworkMode: "none"},
 		nil, nil, engine.HelperPrefix+hex.EncodeToString(suffix))
 	if err != nil {
 		return "", nil, err
@@ -859,4 +918,22 @@ func (v volumes) Archive(ctx context.Context, name, p string) (io.ReadCloser, er
 		return nil, err
 	}
 	return removeOnClose{rc, remove}, nil
+}
+
+func (v volumes) Restore(ctx context.Context, name string, tar io.Reader) error {
+	if _, err := v.cli.VolumeCreate(ctx, volume.CreateOptions{Name: name}); err != nil {
+		return err
+	}
+	id, remove, err := v.helperMode(ctx, name, []string{"/bin/sh", "-c", "sleep 900"}, "")
+	if err != nil {
+		return err
+	}
+	defer remove()
+	// Started first: some engines attach a container's volumes only while
+	// it runs. Where the image has no shell to run, Docker still attaches
+	// them for a copy into a container that never ran.
+	_ = v.cli.ContainerStart(ctx, id, container.StartOptions{})
+	// The archive's top entry is the helper's mount point itself, so it
+	// unpacks from the root into the volume.
+	return v.cli.CopyToContainer(ctx, id, "/", tar, container.CopyToContainerOptions{})
 }
