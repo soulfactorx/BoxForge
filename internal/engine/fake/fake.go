@@ -313,6 +313,10 @@ func (c containers) Stats(ctx context.Context, _ string, each func(engine.Stats)
 	}
 }
 
+func (c containers) Output(context.Context, string, []string, []byte) (string, string, int, error) {
+	return "", "the fake engine runs nothing", 1, nil
+}
+
 func (c containers) Commit(context.Context, string, string) error { return nil }
 
 func (c containers) CreateFrom(ctx context.Context, _ []byte, img string) (string, []string, error) {

@@ -253,11 +253,20 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 	for _, m := range spec.Mounts {
 		binds = append(binds, m.Source+":"+m.Target)
 	}
+	var tmpfs map[string]string
+	if len(spec.Tmpfs) > 0 {
+		tmpfs = map[string]string{}
+		for _, dir := range spec.Tmpfs {
+			tmpfs[dir] = ""
+		}
+	}
 	created, err := c.cli.ContainerCreate(ctx,
 		&container.Config{Image: spec.Image, Env: spec.Env, Cmd: spec.Command, ExposedPorts: exposed},
 		&container.HostConfig{
 			PortBindings:  bindings,
 			Binds:         binds,
+			Privileged:    spec.Privileged,
+			Tmpfs:         tmpfs,
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(spec.Restart)},
 		},
 		nil, nil, spec.Name)
@@ -270,6 +279,45 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 		return created.ID, err
 	}
 	return created.ID, nil
+}
+
+func (c containers) Output(ctx context.Context, id string, cmd []string, stdin []byte) (string, string, int, error) {
+	created, err := c.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+		Cmd: cmd, AttachStdin: stdin != nil, AttachStdout: true, AttachStderr: true,
+	})
+	if err != nil {
+		return "", "", 0, err
+	}
+	att, err := c.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return "", "", 0, err
+	}
+	defer att.Close()
+	if stdin != nil {
+		go func() {
+			_, _ = att.Conn.Write(stdin)
+			_ = att.CloseWrite() // the command reads to the end of its input
+		}()
+	}
+	var stdout, stderr bytes.Buffer
+	copied := make(chan error, 1)
+	go func() {
+		_, err := stdcopy.StdCopy(&stdout, &stderr, att.Reader)
+		copied <- err
+	}()
+	select {
+	case err := <-copied:
+		if err != nil {
+			return "", "", 0, err
+		}
+	case <-ctx.Done():
+		return "", "", 0, ctx.Err()
+	}
+	res, err := c.cli.ContainerExecInspect(ctx, created.ID)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return stdout.String(), stderr.String(), res.ExitCode, nil
 }
 
 func (c containers) Commit(ctx context.Context, id, ref string) error {

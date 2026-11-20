@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Avatar, splitRef } from "./brand";
 import { call, on, type Container, type Image, type PullState, type Run } from "./bridge";
-import { ago, bytes, shortId } from "./format";
+import { ago, bytes, isUp, shortId } from "./format";
 import { Dialog, Icon, IconButton, Progress } from "./ui";
 
 interface Props {
@@ -138,7 +138,11 @@ export default function Images({ images, containers, run, onRun, onOpen }: Props
     const last = r.im.tags.length <= 1;
     const force = last && r.users.length > 0;
     const target = r.ref || r.im.id;
-    return { last, force, target, command: `docker rmi${force ? " -f" : ""} ${r.ref || shortId(r.im.id)}` };
+    // The engine won't delete an image a running container was made from,
+    // forced or not: it only takes the name off, leaving a nameless image
+    // behind. So that is not offered.
+    const running = last ? r.users.filter(isUp) : [];
+    return { last, force, target, running, command: `docker rmi${force ? " -f" : ""} ${r.ref || shortId(r.im.id)}` };
   };
 
   const confirmRemove = async () => {
@@ -294,14 +298,26 @@ export default function Images({ images, containers, run, onRun, onOpen }: Props
               남습니다.
             </p>
           )}
-          {removal(removing).force && (
-            <p className="warn">컨테이너 {removing.users.length}개가 이 이미지로 만들어졌습니다. 강제로 삭제하며, 그 컨테이너들은 남습니다.</p>
+          {removal(removing).running.length > 0 ? (
+            <p className="warn" role="alert">
+              실행 중인 컨테이너({removal(removing).running.map((c) => c.name).join(", ")})가 이 이미지를 쓰고 있어 지울 수 없습니다. 먼저 그
+              컨테이너를 중지하거나 삭제해 주세요.
+            </p>
+          ) : (
+            removal(removing).force && (
+              <p className="warn">
+                멈춰 있는 컨테이너 {removing.users.length}개({removing.users.map((c) => c.name).join(", ")})가 이 이미지로 만들어졌습니다. 강제로
+                삭제하면 그 컨테이너들은 남지만 다시 시작할 수 없게 됩니다.
+              </p>
+            )
           )}
           <div className="dialog-actions">
-            <button onClick={() => setRemoving(null)}>취소</button>
-            <button className="danger solid" onClick={confirmRemove}>
-              삭제
-            </button>
+            <button onClick={() => setRemoving(null)}>{removal(removing).running.length > 0 ? "닫기" : "취소"}</button>
+            {removal(removing).running.length === 0 && (
+              <button className="danger solid" onClick={confirmRemove}>
+                삭제
+              </button>
+            )}
           </div>
         </Dialog>
       )}

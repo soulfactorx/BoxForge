@@ -8,12 +8,13 @@ import Containers from "./Containers";
 import Detail, { type Tab } from "./Detail";
 import EngineDialog from "./EngineDialog";
 import Images from "./Images";
+import Kubernetes from "./Kubernetes";
 import RunDialog from "./RunDialog";
 import Topology from "./Topology";
 import { bytes } from "./format";
 import { Icon } from "./ui";
 
-type Page = "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds";
+type Page = "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds" | "kube";
 
 const pageCommand: Record<Page, string> = {
   containers: "docker ps -a --size",
@@ -23,6 +24,7 @@ const pageCommand: Record<Page, string> = {
   volumes: "docker volume ls",
   networks: "docker network ls",
   builds: "docker buildx version",
+  kube: "docker exec boxforge-k3s kubectl get pods,deployments,services -A",
 };
 
 function gib(bytes: number) {
@@ -158,6 +160,10 @@ export default function App() {
             <Icon name="build" />
             <span>빌드</span>
           </button>
+          <button className={"nav-item" + (page === "kube" ? " active" : "")} onClick={() => setPage("kube")} data-testid="nav-kube">
+            <Icon name="kube" />
+            <span>Kubernetes</span>
+          </button>
         </nav>
         <button className="engine-card" data-testid="engine-card" title="엔진 바꾸기" onClick={() => setChoosing(true)}>
           <div className="engine-head">
@@ -222,6 +228,7 @@ export default function App() {
         </div>
         {/* Kept alive while hidden: a build or a compose command goes on,
             and its form and output are still there on coming back. */}
+        {page === "kube" && <Kubernetes run={run} showCli={showCli} />}
         {page === "map" && (
           <Topology
             containers={containers}

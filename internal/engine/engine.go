@@ -116,6 +116,10 @@ type RunSpec struct {
 	Env     []string    `json:"env"`     // KEY=value
 	Restart string      `json:"restart"` // "", always, unless-stopped, on-failure
 	Command []string    `json:"command"` // empty: the image's own
+	// For containers that run containers of their own (a Kubernetes node):
+	// every right on the engine's machine, and memory-backed directories.
+	Privileged bool     `json:"privileged"`
+	Tmpfs      []string `json:"tmpfs"`
 }
 
 // Size is the disk a container takes. RootFS is everything it sees, its
@@ -199,6 +203,9 @@ type ContainerService interface {
 	// Stats calls each with a new sample about once a second until ctx
 	// ends or the container stops.
 	Stats(ctx context.Context, id string, each func(Stats)) error
+	// Output runs cmd in a running container with no terminal, gives it
+	// stdin (nil for none), and returns what it wrote and its exit code.
+	Output(ctx context.Context, id string, cmd []string, stdin []byte) (stdout, stderr string, code int, err error)
 	// Commit makes an image of the container as it is now: its image plus
 	// everything written in it since.
 	Commit(ctx context.Context, id, ref string) error
@@ -318,8 +325,11 @@ func FailedStatus(state, status string) bool {
 // for itself, to look inside a volume.
 const HelperPrefix = "boxforge-helper-"
 
+// ClusterName is the container BoxForge runs its Kubernetes cluster in.
+const ClusterName = "boxforge-k3s"
+
 // SystemName reports whether a container name belongs to a tool's helper:
 // buildx names its build workers buildx_buildkit_<builder>.
 func SystemName(name string) bool {
-	return strings.HasPrefix(name, "buildx_buildkit_") || strings.HasPrefix(name, HelperPrefix)
+	return strings.HasPrefix(name, "buildx_buildkit_") || strings.HasPrefix(name, HelperPrefix) || name == ClusterName
 }
