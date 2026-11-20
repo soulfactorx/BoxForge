@@ -516,16 +516,41 @@ func (s images) Defaults(ctx context.Context, ref string) (engine.ImageDefaults,
 
 // stream is a command's output as a reader; closing it ends the command.
 type stream struct {
-	io.ReadCloser
+	out    io.ReadCloser
 	cmd    *exec.Cmd
 	stderr *bytes.Buffer
 	cancel context.CancelFunc
+	ended  chan struct{} // closed when the command has exited
+	whole  bool          // the output was read to its end
 }
 
-func (s stream) Close() error {
+func (s *stream) Read(p []byte) (int, error) {
+	n, err := s.out.Read(p)
+	if err == io.EOF {
+		s.whole = true
+		// The output ended: the command is finishing. An error it ended
+		// with is the read's error, not a quiet short stream.
+		<-s.ended
+		if s.cmd.ProcessState != nil && !s.cmd.ProcessState.Success() {
+			return n, fault(s.stderr.Bytes(), errors.New("the command failed"))
+		}
+	}
+	return n, err
+}
+
+// Close ends the command. One that was read to its end is left to finish
+// by itself: killed a moment early, a `run --rm` would leave its
+// container behind.
+func (s *stream) Close() error {
+	if s.whole {
+		select {
+		case <-s.ended:
+		case <-time.After(20 * time.Second):
+		}
+	}
 	s.cancel()
-	_ = s.ReadCloser.Close()
-	_ = s.cmd.Wait()
+	_ = s.out.Close()
+	<-s.ended
 	return nil
 }
 
@@ -535,15 +560,21 @@ func (r *runtime) reading(ctx context.Context, args ...string) (io.ReadCloser, e
 	c := r.cmd(ctx, args...)
 	stderr := &bytes.Buffer{}
 	c.Stderr = stderr
-	stdout, err := c.StdoutPipe()
-	if err == nil {
-		err = c.Start()
-	}
-	if err != nil {
+	// A pipe of our own: the command's exit can then be waited for while
+	// the output is still being read.
+	pr, pw := io.Pipe()
+	c.Stdout = pw
+	if err := c.Start(); err != nil {
 		cancel()
 		return nil, err
 	}
-	return stream{stdout, c, stderr, cancel}, nil
+	st := &stream{out: pr, cmd: c, stderr: stderr, cancel: cancel, ended: make(chan struct{})}
+	go func() {
+		_ = c.Wait()
+		close(st.ended)
+		pw.Close()
+	}()
+	return st, nil
 }
 
 // writing runs nerdctl with in as its input.

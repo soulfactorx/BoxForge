@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/soulfactorx/boxforge/internal/clirunner"
 	"github.com/soulfactorx/boxforge/internal/engine"
@@ -108,8 +109,24 @@ func (s volumes) helper(ctx context.Context, name, mode string, flags ...string)
 	if err != nil {
 		return nil, err
 	}
-	args := append([]string{"run", "--rm", "--pull", "never", "--network", "none"}, flags...)
+	s.sweep(ctx)
+	args := append([]string{"run", "--rm", "--pull", "never", "--network", "none", "--label", helperLabel + "=1"}, flags...)
 	return append(args, "-v", name+":"+mount+mode, "--entrypoint", "", img), nil
+}
+
+// helperLabel marks the helper containers, so that one left behind (the
+// app closed mid-copy, say) is found and removed before the next.
+const helperLabel = "boxforge.helper"
+
+// sweep removes helpers that have ended without being removed.
+func (s volumes) sweep(ctx context.Context) {
+	b, err := s.r.out(ctx, "ps", "-aq", "--filter", "label="+helperLabel+"=1", "--filter", "status=exited")
+	if err != nil {
+		return
+	}
+	if ids := strings.Fields(string(b)); len(ids) > 0 {
+		_, _ = s.r.out(ctx, append([]string{"rm", "-f"}, ids...)...)
+	}
 }
 
 func (s volumes) Files(ctx context.Context, name, p string) ([]engine.FileEntry, error) {
@@ -137,15 +154,42 @@ func (s volumes) Archive(ctx context.Context, name, p string) (io.ReadCloser, er
 	return s.r.reading(ctx, append(args, "tar", "-cf", "-", "-C", dir, base)...)
 }
 
-// Restore unpacks at the top of the helper: the archive's first name is
-// the mount point itself.
+// Restore unpacks at the top of a helper: the archive's first name is the
+// mount point itself.
+//
+// The helper is started first and the archive given to a command run in
+// it afterwards. Giving it to the helper's own input (`run -i`) would be
+// shorter, but nerdctl then fails, about one time in three, to pass on
+// that the input has ended, and tar waits for ever.
 func (s volumes) Restore(ctx context.Context, name string, tar io.Reader) error {
 	if err := s.Create(ctx, name); err != nil {
 		return err
 	}
-	args, err := s.helper(ctx, name, "", "-i")
+	args, err := s.helper(ctx, name, "", "-d")
 	if err != nil {
 		return err
 	}
-	return s.r.writing(ctx, tar, append(args, "tar", "-xf", "-", "-C", "/")...)
+	// "--rm" is of no use to a helper that is removed by hand.
+	run := []string{"run"}
+	for _, a := range args[1:] {
+		if a != "--rm" {
+			run = append(run, a)
+		}
+	}
+	b, err := s.r.out(ctx, append(run, "sleep", "900")...)
+	if err != nil {
+		return err
+	}
+	f := strings.Fields(string(b))
+	if len(f) == 0 {
+		return errors.New("nerdctl did not say which container it made")
+	}
+	id := f[len(f)-1]
+	defer func() {
+		// Its own time: the caller's may be spent.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = s.r.out(ctx, "rm", "-f", id)
+	}()
+	return s.r.writing(ctx, tar, "exec", "-i", id, "tar", "-xf", "-", "-C", "/")
 }
