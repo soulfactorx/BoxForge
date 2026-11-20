@@ -28,6 +28,7 @@ import (
 	"github.com/soulfactorx/boxforge/internal/engines"
 	"github.com/soulfactorx/boxforge/internal/extterm"
 	"github.com/soulfactorx/boxforge/internal/hub"
+	"github.com/soulfactorx/boxforge/internal/provision"
 )
 
 // How long one action (stop waits for the container's own shutdown) may take.
@@ -50,6 +51,8 @@ type App struct {
 	terms  map[string]engine.Session     // open terminals, by session ID
 	builds map[string]context.CancelFunc // running builds, by the page's key
 	seq    int
+
+	setup provision.Installer
 }
 
 // connect opens the engine a target names. Nothing is sent to it yet.
@@ -89,6 +92,7 @@ func Start(a *App, emit hub.Emit) {
 	a.stats = map[string]context.CancelFunc{}
 	a.terms = map[string]engine.Session{}
 	a.builds = map[string]context.CancelFunc{}
+	a.setup.Notify = func(st provision.Status) { emit("setup", st) }
 	a.emu.Lock()
 	a.follow()
 	a.emu.Unlock()
@@ -839,4 +843,36 @@ func (a *App) OpenTerminal(name string) error {
 		}
 	}
 	return extterm.Open(append([]string{cmd}, args...))
+}
+
+// Setting returns a value the page stored with SetSetting, "" when none.
+func (a *App) Setting(key string) string { return engines.Setting(key) }
+
+// SetSetting keeps a value for the page across restarts.
+func (a *App) SetSetting(key, value string) error { return engines.SetSetting(key, value) }
+
+// SetupStatus says whether BoxForge can install an engine on this PC, and
+// how far an installation has come. Progress arrives as "setup" events.
+func (a *App) SetupStatus() provision.Status { return a.setup.Status() }
+
+// SetupStart begins installing an engine in the background.
+func (a *App) SetupStart() bool { return a.setup.Start() }
+
+// SetupCancel stops the installation under way.
+func (a *App) SetupCancel() { a.setup.Cancel() }
+
+// RemoveBoxForgeEngine deletes the engine BoxForge installed, with every
+// image, container and volume in it, after switching away from it.
+func (a *App) RemoveBoxForgeEngine() error {
+	a.emu.RLock()
+	current := a.target.ID
+	a.emu.RUnlock()
+	if current == provision.EngineID {
+		if err := a.UseEngine(engines.Default.ID); err != nil {
+			return fmt.Errorf("switch to another engine first: %w", err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+	defer cancel()
+	return provision.Remove(ctx)
 }

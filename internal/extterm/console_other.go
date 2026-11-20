@@ -4,4 +4,4 @@ package extterm
 
 import "os/exec"
 
-func newConsole(*exec.Cmd) {}
+func openWindows([]string) *exec.Cmd { return nil }

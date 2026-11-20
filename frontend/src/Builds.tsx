@@ -55,6 +55,14 @@ interface Current {
   seconds: number;
 }
 
+interface Preset {
+  name: string;
+  context: string;
+  dockerfile: string;
+  tag: string;
+  args: string;
+}
+
 interface Past {
   tag: string;
   context: string;
@@ -88,11 +96,68 @@ export default function Builds({ run, onRun }: { run: Run; onRun: (image: string
   const [editor, setEditor] = useState<{ text: string; original: string; isNew: boolean } | null>(null);
   const [note, setNote] = useState("");
   const [pruning, setPruning] = useState(false);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [preset, setPreset] = useState("");
+  const [naming, setNaming] = useState<string | null>(null);
   const serial = useRef(0);
 
   useEffect(() => {
     call<string>("DockerCLI").then(setCli, (e) => setMissing(e.message));
+    call<string>("Setting", "build.presets").then((raw) => {
+      try {
+        setPresets(JSON.parse(raw || "[]"));
+      } catch {
+        // An unreadable list is the same as none.
+      }
+    }, () => {});
   }, []);
+
+  const keep = (list: Preset[]) => {
+    setPresets(list);
+    call("SetSetting", "build.presets", JSON.stringify(list)).catch(() => {});
+  };
+
+  const fill = (p: { context: string; dockerfile: string; tag: string; args: string }) => {
+    setContext(p.context);
+    setDockerfile(p.dockerfile);
+    setTag(p.tag);
+    setArgs(p.args);
+    setNoCache(false);
+    setPull(false);
+  };
+
+  // A clean slate: the form emptied and the last build's output put away.
+  const startNew = () => {
+    fill({ context: "", dockerfile: "", tag: "", args: "" });
+    setPreset("");
+    setCurrent(null);
+    setNote("");
+  };
+
+  const choose = (name: string) => {
+    setPreset(name);
+    const p = presets.find((x) => x.name === name);
+    if (p) {
+      fill(p);
+      setCurrent(null);
+      setNote("");
+    }
+  };
+
+  const savePreset = () => {
+    const name = (naming ?? "").trim();
+    setNaming(null);
+    if (!name) return;
+    keep([...presets.filter((p) => p.name !== name), { name, context, dockerfile, tag, args }].sort((a, b) => a.name.localeCompare(b.name)));
+    setPreset(name);
+    setNote(`"${name}" 설정을 저장했습니다. 다음에 목록에서 고르면 그대로 채워집니다.`);
+  };
+
+  const dropPreset = () => {
+    keep(presets.filter((p) => p.name !== preset));
+    setNote(`"${preset}" 설정을 지웠습니다. 폴더와 이미지는 그대로입니다.`);
+    setPreset("");
+  };
 
   useEffect(() => {
     try {
@@ -210,6 +275,33 @@ export default function Builds({ run, onRun }: { run: Run; onRun: (image: string
           build();
         }}
       >
+        <div className="preset-bar">
+          <select aria-label="저장한 빌드 설정" value={preset} onChange={(e) => choose(e.target.value)}>
+            <option value="">{presets.length ? "저장한 설정 고르기…" : "저장한 설정이 없습니다"}</option>
+            {presets.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={!context.trim() || building}
+            title="지금 적은 폴더 · 이름 · 인자를 이름을 붙여 저장합니다"
+            onClick={() => setNaming(preset || tag.trim().split(":")[0] || context.trim().split(/[\\/]/).filter(Boolean).pop() || "")}
+          >
+            설정 저장
+          </button>
+          {preset && (
+            <button type="button" disabled={building} onClick={dropPreset}>
+              저장한 설정 지우기
+            </button>
+          )}
+          <span className="spacer" />
+          <button type="button" disabled={building} title="입력한 내용과 아래 결과를 모두 비웁니다" onClick={startNew}>
+            새 빌드
+          </button>
+        </div>
         <label>
           폴더
           <div className="pair">
@@ -284,6 +376,11 @@ export default function Builds({ run, onRun }: { run: Run; onRun: (image: string
               <button className="link" onClick={() => setRaw(!raw)}>
                 {raw ? "단계로 보기" : "전체 출력 보기"}
               </button>
+              {!building && (
+                <button className="link" onClick={() => setCurrent(null)}>
+                  결과 지우기
+                </button>
+              )}
             </span>
           </div>
           {current.state === "failed" && (
@@ -350,6 +447,28 @@ export default function Builds({ run, onRun }: { run: Run; onRun: (image: string
               저장
             </button>
           </div>
+        </Dialog>
+      )}
+
+      {naming !== null && (
+        <Dialog title="빌드 설정 저장" onClose={() => setNaming(null)}>
+          <p>지금 적은 폴더, 이미지 이름, Dockerfile, 빌드 인자를 저장합니다. 같은 이름이 있으면 덮어씁니다.</p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              savePreset();
+            }}
+          >
+            <input autoFocus className="field" aria-label="설정 이름" placeholder="예: myapp" value={naming} onChange={(e) => setNaming(e.target.value)} />
+            <div className="dialog-actions">
+              <button type="button" onClick={() => setNaming(null)}>
+                취소
+              </button>
+              <button className="primary" type="submit" disabled={!naming.trim()}>
+                저장
+              </button>
+            </div>
+          </form>
         </Dialog>
       )}
 

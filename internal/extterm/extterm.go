@@ -34,11 +34,7 @@ func Open(argv []string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		// A console program started with a console of its own gets a
-		// window: Windows Terminal where that is the default, else the
-		// classic console.
-		cmd = exec.Command(argv[0], argv[1:]...)
-		newConsole(cmd)
+		cmd = openWindows(argv)
 	case "darwin":
 		words := make([]string, len(argv))
 		for i, a := range argv {

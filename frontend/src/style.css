@@ -430,3 +430,19 @@ button.engine-card:hover { border-color: var(--accent); background: var(--panel)
 .cli { min-width: 0; }
 .cli > * { flex: none; }
 .cli > code { flex: 1; }
+
+.setup-steps { list-style: none; margin: 14px 0; padding: 0; display: grid; gap: 10px; }
+.setup-steps li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+.setup-steps li.todo { color: var(--muted); }
+.setup-steps li.done .setup-mark { color: var(--ok); }
+.setup-steps li.error .setup-mark { color: var(--bad); }
+.setup-mark { display: inline-grid; place-items: center; height: 20px; }
+.setup-progress { display: grid; gap: 4px; margin-top: 6px; max-width: 360px; }
+.setup-log summary { cursor: pointer; color: var(--muted); }
+.setup-log .log-box { max-height: 200px; min-height: 0; margin-top: 6px; }
+.note-box { border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; }
+.install-offer { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px dashed var(--accent); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.engine-option > span { flex: 1; }
+button.link.danger { color: var(--bad); }
+.preset-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.preset-bar select { min-width: 200px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }

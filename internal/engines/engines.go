@@ -100,8 +100,8 @@ func DefaultHost() string {
 	return contexts()[currentContext()]
 }
 
-// distros lists the WSL distributions, without starting any.
-func distros() []string {
+// Distros lists the WSL distributions, without starting any.
+func Distros() []string {
 	exe := wslExe()
 	if exe == "" {
 		return nil
@@ -155,7 +155,7 @@ func Discover() []Target {
 		}
 		out = append(out, Target{ID: "context:" + n, Kind: "context", Label: "Docker context: " + n, Host: ctxs[n]})
 	}
-	for _, d := range distros() {
+	for _, d := range Distros() {
 		out = append(out, Target{ID: "wsl:" + d, Kind: "wsl", Label: "WSL: " + d + " 안의 Docker", Distro: d})
 	}
 	return out
@@ -214,24 +214,19 @@ func configFile() string {
 }
 
 type config struct {
-	Engine string `json:"engine"`
+	Engine   string            `json:"engine"`
+	Settings map[string]string `json:"settings,omitempty"`
 }
 
-// Saved returns the ID of the engine chosen last time, "default" when none.
-func Saved() string {
-	b, err := os.ReadFile(configFile())
-	if err != nil {
-		return Default.ID
-	}
+func load() config {
 	var c config
-	if json.Unmarshal(b, &c) != nil || c.Engine == "" {
-		return Default.ID
+	if b, err := os.ReadFile(configFile()); err == nil {
+		_ = json.Unmarshal(b, &c)
 	}
-	return c.Engine
+	return c
 }
 
-// Save remembers the chosen engine.
-func Save(id string) error {
+func store(c config) error {
 	f := configFile()
 	if f == "" {
 		return nil
@@ -239,6 +234,39 @@ func Save(id string) error {
 	if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
 		return err
 	}
-	b, _ := json.MarshalIndent(config{Engine: id}, "", "  ")
-	return os.WriteFile(f, b, 0o644)
+	b, _ := json.MarshalIndent(c, "", "  ")
+	// Beside the file and moved over it: a crash midway keeps the old one.
+	tmp := f + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, f)
+}
+
+// Setting returns a value the UI stored, "" when there is none.
+func Setting(key string) string { return load().Settings[key] }
+
+// SetSetting stores a value for the UI.
+func SetSetting(key, value string) error {
+	c := load()
+	if c.Settings == nil {
+		c.Settings = map[string]string{}
+	}
+	c.Settings[key] = value
+	return store(c)
+}
+
+// Saved returns the ID of the engine chosen last time, "default" when none.
+func Saved() string {
+	if e := load().Engine; e != "" {
+		return e
+	}
+	return Default.ID
+}
+
+// Save remembers the chosen engine.
+func Save(id string) error {
+	c := load()
+	c.Engine = id
+	return store(c)
 }

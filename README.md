@@ -14,32 +14,40 @@ Docker를 쉽게, 눈으로 보면서 다루기 위한 데스크톱 앱 (Windows
 - **컨테이너 상세**: 개요(실시간 CPU · 메모리 그래프, 포트 · 저장 공간 · 네트워크 · 환경변수, 비밀값은 가림), 실시간 로그(검색), 터미널(컨테이너 안의 셸), 원본(inspect)
 - **이미지**: 리포지토리 · 태그 · 사용처 · 크기 목록, 사용 여부 필터, 정렬, 받기(진행률), 다시 받기, 태그 추가, 삭제, 이름 없는 이미지 정리, 이 이미지로 실행
 - **Compose**: 프로젝트 목록(서비스 · 상태 · 포트), compose 파일 열어서 올리기, 중지 · 재시작 · 이미지 받기 · 내리기, 명령 출력 실시간 표시, compose 파일 보기. PC에 `docker compose` 명령이 있어야 함
-- **빌드**: 폴더와 Dockerfile로 이미지 만들기, 단계별 진행(완료 · 캐시 사용 · 실패)과 각 단계의 출력, 빌드 인자, Dockerfile 보기 · 편집, 취소, 빌드 캐시 지우기. PC에 `docker` 명령이 있어야 함
+- **빌드**: 폴더와 Dockerfile로 이미지 만들기, 설정 저장 · 불러오기 · 새 빌드, 단계별 진행(완료 · 캐시 사용 · 실패)과 각 단계의 출력, 빌드 인자, Dockerfile 보기 · 편집, 취소, 빌드 캐시 지우기. PC에 `docker` 명령이 있어야 함
 - **볼륨**: 목록(사용처 · 크기), 사용 여부 필터, 만들기, 삭제, 안 쓰는 볼륨 정리(지워질 목록을 먼저 보여 줌), 안에 든 파일 보기(폴더 이동 · 글자 파일 미리보기 · 내 PC로 저장, 읽기 전용)
 - **네트워크**: 목록(주소 범위 · 연결된 컨테이너와 IP), 만들기, 컨테이너 연결 · 연결 끊기, 삭제, 안 쓰는 네트워크 정리
 - 이름으로 알 수 있는 제품(ubuntu, postgres, nginx 등)은 그 제품의 아이콘으로 표시
 - 터미널에서 `docker` 명령으로 바꾼 것도 화면에 바로 반영
 - 모든 작업에 같은 일을 하는 `docker` 명령 표시
 
-아직 앱이 Docker를 설치해 주지는 않습니다. Docker Engine(또는 Docker API를 제공하는 엔진)이 실행 중이어야 합니다.
+### Docker Engine이 없을 때
 
-### Windows에서 Docker Engine 쓰기 (Docker Desktop 없이)
+**Windows**: 사이드바 아래의 엔진 카드 → "Docker Engine 설치". BoxForge가 다음을 차례로 합니다.
 
-Docker Engine은 무료이고 WSL의 Linux 배포판 안에 설치합니다.
+1. WSL 2 준비 (없으면 설치. 관리자 권한을 한 번 묻고, Windows를 다시 시작해야 할 수 있음)
+2. Ubuntu 24.04 내려받기 (Ubuntu 공식 서버에서, 체크섬 확인)
+3. BoxForge 전용 WSL 배포판 만들기 (기존 배포판은 건드리지 않음)
+4. Docker 공식 저장소에서 Docker Engine · Compose · Buildx 설치
+5. 엔진을 시작하고 BoxForge를 그 엔진에 연결
 
-1. WSL 배포판(예: Microsoft Store의 Ubuntu) 터미널에서 Docker Engine을 설치합니다.
+중간에 실패하거나 취소해도 "설치 계속"을 누르면 끝난 단계는 건너뜁니다. 같은 창의 "제거"로 통째로 지울 수 있습니다.
+설치하는 것은 모두 무료이며 Docker Desktop은 쓰지 않습니다. 회사 프록시나 사내 인증서 설정은 아직 지원하지 않습니다.
 
-   ```bash
-   curl -fsSL https://get.docker.com | sudo sh
-   ```
+**Linux**: 터미널에서 직접 설치합니다.
 
-   ```bash
-   sudo systemctl enable --now docker
-   ```
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+```
 
-2. BoxForge 사이드바 아래의 엔진 카드를 눌러 "WSL: (배포판) 안의 Docker"를 고릅니다.
+```bash
+sudo systemctl enable --now docker
+```
 
-이후 Compose와 빌드도 그 배포판 안의 `docker` 명령으로 실행됩니다.
+**macOS**: 자동 설치는 아직 없습니다. colima 같은 무료 엔진을 설치하면 Docker context로 잡힙니다.
+
+이미 쓰는 WSL 배포판에 Docker Engine을 직접 설치했다면, 엔진 카드에서 "WSL: (배포판) 안의 Docker"를 고르면 됩니다.
+Compose와 빌드도 고른 엔진의 `docker` 명령으로 실행됩니다.
 비공개 레지스트리 로그인은 아직 없어서 공개 이미지만 받을 수 있습니다.
 
 제품 아이콘은 [Simple Icons](https://simpleicons.org)(CC0)의 것이며, 각 상표는 해당 소유자의 것입니다.

@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { call } from "./bridge";
+import SetupWizard, { type SetupStatus } from "./SetupWizard";
 import { Dialog } from "./ui";
+
+const ownEngine = "wsl:BoxForge";
 
 interface Target {
   id: string;
@@ -28,8 +31,11 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
   const [picked, setPicked] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [canInstall, setCanInstall] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
-  useEffect(() => {
+  const load = () =>
     call<{ current: string; targets: Target[] }>("Engines").then(
       (c) => {
         setTargets(c.targets ?? []);
@@ -38,7 +44,57 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
       },
       (e) => setError(e.message),
     );
+
+  useEffect(() => {
+    load();
+    call<SetupStatus>("SetupStatus").then((s) => setCanInstall(s.supported), () => {});
   }, []);
+
+  const remove = async () => {
+    setRemoving(false);
+    setBusy(true);
+    setError("");
+    try {
+      await call("RemoveBoxForgeEngine");
+      onSwitched("wsl --unregister BoxForge");
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+    setBusy(false);
+  };
+
+  if (installing) {
+    return (
+      <SetupWizard
+        onClose={() => {
+          setInstalling(false);
+          load();
+        }}
+        onInstalled={() => {
+          onSwitched("wsl -d BoxForge docker info");
+          onClose();
+        }}
+      />
+    );
+  }
+
+  if (removing) {
+    return (
+      <Dialog title="BoxForge 엔진 제거" onClose={() => setRemoving(false)}>
+        <p>
+          BoxForge가 설치한 Docker Engine과 그 안의 <strong>모든 이미지 · 컨테이너 · 볼륨</strong>을 삭제합니다. 되돌릴 수 없습니다.
+        </p>
+        <p className="muted">다른 엔진과 다른 WSL 배포판은 그대로 둡니다. 나중에 다시 설치할 수 있습니다.</p>
+        <div className="dialog-actions">
+          <button onClick={() => setRemoving(false)}>취소</button>
+          <button className="danger solid" onClick={remove}>
+            전부 삭제
+          </button>
+        </div>
+      </Dialog>
+    );
+  }
 
   const use = async () => {
     const t = targets?.find((x) => x.id === picked);
@@ -69,8 +125,21 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
             <span>
               <strong>{t.label}</strong>
               {t.id === current && <span className="pill tag-inline">사용 중</span>}
-              <span className="sub">{hint[t.kind](t)}</span>
+              <span className="sub">{t.id === ownEngine ? "BoxForge가 설치한 Docker Engine입니다." : hint[t.kind](t)}</span>
             </span>
+            {t.id === ownEngine && (
+              <button
+                type="button"
+                className="link danger"
+                disabled={busy}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setRemoving(true);
+                }}
+              >
+                제거
+              </button>
+            )}
           </label>
         ))}
       </div>
@@ -79,8 +148,19 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
           연결하지 못해 엔진을 바꾸지 않았습니다: {error}
         </p>
       )}
+      {canInstall && targets && !targets.some((t) => t.id === ownEngine) && (
+        <div className="install-offer">
+          <span>
+            <strong>Docker Engine이 없나요?</strong>
+            <span className="sub">BoxForge가 무료 Docker Engine을 설치해 드립니다. WSL 설치부터 알아서 합니다.</span>
+          </span>
+          <button className="primary" disabled={busy} onClick={() => setInstalling(true)}>
+            Docker Engine 설치
+          </button>
+        </div>
+      )}
       <details className="engine-help">
-        <summary>Docker Engine을 새로 쓰고 싶다면</summary>
+        <summary>직접 설치하고 싶다면</summary>
         <p>
           Docker Engine은 무료입니다(유료인 것은 Docker Desktop). Windows에서는 WSL의 Linux 배포판 안에 설치합니다.
           {hasWSL ? " 위 목록의 WSL 배포판" : " 먼저 Microsoft Store에서 Ubuntu를 설치한 뒤, 그 배포판"} 터미널에서 아래 두 줄을 실행하고, 이 창을 다시 열어

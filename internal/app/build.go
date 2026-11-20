@@ -117,8 +117,19 @@ func (a *App) PruneBuildCache() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
 	last := ""
-	name, full, env := a.docker("builder", "prune", "-f")
-	err := clirunner.Run(ctx, "", env, name, full, func(line string) { last = line })
+	prune := func() error {
+		name, full, env := a.docker("builder", "prune", "-f")
+		return clirunner.Run(ctx, "", env, name, full, func(line string) { last = line })
+	}
+	err := prune()
+	if err != nil && strings.Contains(err.Error(), "driver not running") {
+		// The builder is a container that some engines (Kiri's) stop while
+		// nothing builds; its cache can't be reached until it is started.
+		name, full, env := a.docker("buildx", "inspect", "--bootstrap")
+		if clirunner.Run(ctx, "", env, name, full, nil) == nil {
+			err = prune()
+		}
+	}
 	return last, err
 }
 
