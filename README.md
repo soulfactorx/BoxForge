@@ -96,4 +96,8 @@ Docker가 없는 PC에서는 `BOXFORGE_ENGINE=fake go run ./cmd/devserver`.
 - 릴리스 내는 법: [docs/RELEASING.md](docs/RELEASING.md)
 - 바뀐 내용: [CHANGELOG.md](CHANGELOG.md)
 
+## 라이선스
+
+[Apache License 2.0](LICENSE).
+
 제품 아이콘은 [Simple Icons](https://simpleicons.org)(CC0)의 것이며, 각 상표는 해당 소유자의 것입니다.

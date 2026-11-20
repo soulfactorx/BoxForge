@@ -1,31 +1,68 @@
-# Builds the programs and publishes a release when a version tag (v1.2.3) is
-# pushed. The app updates itself from these releases, so the file names
+# Publishes a release whenever main carries a version (wails.json,
+# info.productVersion) that has not been released yet: it builds the
+# programs, tags the commit v<version> and creates the GitHub release.
+# So releasing is: raise the version, write its section in CHANGELOG.md,
+# push to main.
+#
+# The app updates itself from these releases, so the file names
 # (BoxForge-<os>-<arch>[.exe], checksums.txt) are part of its contract:
 # see internal/update.
 name: Release
 
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 env:
   WAILS_VERSION: v2.17.1
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(jq -r .info.productVersion wails.json)"
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "wails.json's info.productVersion ($version) is not a version like 1.2.3" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version is already released: nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          elif ! grep -Eq "^## $version( |$)" CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for $version: write one, it is the release's text." >&2
+            exit 1
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - os: windows-latest
-            asset: BoxForge-windows-amd64.exe
             output: BoxForge-windows-amd64.exe
             tags: ""
           - os: ubuntu-24.04
-            asset: BoxForge-linux-amd64
             output: BoxForge-linux-amd64
             tags: webkit2_41
     runs-on: ${{ matrix.os }}
@@ -44,23 +81,29 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
       - name: Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+      - name: Test
+        if: runner.os == 'Linux'
+        run: |
+          (cd frontend && npm ci && npm run build)
+          test -z "$(gofmt -l .)"
+          go vet ./internal/... ./cmd/...
+          go test ./internal/...
       - name: Build
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
           tags=()
           if [ -n "${{ matrix.tags }}" ]; then tags=(-tags "${{ matrix.tags }}"); fi
           wails build -clean "${tags[@]}" -o "${{ matrix.output }}" \
-            -ldflags "-X github.com/soulfactorx/boxforge/internal/version.Version=${version}"
+            -ldflags "-X github.com/soulfactorx/boxforge/internal/version.Version=${{ needs.plan.outputs.version }}"
           ls -l build/bin
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
+          name: ${{ matrix.output }}
           path: build/bin/${{ matrix.output }}
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [plan, build]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -70,16 +113,14 @@ jobs:
           merge-multiple: true
       - name: Checksums and notes
         run: |
-          cd dist
-          sha256sum BoxForge-* > checksums.txt
-          cat checksums.txt
-          cd ..
+          (cd dist && sha256sum BoxForge-* > checksums.txt && cat checksums.txt)
           # This version's section of the changelog is the release's text.
-          version="${GITHUB_REF_NAME#v}"
-          awk -v v="$version" '$0 ~ "^## " v "( |$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
-          test -s notes.md || echo "BoxForge ${version}" > notes.md
+          awk -v v="${{ needs.plan.outputs.version }}" '$0 ~ "^## " v "( |$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
           cat notes.md
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/BoxForge-* dist/checksums.txt --title "BoxForge ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag
+        run: |
+          version="${{ needs.plan.outputs.version }}"
+          gh release create "v$version" dist/BoxForge-* dist/checksums.txt \
+            --target "$GITHUB_SHA" --title "BoxForge $version" --notes-file notes.md
