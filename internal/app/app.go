@@ -114,6 +114,7 @@ func (a *App) follow() {
 
 // hangUp ends everything that streams from the engine in use.
 func (a *App) hangUp() {
+	a.stopForwards(false)
 	a.mu.Lock()
 	for id, cancel := range a.logs {
 		cancel()

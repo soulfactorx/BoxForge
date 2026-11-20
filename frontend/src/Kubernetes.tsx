@@ -28,6 +28,16 @@ interface Item {
 
 type Tab = "pods" | "workloads" | "services" | "events";
 
+interface Forward {
+  id: string;
+  namespace: string;
+  service: string;
+  port: number;
+  local: number;
+}
+
+const tcpPorts = (s: any): number[] => (s.spec?.ports ?? []).filter((p: any) => (p.protocol ?? "TCP") === "TCP").map((p: any) => p.port);
+
 // What `kubectl get pods` would say in its STATUS column, and why.
 function podStatus(p: Item): { text: string; tone: "ok" | "wait" | "bad" | "done" } {
   const all = [...(p.status?.initContainerStatuses ?? []), ...(p.status?.containerStatuses ?? [])];
@@ -109,6 +119,26 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const [text, setText] = useState<{ title: string; body: string; reload?: () => Promise<string> } | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
   const [shell, setShell] = useState<{ namespace: string; name: string } | null>(null);
+  const [forwards, setForwards] = useState<Forward[]>([]);
+  const [fwd, setFwd] = useState<{ namespace: string; name: string; ports: number[]; port: number; local: string } | null>(null);
+  const [fwdBusy, setFwdBusy] = useState(false);
+  const loadForwards = () => call<Forward[]>("KubeForwards").then(setForwards, () => {});
+
+  const forward = async () => {
+    if (!fwd) return;
+    const local = +fwd.local || 0;
+    setFwdBusy(true);
+    const ok = await run(kubectl(`port-forward svc/${fwd.name} ${local || ""}:${fwd.port} -n ${fwd.namespace}`), () => call("KubeForward", fwd.namespace, fwd.name, fwd.port, local));
+    setFwdBusy(false);
+    if (ok) {
+      setFwd(null);
+      loadForwards();
+    }
+  };
+  const unforward = async (f: Forward) => {
+    await run(`# localhost:${f.local} → ${f.service}:${f.port} 연결 끊기 (kubectl port-forward 를 Ctrl+C 로 끝내는 것과 같음)`, () => call("KubeForwardStop", f.id));
+    loadForwards();
+  };
   const [applied, setApplied] = useState("");
   const [removing, setRemoving] = useState(false);
   const [note, setNote] = useState("");
@@ -126,6 +156,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
         // The next round asks again.
       }
     };
+    loadForwards();
     await Promise.all([list("pods", setPods), list("workloads", setWorkloads), list("services", setServices), list("events", setEvents)]);
     busy.current = false;
   };
@@ -407,6 +438,26 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </table>
             ))}
 
+          {tab === "services" && forwards.length > 0 && (
+            <div className="note-box forwards" data-testid="forwards">
+              <strong>내 PC로 연결된 포트</strong>
+              {forwards.map((f) => (
+                <div className="forward" key={f.id}>
+                  <code>localhost:{f.local}</code>
+                  <span className="muted">→</span>
+                  <span>
+                    {f.service}:{f.port} <span className="muted">({f.namespace})</span>
+                  </span>
+                  <span className="spacer" />
+                  <a className="link" href={`http://localhost:${f.local}`} target="_blank" rel="noreferrer">
+                    브라우저로 열기
+                  </a>
+                  <button onClick={() => unforward(f)}>끊기</button>
+                </div>
+              ))}
+              <span className="sub">BoxForge가 켜져 있는 동안만 이어집니다.</span>
+            </div>
+          )}
           {tab === "services" &&
             (shownSvc.length === 0 ? (
               <p className="empty">서비스가 없습니다.</p>
@@ -439,6 +490,16 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                         </td>
                         <td>{(s.spec?.ports ?? []).map((p: any) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}/${p.protocol}`).join(", ") || "—"}</td>
                         <td className="actions">
+                          {tcpPorts(s).length > 0 && s.spec?.clusterIP && s.spec.clusterIP !== "None" && (
+                            <button
+                              onClick={() => {
+                                const ports = tcpPorts(s);
+                                setFwd({ namespace, name, ports, port: ports[0], local: String(ports[0] < 1024 ? ports[0] + 8000 : ports[0]) });
+                              }}
+                            >
+                              내 PC로 연결
+                            </button>
+                          )}
                           {!(namespace === "default" && name === "kubernetes") && (
                             <IconButton icon="trash" label="삭제" tone="danger" onClick={() => act(`delete service ${name} -n ${namespace}`, "KubeDelete", "service", namespace, name)} />
                           )}
@@ -503,6 +564,47 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
             )}
             <button onClick={() => setText(null)}>닫기</button>
           </div>
+        </Dialog>
+      )}
+
+      {fwd && (
+        <Dialog title={`${fwd.name} 서비스를 내 PC로 연결`} onClose={() => setFwd(null)}>
+          <p>클러스터 안의 서비스는 밖에서 바로 접속할 수 없습니다. 내 PC의 포트 하나를 이 서비스로 이어 주면 브라우저나 다른 프로그램에서 localhost로 접속할 수 있습니다.</p>
+          <form
+            className="run-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              forward();
+            }}
+          >
+            {fwd.ports.length > 1 && (
+              <label>
+                서비스 포트
+                <select value={fwd.port} onChange={(e) => setFwd({ ...fwd, port: +e.target.value })}>
+                  {fwd.ports.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label>
+              내 PC 포트
+              <input autoFocus inputMode="numeric" aria-label="내 PC 포트" placeholder="비워 두면 빈 포트를 고릅니다" value={fwd.local} onChange={(e) => setFwd({ ...fwd, local: e.target.value.replace(/\D/g, "") })} />
+              <span className="help">
+                localhost:{fwd.local || "(자동)"} → {fwd.name}:{fwd.port}
+              </span>
+            </label>
+            <div className="dialog-actions">
+              <button type="button" onClick={() => setFwd(null)}>
+                취소
+              </button>
+              <button className="primary" type="submit" disabled={fwdBusy || +fwd.local > 65535}>
+                {fwdBusy ? "연결하는 중…" : "연결"}
+              </button>
+            </div>
+          </form>
         </Dialog>
       )}
 

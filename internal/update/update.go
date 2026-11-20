@@ -42,11 +42,14 @@ type Release struct {
 
 // AssetName is what this platform's program is called in a release.
 func AssetName() string {
-	name := "BoxForge-" + runtime.GOOS + "-" + runtime.GOARCH
-	if runtime.GOOS == "windows" {
-		name += ".exe"
+	switch runtime.GOOS {
+	case "windows":
+		return "BoxForge-windows-" + runtime.GOARCH + ".exe"
+	case "darwin":
+		// One program for both Intel and Apple chips: the one inside the app.
+		return "BoxForge-darwin-universal"
 	}
-	return name
+	return "BoxForge-" + runtime.GOOS + "-" + runtime.GOARCH
 }
 
 // Latest asks GitHub for the newest release.

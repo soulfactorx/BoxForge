@@ -5,8 +5,12 @@
 # push to main.
 #
 # The app updates itself from these releases, so the file names
-# (BoxForge-<os>-<arch>[.exe], checksums.txt) are part of its contract:
-# see internal/update.
+# (BoxForge-<os>-<arch>[.exe], BoxForge-darwin-universal, checksums.txt)
+# are part of its contract: see internal/update.
+#
+# Signing is optional. With the repository secrets WINDOWS_CERTIFICATE (a
+# .pfx file, base64) and WINDOWS_CERTIFICATE_PASSWORD the Windows program
+# is signed; without them it is published unsigned.
 name: Release
 
 on:
@@ -65,7 +69,12 @@ jobs:
           - os: ubuntu-24.04
             output: BoxForge-linux-amd64
             tags: webkit2_41
+          - os: macos-latest
+            output: BoxForge-darwin-universal
+            tags: ""
     runs-on: ${{ matrix.os }}
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -91,15 +100,45 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          tags=()
-          if [ -n "${{ matrix.tags }}" ]; then tags=(-tags "${{ matrix.tags }}"); fi
-          wails build -clean "${tags[@]}" -o "${{ matrix.output }}" \
-            -ldflags "-X github.com/soulfactorx/boxforge/internal/version.Version=${{ needs.plan.outputs.version }}"
+          args=(-clean -ldflags "-X github.com/soulfactorx/boxforge/internal/version.Version=${{ needs.plan.outputs.version }}")
+          if [ -n "${{ matrix.tags }}" ]; then args+=(-tags "${{ matrix.tags }}"); fi
+          if [ "${{ runner.os }}" = macOS ]; then
+            args+=(-platform darwin/universal)
+          else
+            args+=(-o "${{ matrix.output }}")
+          fi
+          wails build "${args[@]}"
           ls -l build/bin
+          mkdir out
+          if [ "${{ runner.os }}" = macOS ]; then
+            # The app for people to download, and the program inside it for
+            # the app to update itself with. Signed ad hoc: Apple chips run
+            # nothing unsigned.
+            app="$(ls -d build/bin/*.app | head -1)"
+            codesign --force --deep --sign - "$app"
+            cp "$(ls "$app"/Contents/MacOS/* | head -1)" "out/${{ matrix.output }}"
+            ditto -c -k --keepParent "$app" out/BoxForge-macos.zip
+          else
+            mv "build/bin/${{ matrix.output }}" out/
+          fi
+          ls -l out
+      - name: Sign (Windows, when a certificate is configured)
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          & $signtool.FullName sign /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 (Get-ChildItem out\*.exe).FullName
+          $code = $LASTEXITCODE
+          Remove-Item $pfx
+          exit $code
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output }}
-          path: build/bin/${{ matrix.output }}
+          path: out/*
           if-no-files-found: error
 
   publish:

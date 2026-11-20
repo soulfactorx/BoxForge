@@ -10,20 +10,30 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/soulfactorx/boxforge/internal/app"
+	"github.com/soulfactorx/boxforge/internal/desktop"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed build/appicon.png
+var icon []byte
 
 func main() {
 	a, err := app.New()
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Linux: the menu entry the desktop takes the window's icon from.
+	if err := desktop.Register(icon); err != nil {
+		log.Printf("desktop entry: %v", err)
+	}
 	err = wails.Run(&options.App{
+		Linux:       &linux.Options{Icon: icon, ProgramName: desktop.Name},
 		Title:       "BoxForge",
 		Width:       1280,
 		Height:      800,

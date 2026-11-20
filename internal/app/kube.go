@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/soulfactorx/boxforge/internal/engine"
+	"github.com/soulfactorx/boxforge/internal/engines"
 )
 
 // Kubernetes here is k3s, a whole single-node cluster in one container on
@@ -132,11 +133,21 @@ func (a *App) KubeStart() error {
 			}
 		}
 		say("클러스터 컨테이너를 만드는 중")
+		env := []string{"K3S_KUBECONFIG_MODE=644"}
+		if proxy := engines.Setting("proxy.url"); proxy != "" {
+			// The cluster fetches its images itself: behind a proxy, through it.
+			// Addresses inside the cluster never go that way.
+			no := "localhost,127.0.0.1,10.42.0.0/16,10.43.0.0/16,.svc,.cluster.local"
+			if more := engines.Setting("proxy.no"); more != "" {
+				no += "," + more
+			}
+			env = append(env, "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "NO_PROXY="+no)
+		}
 		_, err := a.eng().Containers().Run(ctx, engine.RunSpec{
 			Image: img, Name: kubeContainer, Command: []string{"server"},
 			// k3s runs containers of its own inside this one.
 			Privileged: true, Tmpfs: []string{"/run", "/var/run"},
-			Env:     []string{"K3S_KUBECONFIG_MODE=644"},
+			Env:     env,
 			Ports:   []engine.PortSpec{{Host: 6443, Container: 6443}},
 			Mounts:  []engine.MountSpec{{Source: kubeVolume, Target: "/var/lib/rancher/k3s"}},
 			Restart: "unless-stopped",
@@ -174,6 +185,7 @@ func (a *App) KubeStart() error {
 func (a *App) KubeStop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
+	a.stopForwards(true)
 	return a.eng().Containers().Stop(ctx, kubeContainer)
 }
 
@@ -181,6 +193,7 @@ func (a *App) KubeStop() error {
 func (a *App) KubeRemove() error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
+	a.stopForwards(true)
 	if a.kubeContainer() != nil {
 		if err := a.eng().Containers().Remove(ctx, kubeContainer, true, true); err != nil {
 			return err

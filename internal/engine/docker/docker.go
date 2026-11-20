@@ -311,6 +311,7 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 			Binds:         binds,
 			Privileged:    spec.Privileged,
 			Tmpfs:         tmpfs,
+			NetworkMode:   container.NetworkMode(spec.Network),
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(spec.Restart)},
 		},
 		nil, nil, spec.Name)
@@ -362,6 +363,38 @@ func (c containers) Output(ctx context.Context, id string, cmd []string, stdin [
 		return "", "", 0, err
 	}
 	return stdout.String(), stderr.String(), res.ExitCode, nil
+}
+
+// pipe is a command's input and output. The engine sends output framed
+// (which of stdout and stderr each piece is); out is that, unframed.
+type pipe struct {
+	att types.HijackedResponse
+	out *io.PipeReader
+}
+
+func (p pipe) Read(b []byte) (int, error)  { return p.out.Read(b) }
+func (p pipe) Write(b []byte) (int, error) { return p.att.Conn.Write(b) }
+func (p pipe) CloseWrite() error           { return p.att.CloseWrite() }
+func (p pipe) Close() error {
+	p.att.Close()
+	return p.out.Close()
+}
+
+func (c containers) Pipe(ctx context.Context, id string, cmd []string) (io.ReadWriteCloser, error) {
+	created, err := c.cli.ContainerExecCreate(ctx, id, container.ExecOptions{Cmd: cmd, AttachStdin: true, AttachStdout: true, AttachStderr: true})
+	if err != nil {
+		return nil, err
+	}
+	att, err := c.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return nil, err
+	}
+	r, w := io.Pipe()
+	go func() {
+		_, err := stdcopy.StdCopy(w, io.Discard, att.Reader)
+		w.CloseWithError(err)
+	}()
+	return pipe{att, r}, nil
 }
 
 func (c containers) Files(ctx context.Context, id, p string) ([]engine.FileEntry, error) {

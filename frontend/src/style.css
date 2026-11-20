@@ -966,3 +966,7 @@ button.link.add-remote { padding: 0; }
 .glossary dt { font-weight: 600; }
 .glossary dd { margin: 0; color: var(--muted); }
 .settings .run-form { margin-bottom: 4px; }
+
+.forwards { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.forward { display: flex; align-items: center; gap: 10px; }
+.forward .spacer { flex: 1; }

@@ -321,6 +321,10 @@ func (c containers) Output(context.Context, string, []string, []byte) (string, s
 	return "", "the fake engine runs nothing", 1, nil
 }
 
+func (c containers) Pipe(context.Context, string, []string) (io.ReadWriteCloser, error) {
+	return nil, errors.New("the fake engine runs nothing")
+}
+
 func (c containers) Prune(context.Context) (int64, error) { return 0, nil }
 
 func (c containers) Files(ctx context.Context, _, p string) ([]engine.FileEntry, error) {
