@@ -3,8 +3,8 @@
 Docker를 쉽게, 눈으로 보면서 다루기 위한 개인용 크로스플랫폼(Windows / Linux / macOS) 컨테이너 GUI.
 Docker에서 시작해 Podman · containerd · Kubernetes까지 넓혀 간다.
 
-- 상태: 초안 (v0.2)
-- v0.1 대비 변경: 1인 사용 전제로 범위 축소, "쉬움·시각화"를 1순위로 재정렬, 스택 단순화(Wails), Kubernetes 계획 추가
+- 상태: 초안 (v0.3)
+- v0.2 대비 변경: Docker Desktop 완전 배제, 앱이 Docker 엔진을 직접 설치·관리(Windows는 WSL2 포함), 컨테이너 명령 전수 지원 명시
 
 ---
 
@@ -14,15 +14,15 @@ Docker에서 시작해 Podman · containerd · Kubernetes까지 넓혀 간다.
 |------|------|------|
 | 1 | **쉽다** | Docker 개념을 몰라도 쓸 수 있다. 용어 대신 "무엇을 하고 싶은가"로 시작하고, 오류는 원인과 해결책으로 풀어서 보여준다. |
 | 2 | **보인다** | 이미지·컨테이너·Compose·볼륨·네트워크·빌드가 목록이 아니라 그림(관계도·흐름·사용량)으로 보이고, 그림 위에서 바로 조작한다. |
-| 3 | **빠짐없다** | `docker` CLI로 되는 일은 이 앱 안에서 된다. 전용 화면이 없는 명령은 내장 터미널로 받는다. |
-| 4 | **넓어진다** | Podman, containerd, Kubernetes를 같은 구조에 끼워 넣을 수 있다. 처음부터 구현하지는 않는다. |
+| 3 | **이것만 깔면 된다** | BoxForge만 설치하면 Docker 엔진 설치(Windows는 WSL2 설정 포함)부터 첫 컨테이너 실행까지 앱이 안내하고 대신 해 준다. Docker Desktop은 쓰지 않는다. |
+| 4 | **빠짐없다** | `docker` CLI로 되는 일은 이 앱 안에서 된다. 전용 화면이 없는 명령은 내장 터미널로 받는다. |
+| 5 | **넓어진다** | Podman, containerd, Kubernetes를 같은 구조에 끼워 넣을 수 있다. 처음부터 구현하지는 않는다. |
 
 ### 1인 사용이라서 하지 않는 것
 
 - 설치 파일 서명·공증, 자동 업데이트 서버, 스토어 배포 — 각 OS에서 직접 빌드해 쓴다.
 - 사용자 계정·권한·팀 공유, 텔레메트리.
 - 엔진 수십 개·컨테이너 수천 개 규모의 성능 최적화.
-- 컨테이너 엔진 자체의 설치·번들 (이미 설치된 Docker Desktop / Docker Engine 위에서 동작).
 
 ---
 
@@ -31,10 +31,11 @@ Docker에서 시작해 Podman · containerd · Kubernetes까지 넓혀 간다.
 | # | 결정 | 이유 |
 |---|------|------|
 | D1 | **Wails v2 (Go 백엔드 + React/TypeScript 화면), 단일 실행 파일** | 언어가 Go와 TS 둘뿐이다. Go 함수를 화면에서 바로 호출하는 타입 바인딩이 자동 생성되어 별도 API 계층이 필요 없다. OS 웹뷰를 써서 가볍다. |
-| D2 | **백엔드는 Go** | Docker · containerd · BuildKit · compose · Kubernetes의 공식 클라이언트가 모두 Go다. 확장 목표(4번)의 전부가 같은 언어로 해결된다. |
+| D2 | **백엔드는 Go** | Docker · containerd · BuildKit · compose · Kubernetes의 공식 클라이언트가 모두 Go다. 확장 목표(5번)의 전부가 같은 언어로 해결된다. |
 | D3 | **런타임 어댑터 + Capability 모델** | 지금은 Docker 어댑터 하나만 만들되 인터페이스 뒤에 둔다. Podman·containerd는 나중에 어댑터 추가로 끝난다. |
 | D4 | **Kubernetes는 어댑터가 아닌 별도 영역** | Pod·Deployment·Service는 컨테이너 엔진의 리소스와 모델이 다르다. 억지로 합치지 않고 "엔진"과 나란한 "클러스터" 영역으로 둔다. |
 | D5 | **API 우선, CLI 위임은 보조** | 엔진 API로 되는 것은 API로. compose·buildx처럼 클라이언트 쪽 로직이 큰 것만 CLI를 호출한다. |
+| D7 | **Docker Desktop 배제, 무료 구성요소만 사용** | Docker Desktop은 일정 규모 이상 기업에서 유료 구독이 필요하다. BoxForge는 Apache-2.0인 Docker Engine · CLI · Compose · Buildx만 쓰고, 엔진을 직접 설치·관리한다(4절). |
 | D6 | **화면은 "그림 + 목록" 2중 구조** | 모든 리소스는 시각화 보기와 표 보기를 오간다. 그림은 이해용, 표는 일괄 작업용. |
 
 v0.1의 Tauri + Go 별도 프로세스 + protobuf 구조는 배포 품질과 팀 개발에 유리했지만, 혼자 쓰는 도구에는 과하다. 화면(React)과 Go 패키지 구조는 그대로 옮길 수 있으므로, 나중에 공개 배포가 필요해지면 그때 셸만 교체한다.
@@ -52,7 +53,7 @@ v0.1의 Tauri + Go 별도 프로세스 + protobuf 구조는 배포 품질과 팀
 ┌──────────────▼─────────────────────────────────┴──────────────────────┐
 │  백엔드 (Go)                                                           │
 │  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌────────────┐  │
-│  │ 연결 관리 │ │ 이벤트 허브│ │ 작업(Job)  │ │ 진단 엔진 │ │ 레시피/템플릿│  │
+│  │ 연결 관리 │ │ 이벤트 허브│ │ 작업(Job)  │ │ 진단 엔진 │ │ 엔진 설치관리│  │
 │  └────┬─────┘ └────▲─────┘ └───────────┘ └──────────┘ └────────────┘  │
 │  ┌────▼────────────┴──────────────────────┐  ┌──────────────────────┐ │
 │  │ Runtime 인터페이스 (공통 모델+Capability) │  │ Cluster 인터페이스     │ │
@@ -62,20 +63,90 @@ v0.1의 Tauri + Go 별도 프로세스 + protobuf 구조는 배포 품질과 팀
 │  │      │  │(나중)   │  │(나중)      │  │(compose등)│  │ (나중)        │  │
 │  └──────┘  └────────┘  └───────────┘  └──────────┘  └──────────────┘  │
 └────────────────────────────────────────────────────────────────────────┘
-      unix socket / Windows named pipe / (나중) SSH · kubeconfig
+      unix socket / WSL stdio 중계 / (나중) SSH · kubeconfig
 ```
 
 - **이벤트 허브**: 엔진 이벤트 스트림을 구독해 메모리 캐시를 갱신하고 변경분만 화면에 푸시한다. 화면은 폴링하지 않으므로 터미널에서 `docker` 명령을 직접 쳐도 즉시 반영된다.
 - **작업(Job)**: pull · build · prune 같은 긴 작업은 진행률·취소·이력을 가진다.
-- **진단 엔진 / 레시피**: "쉽다" 목표의 핵심 부품. 4절 참고.
+- **엔진 설치관리**: Docker 엔진의 설치·시작·중지·업데이트·제거. 4절 참고.
+- **진단 엔진 / 레시피**: "쉽다" 목표의 핵심 부품. 5절 참고.
 
 ---
 
-## 4. 쉽게 만드는 장치
+## 4. 엔진 설치와 관리 — "BoxForge만 깔면 된다"
+
+### 4.1 원칙
+
+- **Docker Desktop은 쓰지도, 권하지도 않는다.** 설치돼 있어도 자동 연결 대상에서 제외하고, 발견되면 "유료 라이선스 대상일 수 있음" 안내만 한다. (BoxForge가 Docker Desktop의 엔진에 붙어 쓰는 것도 Docker Desktop 사용이므로 라이선스 문제가 그대로 남는다.)
+- 설치하는 것은 전부 무료·오픈소스(Apache-2.0): Docker Engine(`docker-ce`), Docker CLI, Compose 플러그인, Buildx 플러그인.
+- 앱이 만든 것은 앱이 지운다: "엔진 제거" 한 번으로 설치 전 상태로 돌아간다.
+- 이미 쓸 수 있는 무료 엔진(Linux의 기존 Docker Engine 등)이 있으면 새로 깔지 않고 그것을 쓴다.
+
+### 4.2 첫 실행 흐름
+
+```
+앱 실행 → 환경 점검 → [엔진 있음] ─────────────────────────→ 홈
+                    → [엔진 없음] → 설치 계획 표시 → 설치(진행 표시)
+                                   → 확인용 컨테이너 실행(hello-world) → 홈
+```
+
+환경 점검 화면은 항목별로 ✔ / ✖ / 조치 버튼을 보여준다. 설치 계획은 "무엇을, 어디에, 관리자 권한이 필요한 단계는 어느 것인지"를 미리 보여주고 동의를 받는다. 중간에 실패하거나 재부팅이 끼어도 단계별 상태를 저장해 이어서 진행한다.
+
+### 4.3 Windows — WSL2 전용 배포판
+
+Windows에는 Linux 컨테이너를 직접 돌릴 방법이 없으므로 WSL2 안에 엔진을 둔다. 사용자의 기존 WSL 배포판은 건드리지 않고 **BoxForge 전용 배포판**을 따로 만든다.
+
+| 단계 | 하는 일 | 권한 |
+|------|---------|------|
+| 1. 점검 | Windows 버전/빌드, CPU 가상화 활성 여부, WSL 설치·버전, 디스크 여유 | — |
+| 2. WSL2 준비 | 없으면 `wsl --install --no-distribution`, 있으면 `wsl --update`. 재부팅이 필요하면 안내하고, 재부팅 후 앱이 이어서 진행 | 관리자(UAC 1회) |
+| 3. 전용 배포판 생성 | Ubuntu 공식 WSL rootfs를 내려받아 `wsl --import boxforge …` (앱 데이터 폴더 아래에 가상 디스크 생성) | — |
+| 4. 엔진 설치 | 배포판 안에서 Docker 공식 apt 저장소 등록 → `docker-ce`, CLI, compose, buildx 설치 | — (배포판 내부 root) |
+| 5. 구성 | `/etc/wsl.conf`로 systemd 활성화 + docker 서비스 자동 시작, 필요 시 프록시·사내 인증서 주입 | — |
+| 6. 확인 | `hello-world` 실행, 포트 공개 테스트 | — |
+
+**연결 방식**: 엔진의 TCP 포트를 열지 않는다. Go Docker 클라이언트에 사용자 정의 연결기를 달아 `wsl.exe -d boxforge docker system dial-stdio` 프로세스의 표준 입출력을 통로로 쓴다(Docker의 `ssh://` 연결과 같은 원리). 로컬의 다른 프로그램이 엔진에 무단 접근할 길이 생기지 않는다.
+
+**Windows 고유 처리**
+
+- **경로 변환**: 폴더 마운트 시 `C:\Users\me\app` ↔ `/mnt/c/Users/me/app` 자동 변환. Windows 쪽 폴더 마운트는 느리므로 대용량·DB 데이터는 볼륨 사용을 권장하는 안내를 붙인다.
+- **포트**: WSL2의 localhost 전달 덕분에 컨테이너에 공개한 포트는 Windows의 `localhost:포트`로 접속된다. 마법사가 접속 주소를 바로 보여준다.
+- **엔진 수명**: WSL은 사용 중인 프로세스가 없으면 배포판을 내려 버린다. 앱이 "엔진 지킴이" 프로세스(배포판 안에서 대기하는 `wsl.exe` 하나)를 띄워 유지하고, 설정으로 "앱을 닫아도 컨테이너 유지" / "Windows 로그인 시 엔진 자동 시작"을 고른다.
+- **자원 설정**: 메모리·CPU 상한(`.wslconfig`), 가상 디스크 사용량 표시와 압축(회수)을 설정 화면에서.
+- **내장 터미널**: 전용 배포판의 셸을 연다. 여기서는 `docker` 명령이 그대로 동작한다.
+- **Windows 터미널에서 `docker` 쓰기(선택)**: `wsl -d boxforge docker …`를 감싼 `docker.cmd`를 PATH에 등록해 주는 옵션.
+
+### 4.4 Linux — 네이티브 설치
+
+- 배포판 감지(Ubuntu/Debian/Fedora/RHEL 계열 등) → Docker 공식 패키지 저장소 등록 → `docker-ce` 일체 설치 → 서비스 활성화.
+- 관리자 권한은 `pkexec`(그래픽 암호 창)로 설치 스크립트 실행 시 1회만 받는다. 실행할 스크립트 내용은 설치 계획 화면에서 볼 수 있다.
+- 사용자를 `docker` 그룹에 추가한다. 그룹 변경은 재로그인 후 적용되므로 안내하고, 그 전까지는 앱이 `sg docker`로 임시 연결한다.
+- 공식 저장소가 지원하지 않는 배포판은 배포판 자체 패키지(예: Arch의 `docker`)로 설치하거나, 수동 설치 안내로 대체한다.
+
+### 4.5 macOS — Lima VM
+
+macOS도 Linux VM이 필요하다. 무료·오픈소스인 **Lima**(CNCF, Apache-2.0)를 앱이 내려받아 전용 VM을 만들고 그 안에 Docker Engine을 설치한다. 가상화는 macOS 기본 프레임워크를 쓰며 관리자 권한이 필요 없다. 연결은 Lima가 호스트에 노출하는 유닉스 소켓으로 한다. Docker CLI는 공식 정적 바이너리를 앱 데이터 폴더에 둔다.
+
+### 4.6 설치 후 관리 (설정 > 엔진)
+
+- 상태(실행 중/중지), 버전, 시작·중지·재시작
+- 엔진 업데이트(배포판·VM 안의 패키지 갱신), 업데이트 전 실행 중 컨테이너 경고
+- 자원 상한, 디스크 사용량·회수
+- 프록시·사내 인증서(CA) 설정 — 회사망에서 이미지 pull이 실패하는 가장 흔한 원인이므로 진단 엔진과 연결
+- `daemon.json` 편집(레지스트리 미러, 로그 설정 등)을 폼으로
+- 초기화(모든 이미지·컨테이너·볼륨 삭제) / 엔진 제거
+
+### 4.7 회사 PC에서의 제약
+
+앱이 해결할 수 없어 안내만 가능한 것: BIOS에서 가상화가 꺼져 있음, 관리자 권한이 없어 WSL 기능을 켤 수 없음, 그룹 정책으로 WSL이 차단됨. 환경 점검에서 이를 구분해 "IT 부서에 요청할 내용"을 문장으로 만들어 준다.
+
+---
+
+## 5. 쉽게 만드는 장치
 
 Docker가 어려운 이유는 대개 (a) 용어, (b) 플래그가 많은 `run`, (c) 리소스 사이의 보이지 않는 관계, (d) 불친절한 오류다. 각각에 대응한다.
 
-### 4.1 "하고 싶은 일"로 시작하는 홈
+### 5.1 "하고 싶은 일"로 시작하는 홈
 
 홈 화면은 리소스 목록이 아니라 할 일 카드다.
 
@@ -85,7 +156,7 @@ Docker가 어려운 이유는 대개 (a) 용어, (b) 플래그가 많은 `run`, 
 - 디스크 정리하기
 - 지금 뭐가 돌고 있나 보기
 
-### 4.2 실행 마법사와 레시피
+### 5.2 실행 마법사와 레시피
 
 `docker run`의 100여 개 플래그를 질문으로 바꾼다.
 
@@ -97,13 +168,13 @@ Docker가 어려운 이유는 대개 (a) 용어, (b) 플래그가 많은 `run`, 
 
 고급 사용자를 위한 전체 플래그 폼(탭 분리 + 플래그 검색)은 "고급" 버튼 뒤에 둔다. 마법사 결과는 프리셋으로 저장한다.
 
-### 4.3 용어 설명과 CLI 학습
+### 5.3 용어 설명과 CLI 학습
 
 - 모든 용어(이미지, 볼륨, 브리지 네트워크, 레이어…)에 한 줄 설명 툴팁과 "더 알아보기".
 - 모든 동작 옆에 **동등한 CLI 명령**을 표시한다. 쓰다 보면 CLI가 자연스럽게 익는다.
 - 명령 팔레트(Ctrl/Cmd+K)에 `docker run -p 8080:80 nginx`를 붙여넣으면 해석해서 마법사에 채워 준다. 인터넷에서 본 명령이 무슨 뜻인지 눈으로 확인하고 실행할 수 있다.
 
-### 4.4 진단: "왜 안 되지?"
+### 5.4 진단: "왜 안 되지?"
 
 오류와 이상 상태를 사람 말로 바꾸고 해결 버튼을 단다.
 
@@ -114,15 +185,16 @@ Docker가 어려운 이유는 대개 (a) 용어, (b) 플래그가 많은 `run`, 
 | 이미지 삭제 실패 | 이 이미지를 쓰는 컨테이너 목록 + "함께 정리" |
 | 디스크 부족 | 무엇이 얼마나 차지하는지 + 안전하게 지울 수 있는 것 |
 | 컨테이너끼리 통신 안 됨 | 같은 네트워크에 있는지 관계도에서 강조 |
-| Docker 엔진에 연결 안 됨 | 엔진 실행 여부 · 소켓 권한 · 해결 방법 안내 |
+| Docker 엔진에 연결 안 됨 | 엔진·WSL 배포판 실행 여부 · 권한 점검 + "엔진 시작" / "복구" 버튼 |
+| 이미지 pull 실패 | 네트워크·프록시·사내 인증서·레지스트리 로그인 중 무엇이 문제인지 구분 |
 
-### 4.5 안전장치
+### 5.5 안전장치
 
 삭제·정리 같은 되돌릴 수 없는 작업은 **무엇이 사라지는지**(대상 목록, 회수 용량, 데이터가 든 볼륨 여부)를 먼저 보여준 뒤 확인받는다.
 
 ---
 
-## 5. 시각화 설계
+## 6. 시각화 설계
 
 | 영역 | 그림 보기 | 그림에서 하는 조작 |
 |------|-----------|--------------------|
@@ -160,21 +232,23 @@ Docker가 어려운 이유는 대개 (a) 용어, (b) 플래그가 많은 `run`, 
 
 ---
 
-## 6. 명령어 커버리지
+## 7. 명령어 커버리지
 
 | 등급 | 방식 | 대상 |
 |------|------|------|
-| **A. 전용 화면** | 5절의 시각화 + 마법사 + 폼 | container, image, volume, network, build, compose, system(info·df·events·prune), login/search |
+| **A. 전용 화면** | 6절의 시각화 + 마법사 + 폼 | container, image, volume, network, build, compose, system(info·df·events·prune), login/search |
 | **B. 범용 폼** | CLI `--help`에서 생성한 폼 + JSON 출력 표 | buildx 세부, context, manifest, plugin, checkpoint, swarm 등 |
 | **C. 내장 터미널** | 선택된 엔진 환경이 설정된 셸 | 그 외 전부 |
+
+등급 A는 해당 영역의 **하위 명령 전부**를 뜻한다. 예를 들어 컨테이너는 run · create · start · stop · restart · kill · pause · unpause · **rename** · update(자원 상한 변경) · rm · logs · exec · attach · cp · diff · commit · export · inspect · stats · top · port · wait · prune을 모두 화면에서 한다. 이름 변경 같은 단순 작업은 목록에서 이름을 더블클릭해 바로 고친다.
 
 `coverage.yaml`(명령 → 등급 → 화면)을 두고, 설치된 `docker`의 명령 트리와 대조하는 검사 스크립트로 누락을 찾는다.
 
 ---
 
-## 7. 런타임 추상화와 확장 계획
+## 8. 런타임 추상화와 확장 계획
 
-### 7.1 인터페이스 (개략)
+### 8.1 인터페이스 (개략)
 
 ```go
 type Runtime interface {
@@ -195,27 +269,27 @@ type Runtime interface {
 
 모든 리소스는 `공통 필드 + native(런타임 원본 JSON)`. 화면은 Capability에 없는 기능을 숨긴다.
 
-### 7.2 Docker (1차)
+### 8.2 Docker (1차)
 
 - 공식 Go 클라이언트로 Engine API 직접 호출, API 버전 자동 협상.
-- 연결: Linux/macOS는 unix socket, Windows는 named pipe. `DOCKER_HOST`와 Docker context, 잘 알려진 소켓 경로(Docker Desktop, colima, Rancher Desktop)를 자동 탐지.
+- 연결: 기본은 BoxForge가 설치한 엔진(4절) — Linux는 unix socket, Windows는 WSL stdio 중계, macOS는 Lima 소켓. 그 외에 `DOCKER_HOST`, Docker context, 무료 도구의 소켓(colima, Rancher Desktop)을 탐지해 추가 엔진으로 제안한다. Docker Desktop의 소켓은 탐지 대상에서 제외.
 - Compose: `compose-go`로 YAML을 해석·검증·편집하고, 실행은 `docker compose` CLI에 위임.
 - 빌드: BuildKit 진행 스트림을 받아 단계 그래프로 표시.
 
-### 7.3 Podman (나중)
+### 8.3 Podman (나중)
 
 Docker 호환 API가 있어 Docker 어댑터 구현을 대부분 공유한다. Pod · `kube play` · `podman machine`만 libpod REST로 추가.
 
-### 7.4 containerd (나중)
+### 8.4 containerd (나중)
 
 고수준 "run" API가 없고 네트워킹·볼륨이 nerdctl 몫이므로: 조회·이벤트는 gRPC 직접, 실행·네트워크·빌드·compose는 nerdctl CLI 위임. nerdctl이 없으면 조회 전용.
 
-### 7.5 Kubernetes (계획)
+### 8.5 Kubernetes (계획)
 
 컨테이너 엔진과 모델이 다르므로 `Runtime`이 아닌 `Cluster` 인터페이스로 분리하고, 화면에서는 엔진 선택기 옆에 클러스터가 나란히 나타난다.
 
 - **연결**: kubeconfig의 컨텍스트 목록. 공식 Go 클라이언트(client-go) 사용, 변경 감시는 informer로 이벤트 허브에 연결 — 엔진과 같은 "변경분 푸시" 구조를 그대로 쓴다.
-- **1차 범위**: 로컬 클러스터(Docker Desktop 내장 Kubernetes, kind, minikube, k3d) 대상. Namespace · Pod · Deployment · StatefulSet · Service · Ingress · ConfigMap · Secret · PVC 조회/편집, 로그·exec·포트 포워딩, YAML 적용.
+- **1차 범위**: 로컬 클러스터(kind, k3d, minikube — 모두 BoxForge의 Docker 엔진 위에서 동작) 대상. 클러스터 생성도 엔진 설치와 같은 방식으로 앱이 대신 해 준다. Namespace · Pod · Deployment · StatefulSet · Service · Ingress · ConfigMap · Secret · PVC 조회/편집, 로그·exec·포트 포워딩, YAML 적용.
 - **시각화**: Ingress → Service → Deployment → Pod → PVC로 이어지는 흐름도. 관계도 화면의 그래프 엔진을 재사용한다.
 - **Docker와의 다리**: 로컬 이미지를 kind/minikube에 올리기, Compose 프로젝트를 Kubernetes 매니페스트로 변환(초안 생성 후 그래프에서 검토).
 - **쉬움 원칙 유지**: "앱 배포" 마법사, 상태 진단(CrashLoopBackOff · ImagePullBackOff · Pending의 원인 해석).
@@ -224,16 +298,18 @@ Docker 호환 API가 있어 Docker 어댑터 구현을 대부분 공유한다. P
 
 ---
 
-## 8. 보안 (1인용 최소선)
+## 9. 보안 (1인용 최소선)
 
-- Docker 소켓 접근은 사실상 호스트 관리자 권한이다. 앱은 네트워크 포트를 열지 않는다 (Wails 바인딩은 프로세스 내부 통신).
+- Docker 소켓 접근은 사실상 호스트 관리자 권한이다. 앱도 엔진도 네트워크 포트를 열지 않는다 (Wails 바인딩은 프로세스 내부 통신, Windows 엔진 연결은 stdio 중계).
+- 관리자 권한은 엔진 설치의 정해진 단계에서만, 실행 내용을 보여준 뒤 요청한다. 앱 자체는 일반 권한으로 실행한다.
+- 내려받는 것(rootfs, Lima, Docker 패키지)은 공식 배포처에서만 받고 체크섬·저장소 서명을 검증한다.
 - 레지스트리 로그인은 Docker의 기존 자격 증명 저장소를 그대로 사용하고, 앱이 따로 비밀번호를 저장하지 않는다.
 - CLI 러너는 셸을 거치지 않고 인자 배열로 실행한다.
 - 환경변수의 비밀값은 화면에서 기본 가림 처리.
 
 ---
 
-## 9. 저장소 구조
+## 10. 저장소 구조
 
 ```
 BoxForge/
@@ -244,14 +320,18 @@ BoxForge/
 │  │  ├─ docker/           # (나중) podman/ containerd/
 │  │  └─ fake/             # 인메모리 가짜 엔진: 테스트·화면 개발용
 │  ├─ cluster/             # (나중) Kubernetes
-│  ├─ discovery/           # 엔진 자동 탐지
+│  ├─ provision/           # 엔진 설치·관리: 환경 점검, 단계 실행기(재개 가능)
+│  │  ├─ windows/          #   WSL2 준비, 전용 배포판, 지킴이, 경로 변환
+│  │  ├─ linux/            #   배포판별 패키지 설치
+│  │  └─ darwin/           #   Lima VM
+│  ├─ discovery/           # 엔진 자동 탐지 (Docker Desktop 제외)
 │  ├─ clirunner/           # compose·buildx 호출, 명령 파싱/생성
 │  ├─ events/  jobs/       # 이벤트 허브, 작업
 │  ├─ diagnose/            # 오류·상태 해석 규칙
 │  ├─ recipes/             # 실행 레시피 (YAML)
 │  └─ store/               # 설정·프리셋 (JSON 파일)
 ├─ frontend/src/
-│  ├─ features/{home,topology,containers,images,compose,volumes,networks,builds,disk}/
+│  ├─ features/{onboarding,home,topology,containers,images,compose,volumes,networks,builds,disk}/
 │  ├─ components/{graph,table,terminal,logs,wizard,detail}/
 │  └─ i18n/
 └─ docs/
@@ -261,27 +341,31 @@ BoxForge/
 
 ---
 
-## 10. 로드맵
+## 11. 로드맵
 
 각 단계가 끝날 때마다 실제로 쓸 수 있는 상태를 유지한다.
 
 | 단계 | 내용 | 쓸 수 있게 되는 것 |
 |------|------|--------------------|
-| **M0 골격** | Wails 프로젝트, Docker 연결·자동 탐지, 이벤트 허브, 컨테이너 목록 실시간 갱신, fake 런타임 | 지금 뭐가 돌고 있는지 보기 |
+| **M0 골격** | Wails 프로젝트, Docker 연결(WSL stdio 중계 포함), 이벤트 허브, 컨테이너 목록 실시간 갱신, fake 런타임 | 지금 뭐가 돌고 있는지 보기 |
+| **M0.5 엔진 설치** | 환경 점검, Windows WSL2 전용 배포판 설치 흐름, 엔진 시작/중지·지킴이, 설정 > 엔진. 이어서 Linux, macOS(Lima) | 빈 PC에서 BoxForge만으로 첫 컨테이너 실행 |
 | **M1 컨테이너·이미지** | 시작/중지/삭제, 로그, 터미널, 통계 그래프, 이미지 pull/삭제/레이어 보기, 실행 마법사 + 레시피, CLI 표시 | 일상적인 Docker 사용을 앱으로 대체 |
 | **M2 관계도·볼륨·네트워크** | 전체 관계도, 볼륨 탐색/백업, 네트워크 토폴로지, 디스크 정리, 진단 엔진 | 구조를 눈으로 이해하고 문제 원인 찾기 |
 | **M3 Compose** | 서비스 그래프 ↔ YAML 양방향 편집, 프로젝트 실행·통합 로그 | 여러 컨테이너 묶음 관리 |
 | **M4 빌드** | Dockerfile 편집, 단계 그래프, 캐시·진행 표시, push | 내 코드를 이미지로 만들기 |
 | **M5 완성도** | 명령 팔레트, 범용 폼(등급 B), 내장 터미널, 커버리지 검사, 파일 탐색기 | CLI 없이 전부 처리 |
-| **M6 Kubernetes** | 7.5절 1차 범위 | 로컬 클러스터 시각적 관리 |
+| **M6 Kubernetes** | 8.5절 1차 범위 | 로컬 클러스터 시각적 관리 |
 | **M7 다른 런타임** | Podman → containerd 어댑터, SSH 원격 엔진 | 통합 도구 |
 
 ---
 
-## 11. 리스크
+## 12. 리스크
 
 | 리스크 | 대응 |
 |--------|------|
+| WSL 동작이 Windows·WSL 버전마다 다름 (systemd 지원, 유휴 종료, 재부팅 요구) | M0에서 먼저 검증할 항목: stdio 중계 성능(로그·터미널 스트림), 지킴이 방식의 엔진 유지, systemd 유무별 dockerd 기동. 최소 지원을 Windows 10 22H2 / 11 + 스토어판 WSL로 한정 |
+| 엔진 설치가 중간에 실패해 반쯤 설치된 상태 | 단계마다 멱등하게 작성하고 상태를 기록, "복구"와 "완전 제거" 제공 |
+| 회사 PC 정책(가상화·WSL 차단, 프록시) | 환경 점검에서 조기 판별, 프록시·CA 설정 지원, 해결 불가 항목은 IT 요청 문구 제공 |
 | 그래프 ↔ YAML 양방향 편집의 복잡도 (주석·서식 보존) | YAML을 원본으로 두고 그래프 편집은 YAML에 대한 최소 수정으로 적용. 처음엔 그래프 읽기 전용 + 일부 편집부터 |
 | 관계도가 리소스가 많아지면 읽기 어려움 | Compose 프로젝트 단위 접기, 필터, 중지된 것 숨기기 기본값 |
 | OS별 웹뷰 차이 (Linux WebKitGTK) | 세 OS에서 주기적으로 직접 실행 확인, 최신 CSS/JS 기능 사용 자제 |
