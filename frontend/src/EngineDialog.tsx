@@ -7,7 +7,7 @@ const ownEngine = "wsl:BoxForge";
 
 interface Target {
   id: string;
-  kind: "default" | "context" | "wsl" | "ssh" | "podman";
+  kind: "default" | "context" | "wsl" | "ssh" | "podman" | "containerd";
   label: string;
   host: string;
   distro: string;
@@ -16,7 +16,8 @@ interface Target {
 const hint: Record<Target["kind"], (t: Target) => string> = {
   default: () => "터미널에서 docker 명령을 쳤을 때 쓰이는 엔진입니다.",
   context: (t) => t.host,
-  wsl: (t) => `${t.distro} 배포판 안에 설치된 Docker Engine에 연결합니다. 네트워크 포트를 열지 않습니다.`,
+  wsl: (t) => `${t.distro} 배포판 안에 설치된 Docker Engine에 연결합니다. Docker가 없고 containerd(nerdctl)만 있으면 그것을 씁니다. 네트워크 포트를 열지 않습니다.`,
+  containerd: () => "Docker 없이 containerd만 있는 환경입니다. nerdctl 명령으로 다룹니다. 실행 중인 컨테이너의 네트워크 바꾸기, 터미널 크기 맞춤 등 일부 기능은 되지 않습니다.",
   ssh: (t) => `다른 PC나 서버의 Docker Engine에 SSH로 연결합니다 (${t.host}). 비밀번호 없이 키로 로그인되어 있어야 합니다.`,
   podman: (t) => `Podman의 Docker 호환 API에 연결합니다 (${t.host}). 일부 기능은 다르게 동작할 수 있습니다.`,
 };
@@ -144,6 +145,8 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
             ? `docker context use ${t.id.slice(8)}`
             : t.kind === "ssh"
               ? `docker -H ssh://${t.host} info`
+              : t.kind === "containerd"
+                ? "nerdctl info"
               : t.kind === "podman"
                 ? `docker -H ${t.host} info`
                 : "docker context use default",
@@ -245,7 +248,7 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
         <p>
           Docker Engine은 무료입니다(유료인 것은 Docker Desktop). Windows에서는 WSL의 Linux 배포판 안에 설치합니다.
           {hasWSL ? " 위 목록의 WSL 배포판" : " 먼저 Microsoft Store에서 Ubuntu를 설치한 뒤, 그 배포판"} 터미널에서 아래 두 줄을 실행하고, 이 창을 다시 열어
-          "WSL: … 안의 Docker"를 고르면 됩니다.
+          "WSL: … 안의 엔진"을 고르면 됩니다.
         </p>
         <pre className="log-box">{install.join("\n")}</pre>
         <p className="muted">Linux에서는 같은 두 줄을 그대로 실행하면 되고, 그 엔진은 맨 위 항목으로 연결됩니다.</p>

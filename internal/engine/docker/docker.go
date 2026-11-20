@@ -1133,3 +1133,10 @@ func (v volumes) Restore(ctx context.Context, name string, tar io.Reader) error 
 	// unpacks from the root into the volume.
 	return v.cli.CopyToContainer(ctx, id, "/", tar, container.CopyToContainerOptions{})
 }
+
+// ListScript and ParseListing are how a directory is listed with a shell
+// in whatever image is at hand; other adapters list the same way.
+const ListScript = listScript
+
+// ParseListing reads what ListScript printed.
+func ParseListing(text string) ([]engine.FileEntry, bool) { return parseListing(text) }

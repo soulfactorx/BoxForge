@@ -172,7 +172,13 @@ func Discover() []Target {
 		out = append(out, Target{ID: "context:" + n, Kind: "context", Label: "Docker context: " + n, Host: ctxs[n]})
 	}
 	for _, d := range Distros() {
-		out = append(out, Target{ID: "wsl:" + d, Kind: "wsl", Label: "WSL: " + d + " 안의 Docker", Distro: d})
+		out = append(out, Target{ID: "wsl:" + d, Kind: "wsl", Label: "WSL: " + d + " 안의 엔진", Distro: d})
+	}
+	// containerd with no Docker in front of it is driven with nerdctl.
+	if runtime.GOOS != "windows" {
+		if _, err := exec.LookPath("nerdctl"); err == nil {
+			out = append(out, Target{ID: "containerd", Kind: "containerd", Label: "containerd (nerdctl, 실험적)"})
+		}
 	}
 	for i, sock := range podmanSockets() {
 		out = append(out, Target{ID: fmt.Sprintf("podman:%d", i), Kind: "podman", Label: "Podman (Docker 호환, 실험적)", Host: sock})

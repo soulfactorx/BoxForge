@@ -25,6 +25,7 @@ import (
 	"github.com/soulfactorx/boxforge/internal/engine"
 	"github.com/soulfactorx/boxforge/internal/engine/docker"
 	"github.com/soulfactorx/boxforge/internal/engine/fake"
+	"github.com/soulfactorx/boxforge/internal/engine/nerdctl"
 	"github.com/soulfactorx/boxforge/internal/engines"
 	"github.com/soulfactorx/boxforge/internal/extterm"
 	"github.com/soulfactorx/boxforge/internal/hub"
@@ -62,7 +63,21 @@ func connect(t engines.Target) (engine.Runtime, error) {
 		return fake.New(), nil
 	}
 	switch t.Kind {
-	case "wsl", "ssh":
+	case "containerd":
+		return nerdctl.Connect(nerdctl.Local)
+	case "wsl":
+		rt, err := docker.ConnectDialer(t.Dialer())
+		if err != nil {
+			// No Docker in the distribution: containerd on its own, perhaps.
+			inside := func(args ...string) (string, []string) {
+				return engines.InWSL(t.Distro, append([]string{"nerdctl"}, args...)...)
+			}
+			if alt, aerr := nerdctl.Connect(inside); aerr == nil {
+				return alt, nil
+			}
+		}
+		return rt, err
+	case "ssh":
 		return docker.ConnectDialer(t.Dialer())
 	case "context", "podman":
 		return docker.Connect(t.Host)
@@ -205,10 +220,18 @@ func (a *App) docker(args ...string) (name string, full []string, env []string) 
 	a.emu.RLock()
 	t := a.target
 	a.emu.RUnlock()
+	// With containerd on its own the command is nerdctl, which takes the
+	// docker command's words.
+	tool := "docker"
+	if nerdctl.Is(a.eng()) {
+		tool = "nerdctl"
+	}
 	switch t.Kind {
+	case "containerd":
+		return tool, args, nil
 	case "wsl":
-		// The docker command inside the distribution, beside its engine.
-		name, full = engines.InWSL(t.Distro, append([]string{"docker"}, args...)...)
+		// The command inside the distribution, beside its engine.
+		name, full = engines.InWSL(t.Distro, append([]string{tool}, args...)...)
 		return name, full, nil
 	case "context", "podman":
 		return "docker", args, []string{"DOCKER_HOST=" + t.Host}

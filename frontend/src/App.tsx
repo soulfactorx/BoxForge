@@ -205,7 +205,12 @@ export default function App() {
     return () => window.removeEventListener("keydown", key);
   }, []);
 
-  const showCli = useCallback((command: string) => {
+  // With containerd on its own the command is nerdctl, which takes the
+  // docker command's words.
+  const tool = useRef("docker");
+  tool.current = engine.info?.runtime === "containerd" ? "nerdctl" : "docker";
+  const showCli = useCallback((shown: string) => {
+    const command = tool.current === "docker" ? shown : shown.replace(/(^|[|;&(]\s*)docker /g, `$1${tool.current} `);
     setCopied("");
     setHistory((h) => (h.length && h[h.length - 1].cmd === command ? h : h.concat({ cmd: command, at: Date.now() }).slice(-200)));
   }, []);

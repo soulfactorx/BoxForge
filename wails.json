@@ -8,7 +8,7 @@
   "frontend:dev:serverUrl": "auto",
   "info": {
     "productName": "BoxForge",
-    "productVersion": "0.12.0",
+    "productVersion": "0.13.0",
     "companyName": "BoxForge",
     "copyright": "BoxForge contributors",
     "comments": "Docker를 쉽게, 눈으로 보면서"

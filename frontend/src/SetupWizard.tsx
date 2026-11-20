@@ -112,7 +112,7 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
           ))}
           <p className="help">
             Docker는 Fedora, Arch 같은 다른 배포판에서도 돌아가지만, BoxForge가 설치까지 해 주는 것은 위 배포판입니다. 다른 배포판에 직접 Docker를
-            설치했다면 엔진 선택 창에서 "WSL: … 안의 Docker"로 고르면 됩니다.
+            설치했다면 엔진 선택 창에서 "WSL: … 안의 엔진"으로 고르면 됩니다.
           </p>
         </fieldset>
       )}
