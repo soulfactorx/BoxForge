@@ -2,15 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Network, type Size, type Volume } from "./bridge";
 import Networks from "./Networks";
 import Volumes from "./Volumes";
+import Compose from "./Compose";
 import Containers from "./Containers";
 import Detail, { type Tab } from "./Detail";
 import Images from "./Images";
 import RunDialog from "./RunDialog";
 import { Icon } from "./ui";
 
-type Page = "containers" | "images" | "volumes" | "networks";
+type Page = "containers" | "images" | "volumes" | "networks" | "compose";
 const upcoming: [string, string][] = [
-  ["Compose", "compose"],
   ["빌드", "build"],
 ];
 
@@ -102,6 +102,7 @@ export default function App() {
         <div className="brand">BoxForge</div>
         <nav>
           {nav("containers", "box", "컨테이너", shownCount)}
+          {nav("compose", "compose", "Compose", new Set(containers.filter((c) => c.project).map((c) => c.project)).size)}
           {nav("images", "layers", "이미지", images.length)}
           {nav("volumes", "volume", "볼륨", volumes.length)}
           {nav("networks", "network", "네트워크", networks.length)}
@@ -158,6 +159,7 @@ export default function App() {
             onRun={(image) => setRunning(image)}
             onOpen={(id) => setDetail({ id, tab: "overview" })}
           />}
+        {page === "compose" && <Compose containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />}
         {page === "volumes" && (
           <Volumes volumes={volumes} containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />
         )}

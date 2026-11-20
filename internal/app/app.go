@@ -5,15 +5,21 @@
 package app
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/soulfactorx/boxforge/internal/engine"
 	"github.com/soulfactorx/boxforge/internal/engine/docker"
@@ -531,4 +537,144 @@ func (a *App) PruneNetworks() error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
 	return a.rt.Networks().Prune(ctx)
+}
+
+// VolumeFiles lists one directory inside a volume; "/" is its top.
+func (a *App) VolumeFiles(name, dir string) ([]engine.FileEntry, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+	defer cancel()
+	list, err := a.rt.Volumes().Files(ctx, name, dir)
+	if list == nil {
+		list = []engine.FileEntry{}
+	}
+	return list, err
+}
+
+// FilePreview is the start of a file, for reading on screen.
+type FilePreview struct {
+	Text      string `json:"text"`
+	Binary    bool   `json:"binary"`    // not text: nothing to show
+	Truncated bool   `json:"truncated"` // the file is longer than Text
+	Size      int64  `json:"size"`
+}
+
+// The most of a file a preview shows.
+const previewLimit = 256 << 10
+
+// firstFile advances a tar stream to its first regular file.
+func firstFile(r io.Reader) (*tar.Reader, *tar.Header, error) {
+	tr := tar.NewReader(r)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil, nil, fmt.Errorf("that is not a file")
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if h.Typeflag == tar.TypeReg {
+			return tr, h, nil
+		}
+	}
+}
+
+// VolumePreview returns the start of a file inside a volume.
+func (a *App) VolumePreview(name, file string) (FilePreview, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+	defer cancel()
+	rc, err := a.rt.Volumes().Archive(ctx, name, file)
+	if err != nil {
+		return FilePreview{}, err
+	}
+	defer rc.Close()
+	tr, h, err := firstFile(rc)
+	if err != nil {
+		return FilePreview{}, err
+	}
+	buf, err := io.ReadAll(io.LimitReader(tr, previewLimit))
+	if err != nil {
+		return FilePreview{}, err
+	}
+	p := FilePreview{Size: h.Size, Truncated: h.Size > int64(len(buf))}
+	// A cut can land inside a character: drop the broken tail before judging.
+	for len(buf) > 0 && p.Truncated && !utf8.Valid(buf) && len(buf) > previewLimit-4 {
+		buf = buf[:len(buf)-1]
+	}
+	if bytes.IndexByte(buf, 0) >= 0 || !utf8.Valid(buf) {
+		p.Binary = true
+		return p, nil
+	}
+	p.Text = string(buf)
+	return p, nil
+}
+
+// freePath returns dir/name, or dir/"name (2)" and so on when taken.
+func freePath(dir, name string) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	for n := 1; ; n++ {
+		candidate := filepath.Join(dir, name)
+		if n > 1 {
+			candidate = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, n, ext))
+		}
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
+}
+
+// VolumeSave copies a file out of a volume into the user's Downloads folder
+// (a directory is saved as a .tar of itself) and returns where it went.
+func (a *App) VolumeSave(name, item string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, "Downloads")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
+	defer cancel()
+	rc, err := a.rt.Volumes().Archive(ctx, name, item)
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+
+	leaf := path.Base(path.Clean("/" + item))
+	if leaf == "/" || leaf == "." {
+		leaf = name
+	}
+	// What the engine sends is a tar either way. A lone file is taken out
+	// of it; a directory is kept as the tar it is.
+	tr := tar.NewReader(rc)
+	h, err := tr.Next()
+	if err != nil {
+		return "", err
+	}
+	var src io.Reader
+	target := freePath(dir, leaf)
+	if h.Typeflag == tar.TypeReg {
+		src = tr
+	} else {
+		rc.Close()
+		again, err := a.rt.Volumes().Archive(ctx, name, item)
+		if err != nil {
+			return "", err
+		}
+		defer again.Close()
+		src = again
+		target = freePath(dir, leaf+".tar")
+	}
+	f, err := os.Create(target)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(f, src); err != nil {
+		f.Close()
+		os.Remove(target)
+		return "", err
+	}
+	return target, f.Close()
 }

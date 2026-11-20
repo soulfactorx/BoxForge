@@ -210,6 +210,18 @@ type VolumeService interface {
 	Prune(ctx context.Context) (int64, error)
 	// Sizes measures each volume's data, by name. Slow, like container sizes.
 	Sizes(ctx context.Context) (map[string]int64, error)
+	// Files lists one directory inside the volume; path "/" is its top.
+	Files(ctx context.Context, name, path string) ([]FileEntry, error)
+	// Archive returns the file or directory at path as a tar stream.
+	Archive(ctx context.Context, name, path string) (io.ReadCloser, error)
+}
+
+// FileEntry is one name in a directory listing.
+type FileEntry struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"` // dir, file, link, other
+	Size     int64  `json:"size"`
+	Modified int64  `json:"modified"`
 }
 
 // NetworkService is the network part of a Runtime.
@@ -285,8 +297,12 @@ func FailedStatus(state, status string) bool {
 	return true
 }
 
+// HelperPrefix starts the name of the short-lived containers BoxForge makes
+// for itself, to look inside a volume.
+const HelperPrefix = "boxforge-helper-"
+
 // SystemName reports whether a container name belongs to a tool's helper:
 // buildx names its build workers buildx_buildkit_<builder>.
 func SystemName(name string) bool {
-	return strings.HasPrefix(name, "buildx_buildkit_")
+	return strings.HasPrefix(name, "buildx_buildkit_") || strings.HasPrefix(name, HelperPrefix)
 }

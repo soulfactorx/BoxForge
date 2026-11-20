@@ -2,12 +2,17 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -571,4 +576,216 @@ func (n networks) Disconnect(ctx context.Context, net, ctr string) error {
 func (n networks) Prune(ctx context.Context) error {
 	_, err := n.cli.NetworksPrune(ctx, filters.Args{})
 	return err
+}
+
+// Where a helper container sees the volume it was made to look into.
+const helperMount = "/boxforge-volume"
+
+// listScript prints, for each name in the directory $1, "kind/size/mtime",
+// a newline, the name, and a NUL: names may hold anything but NUL. It runs
+// in whatever image is at hand, so it keeps to what busybox and coreutils
+// both have.
+const listScript = `cd "$1" || exit 2
+for f in * .[!.]* ..?*; do
+  [ -e "$f" ] || [ -L "$f" ] || continue
+  stat -c '%F/%s/%Y' -- "$f" || exit 3
+  printf '%s\000' "$f"
+done`
+
+// inVolume turns a path the UI sent into the helper's path for it, never
+// above the volume's top.
+func inVolume(p string) string {
+	return path.Join(helperMount, path.Clean("/"+p))
+}
+
+// helperImage picks the image a helper container is made from: a small
+// one with a shell if there is one, else the smallest.
+func (v volumes) helperImage(ctx context.Context) (string, error) {
+	list, err := v.cli.ImageList(ctx, image.ListOptions{})
+	if err != nil {
+		return "", err
+	}
+	best, bestScore := "", int64(-1)
+	for _, im := range list {
+		for _, tag := range im.RepoTags {
+			if tag == "<none>:<none>" {
+				continue
+			}
+			score := im.Size
+			if strings.Contains(tag, "busybox") || strings.Contains(tag, "alpine") {
+				score = 0
+			}
+			if bestScore < 0 || score < bestScore {
+				best, bestScore = tag, score
+			}
+		}
+	}
+	if best == "" {
+		return "", errors.New("looking inside a volume needs one image on this engine, any image; pull one (busybox is the smallest) and try again")
+	}
+	return best, nil
+}
+
+// helper creates, without starting it, a container that mounts the volume
+// read-only. The caller removes it with the returned function.
+func (v volumes) helper(ctx context.Context, name string, entrypoint []string) (string, func(), error) {
+	img, err := v.helperImage(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	suffix := make([]byte, 6)
+	_, _ = rand.Read(suffix)
+	created, err := v.cli.ContainerCreate(ctx,
+		&container.Config{Image: img, Entrypoint: entrypoint, Cmd: []string{}, NetworkDisabled: true},
+		&container.HostConfig{Binds: []string{name + ":" + helperMount + ":ro"}, NetworkMode: "none"},
+		nil, nil, engine.HelperPrefix+hex.EncodeToString(suffix))
+	if err != nil {
+		return "", nil, err
+	}
+	remove := func() {
+		// Its own context: the caller's may be over by now.
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = v.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
+	}
+	return created.ID, remove, nil
+}
+
+func (v volumes) Files(ctx context.Context, name, p string) ([]engine.FileEntry, error) {
+	dir := inVolume(p)
+	id, remove, err := v.helper(ctx, name, []string{"/bin/sh", "-c", listScript, "sh", dir})
+	if err != nil {
+		return nil, err
+	}
+	defer remove()
+
+	// The quick way: run the listing script. An image with no shell or no
+	// stat can't; the engine's own archive of the directory then tells.
+	if entries, ok := v.listByScript(ctx, id); ok {
+		return entries, nil
+	}
+	return v.listByArchive(ctx, id, dir)
+}
+
+func (v volumes) listByScript(ctx context.Context, id string) ([]engine.FileEntry, bool) {
+	if err := v.cli.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
+		return nil, false
+	}
+	statusCh, errCh := v.cli.ContainerWait(ctx, id, container.WaitConditionNotRunning)
+	select {
+	case st := <-statusCh:
+		if st.StatusCode != 0 {
+			return nil, false
+		}
+	case <-errCh:
+		return nil, false
+	}
+	rc, err := v.cli.ContainerLogs(ctx, id, container.LogsOptions{ShowStdout: true})
+	if err != nil {
+		return nil, false
+	}
+	defer rc.Close()
+	var stdout bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdout, io.Discard, rc); err != nil {
+		return nil, false
+	}
+	entries := []engine.FileEntry{}
+	for _, rec := range strings.Split(stdout.String(), "\x00") {
+		rec = strings.TrimPrefix(rec, "\n")
+		head, fname, ok := strings.Cut(rec, "\n")
+		if !ok {
+			continue
+		}
+		// "regular file/123/1700000000": the kind may hold spaces, never a slash.
+		parts := strings.Split(head, "/")
+		if len(parts) != 3 {
+			return nil, false
+		}
+		size, _ := strconv.ParseInt(parts[1], 10, 64)
+		mtime, _ := strconv.ParseInt(parts[2], 10, 64)
+		kind := "other"
+		switch {
+		case parts[0] == "directory":
+			kind = "dir"
+		case strings.HasPrefix(parts[0], "regular"):
+			kind = "file"
+		case parts[0] == "symbolic link":
+			kind = "link"
+		}
+		entries = append(entries, engine.FileEntry{Name: fname, Kind: kind, Size: size, Modified: mtime})
+	}
+	sortEntries(entries)
+	return entries, true
+}
+
+func (v volumes) listByArchive(ctx context.Context, id, dir string) ([]engine.FileEntry, error) {
+	rc, _, err := v.cli.CopyFromContainer(ctx, id, dir)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	entries := []engine.FileEntry{}
+	tr := tar.NewReader(rc)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		// Names come as "<dir's own name>/child/…": the children are the
+		// ones with exactly one more part.
+		parts := strings.Split(strings.Trim(path.Clean(h.Name), "/"), "/")
+		if len(parts) != 2 {
+			continue
+		}
+		kind := "other"
+		switch h.Typeflag {
+		case tar.TypeDir:
+			kind = "dir"
+		case tar.TypeReg:
+			kind = "file"
+		case tar.TypeSymlink:
+			kind = "link"
+		}
+		entries = append(entries, engine.FileEntry{Name: parts[1], Kind: kind, Size: h.Size, Modified: h.ModTime.Unix()})
+	}
+	sortEntries(entries)
+	return entries, nil
+}
+
+// sortEntries puts directories first, then names in order.
+func sortEntries(entries []engine.FileEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if (entries[i].Kind == "dir") != (entries[j].Kind == "dir") {
+			return entries[i].Kind == "dir"
+		}
+		return entries[i].Name < entries[j].Name
+	})
+}
+
+// removeOnClose runs a cleanup when the stream it wraps is closed.
+type removeOnClose struct {
+	io.ReadCloser
+	remove func()
+}
+
+func (r removeOnClose) Close() error {
+	err := r.ReadCloser.Close()
+	r.remove()
+	return err
+}
+
+func (v volumes) Archive(ctx context.Context, name, p string) (io.ReadCloser, error) {
+	id, remove, err := v.helper(ctx, name, nil)
+	if err != nil {
+		return nil, err
+	}
+	rc, _, err := v.cli.CopyFromContainer(ctx, id, inVolume(p))
+	if err != nil {
+		remove()
+		return nil, err
+	}
+	return removeOnClose{rc, remove}, nil
 }

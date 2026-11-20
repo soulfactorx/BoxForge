@@ -32,6 +32,12 @@ func main() {
 		AssetServer: &assetserver.Options{Assets: assets},
 		OnStartup: func(ctx context.Context) {
 			app.Start(a, func(event string, data any) { runtime.EventsEmit(ctx, event, data) })
+			app.SetFilePicker(func() (string, error) {
+				return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
+					Title:   "Compose 파일 열기",
+					Filters: []runtime.FileFilter{{DisplayName: "Compose (*.yml, *.yaml)", Pattern: "*.yml;*.yaml"}},
+				})
+			})
 		},
 		OnShutdown: func(context.Context) { app.Stop(a) },
 		Bind:       []any{a},

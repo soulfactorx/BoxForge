@@ -3,6 +3,8 @@
 package fake
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -578,3 +580,23 @@ func (n networks) Disconnect(_ context.Context, net, ctr string) error {
 }
 
 func (n networks) Prune(context.Context) error { return nil }
+
+func (v volumes) Files(_ context.Context, _, p string) ([]engine.FileEntry, error) {
+	if p == "/" || p == "" {
+		return []engine.FileEntry{
+			{Name: "data", Kind: "dir", Modified: time.Now().Unix() - 60},
+			{Name: "hello.txt", Kind: "file", Size: 12, Modified: time.Now().Unix() - 60},
+		}, nil
+	}
+	return []engine.FileEntry{}, nil
+}
+
+func (v volumes) Archive(_ context.Context, _, p string) (io.ReadCloser, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	body := []byte("hello, fake\n")
+	_ = tw.WriteHeader(&tar.Header{Name: "hello.txt", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+	_, _ = tw.Write(body)
+	_ = tw.Close()
+	return io.NopCloser(&buf), nil
+}

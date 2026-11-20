@@ -346,3 +346,25 @@ tr:hover .member .unlink, .member .unlink:focus { visibility: visible; }
 .member .unlink:hover { color: var(--bad); }
 ul.doomed { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 select.field { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
+
+.crumbs { margin-bottom: 10px; word-break: break-all; }
+.crumbs button.link { padding: 0; }
+.file-name { display: flex; align-items: center; gap: 8px; }
+.file-name .icon { color: var(--muted); }
+.grid.files td { padding: 5px 10px; }
+.file-view { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+.spacer { flex: 1; }
+.page-head .spacer + .primary, .page-head .search + * { margin-left: 0; }
+.console { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 10px 12px; margin-bottom: 14px; }
+.console-head { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.console .log-box { max-height: 220px; min-height: 60px; }
+.project { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+.project > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.project-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.project h2 { margin: 0; font-size: 16px; word-break: break-all; }
+.project .actions > * { margin-left: 5px; }
+.project-files { margin: 4px 0 10px; font-size: 12px; word-break: break-all; }
+.project-files button.link { padding: 0; margin-right: 10px; color: var(--muted); }
+.project .grid { border-radius: 7px; }
+.note-plain { color: var(--muted); }
+.log-box.yaml { max-height: 60vh; white-space: pre; word-break: normal; }

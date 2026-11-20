@@ -24,6 +24,7 @@ export interface Container {
   service: string;
   volumes: string[];
   networks: { network: string; ip: string }[];
+  labels: Record<string, string> | null;
 }
 
 export interface Volume {

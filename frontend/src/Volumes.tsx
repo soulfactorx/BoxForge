@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { call, type Container, type Run, type Volume } from "./bridge";
 import { ago, bytes } from "./format";
 import { Dialog, Icon, IconButton } from "./ui";
+import VolumeBrowser from "./VolumeBrowser";
 
 interface Props {
   volumes: Volume[];
@@ -23,6 +24,7 @@ export default function Volumes({ volumes, containers, run, onOpen }: Props) {
   const [removing, setRemoving] = useState<Volume | null>(null);
   const [pruning, setPruning] = useState(false);
   const [note, setNote] = useState("");
+  const [browsing, setBrowsing] = useState<string | null>(null);
 
   const names = volumes.map((v) => v.name).sort().join(",");
   useEffect(() => {
@@ -117,9 +119,9 @@ export default function Volumes({ volumes, containers, run, onOpen }: Props) {
                       <Icon name="volume" />
                     </span>
                     <div className="name-text">
-                      <span className="name" title={v.name}>
+                      <button className="link name" title="안에 든 파일 보기" onClick={() => setBrowsing(v.name)}>
                         {anonymous(v.name) ? v.name.slice(0, 12) : v.name}
-                      </span>
+                      </button>
                       <span className="sub">
                         {anonymous(v.name) ? "이름 없이 자동으로 만들어진 볼륨" : v.project ? `Compose · ${v.project}` : v.driver}
                       </span>
@@ -145,12 +147,23 @@ export default function Volumes({ volumes, containers, run, onOpen }: Props) {
                 </td>
                 <td className="muted nowrap">{ago(v.created)}</td>
                 <td className="actions">
+                  <IconButton icon="folder" label="내용 보기" onClick={() => setBrowsing(v.name)} />
                   <IconButton icon="trash" label="삭제" tone="danger" onClick={() => setRemoving(v)} />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+
+      {browsing && volumes.some((v) => v.name === browsing) && (
+        <VolumeBrowser
+          key={browsing}
+          name={browsing}
+          label={anonymous(browsing) ? browsing.slice(0, 12) : browsing}
+          run={run}
+          onClose={() => setBrowsing(null)}
+        />
       )}
 
       {creating !== null && (
