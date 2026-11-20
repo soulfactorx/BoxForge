@@ -13,7 +13,7 @@ Docker를 쉽게 쓰기 위한 데스크톱 앱. Go 백엔드(`internal/`) + Rea
 ## 검사
 
 ```bash
-gofmt -l . && go vet ./internal/... ./cmd/... . && go test ./internal/...
+gofmt -l . && go vet ./internal/... ./cmd/... ./frontend . && go test ./internal/...
 ```
 
 ```bash
@@ -21,6 +21,7 @@ cd frontend && npm run build
 ```
 
 화면은 `go run ./cmd/devserver`(실제 Docker) 또는 `BOXFORGE_ENGINE=fake go run ./cmd/devserver`로 띄워 브라우저에서 확인한다. 바꾼 기능은 Playwright로 실제 엔진을 상대로 확인한다.
+웹 서버(`cmd/boxforge-server`, `internal/webserver`)는 로그인한 사람에게 엔진 전체를 내준다. 로그인 없이 응답하는 주소를 늘리거나, 암호화 없이 네트워크에 열리게 하거나, 다른 사이트의 요청을 받게 하는 변경은 하지 않는다. `devserver`는 개발용(로그인 없음, 127.0.0.1 전용)이다.
 Windows 전용 동작(WSL, 외부 터미널, 설치)은 여기서 실행해 볼 수 없다: `BOXFORGE_WSL`에 대역 스크립트를 주어 흐름만 확인하고, 사용자에게 Windows에서 확인해 달라고 분명히 말한다.
 
 ## 수정 후에는 릴리스까지

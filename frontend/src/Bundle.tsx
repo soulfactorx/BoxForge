@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { call, on, type Container, type Run } from "./bridge";
+import { call, download, on, remote, upload, type Container, type Run } from "./bridge";
 import { explain } from "./EngineCopy";
 import { Dialog } from "./ui";
 
@@ -91,16 +91,20 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
     setSteps([]);
     let failed = "";
     const names = chosen.map((c) => c.name).join(" ");
-    const ok = await run(`# ${names} 를 파일 하나로: docker commit → docker save, 볼륨은 tar 로 → ${file}`, async () => {
+    // From a browser elsewhere the file is made on the server, named after
+    // what was chosen, and fetched from there.
+    const target = remote() ? await call<string>("PickExportFileDefault", base) : file;
+    const ok = await run(`# ${names} 를 파일 하나로: docker commit → docker save, 볼륨은 tar 로 → ${remote() ? base + ".boxforge" : file}`, async () => {
       try {
-        await call("ExportBundle", key, ids, file, { changes, volumes });
+        await call("ExportBundle", key, ids, target, { changes, volumes });
       } catch (e: any) {
         failed = e.message;
         throw e;
       }
     });
     setBusy(false);
-    if (ok) onDone(file.endsWith(".boxforge") ? file : file + ".boxforge");
+    const made = target.endsWith(".boxforge") ? target : target + ".boxforge";
+    if (ok) onDone(remote() ? download(made) : made);
     else setError(failed);
   };
 
@@ -145,7 +149,7 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
           <span className="sub">데이터베이스 내용처럼 볼륨에 든 것입니다. 비밀번호 같은 민감한 값이 들어 있을 수 있으니 파일을 건넬 때 주의하세요.</span>
         </span>
       </label>
-      <label className="file-line">
+      <label className="file-line" hidden={remote()}>
         저장할 파일
         <div className="pair">
           <input className="field" aria-label="저장할 파일" value={file} disabled={busy} onChange={(e) => setFile(e.target.value)} />
@@ -218,8 +222,24 @@ export function ImportDialog({ run, onClose, onDone }: ImportProps) {
   };
   // The desktop app opens its file dialog at once; a browser has none.
   useEffect(() => {
-    browse();
+    if (!remote()) browse();
   }, []);
+  // From a browser elsewhere the file is on this device: it is sent first.
+  const [sending, setSending] = useState(false);
+  const send = async (f: File | undefined) => {
+    if (!f) return;
+    setSending(true);
+    setError("");
+    setInfo(null);
+    try {
+      const path = await upload(f);
+      setFile(path);
+      await look(path);
+    } catch (e: any) {
+      setError(e.message);
+    }
+    setSending(false);
+  };
 
   const go = async () => {
     if (!info) return;
@@ -244,8 +264,16 @@ export function ImportDialog({ run, onClose, onDone }: ImportProps) {
   return (
     <Dialog title="파일에서 가져오기" onClose={busy ? () => {} : onClose} wide>
       <p>BoxForge에서 내보낸 파일(.boxforge)을 열어, 담긴 컨테이너를 지금 엔진에 만듭니다. 만들어진 컨테이너는 멈춘 상태이며, 확인한 뒤 시작하면 됩니다.</p>
+      {remote() && (
+        <label className="file-line">
+          가져올 파일
+          <input type="file" accept=".boxforge" aria-label="가져올 파일 고르기" disabled={busy || sending} onChange={(e) => send(e.target.files?.[0])} />
+          {sending && <span className="muted">서버로 보내는 중… 큰 파일은 시간이 걸립니다.</span>}
+        </label>
+      )}
       <form
         className="pair"
+        hidden={remote()}
         onSubmit={(e) => {
           e.preventDefault();
           look(file);

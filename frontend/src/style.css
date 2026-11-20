@@ -984,3 +984,60 @@ fieldset.plain legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
 .run-form label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; }
 .run-form label.check input { width: auto; flex: none; margin: 0; }
 .run-form .note-box { margin: 0; }
+
+/* ---- the sign-in page of the web server */
+.login { min-height: 100%; display: grid; place-items: center; padding: 20px; background: var(--bg); }
+.login-card { width: min(380px, 100%); display: grid; gap: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px 24px; box-shadow: var(--shadow-2); }
+.login-card .brand { padding: 0; font-size: 20px; }
+.login-card p { margin: 0; }
+.login-card .field { height: 42px; font-size: 16px; }
+.login-card button.primary { height: 42px; font-size: 15px; }
+
+/* ---- narrow screens: a phone using the web server.
+   The side bar becomes a strip across the top, its menu scrolling
+   sideways; tables scroll sideways inside their own box; panels that
+   slide in or pop up take the whole width. */
+@media (max-width: 760px) {
+  .shell { grid-template: "side" auto "main" minmax(0, 1fr) "status" auto / minmax(0, 1fr); }
+  .sidebar { padding: 8px 10px 6px; gap: 6px; border-right: none; border-bottom: 1px solid var(--line); min-width: 0; }
+  .sidebar .brand { padding: 0 2px; font-size: 15px; }
+  .sidebar .brand img { width: 24px; height: 24px; }
+  .sidebar .search-button { display: none; }
+  .sidebar nav { display: flex; gap: 4px; overflow-x: auto; flex: none; padding-bottom: 2px; scrollbar-width: none; }
+  .sidebar nav::-webkit-scrollbar { display: none; }
+  .sidebar nav hr { display: none; }
+  .nav-item, .settings-link { flex: none; width: auto; white-space: nowrap; padding: 0 10px; height: 34px; margin: 0; }
+  .nav-item .count { display: none; }
+  .sidebar { position: relative; display: grid; grid-template: "brand engine" auto "nav nav" auto / minmax(0, 1fr) auto; align-items: center; }
+  .sidebar .brand { grid-area: brand; }
+  .sidebar nav { grid-area: nav; }
+  .sidebar .settings-link { position: absolute; top: 8px; right: 10px; height: 30px; }
+  .sidebar .settings-link span { display: none; }
+  .engine-card { grid-area: engine; margin-right: 44px; padding: 3px 8px; border-radius: 999px; max-width: 46vw; }
+  .engine-card dl, .engine-card .meter, .engine-card .engine-name, .engine-card .link { display: none; }
+  .engine-card > div:first-child { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .main { padding: 12px 12px 18px; }
+  .page-head { gap: 8px; }
+  .page-head h1 { font-size: 19px; }
+  .page-head .search { flex: 1 1 100%; min-width: 0; }
+  table.grid { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .recipes { grid-template-columns: 1fr !important; }
+  .drawer { width: 100vw !important; max-width: 100vw; left: 0; }
+  .dialog, .dialog.wide { width: calc(100vw - 16px); max-height: calc(100dvh - 24px); overflow: auto; padding: 18px 16px; }
+  .statusbar .cli > span:first-child { display: none; }
+  .facts { grid-template-columns: 84px 1fr; }
+  .pair { flex-wrap: wrap; }
+  .setting { flex-wrap: wrap; gap: 8px; }
+  /* A finger needs more room than a pointer. */
+  button, .field, select, input[type="text"], input[type="search"], input[type="password"] { min-height: 36px; }
+  input, select, textarea { font-size: 16px; } /* smaller text makes a phone zoom in on focus */
+}
+@media (max-width: 760px) {
+  .engine-card { max-width: 40vw; margin-right: 52px; }
+  .engine-card > *:not(:first-child) { display: none !important; }
+  .engine-card > div:first-child > *:not(:first-child):not(strong) { display: none; }
+  .nav-item::before, .nav-item::after, .settings-link::before { display: none !important; }
+  .sidebar .brand { min-width: 0; }
+  .brand-version { flex: none; }
+}

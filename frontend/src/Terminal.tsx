@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { call, on, type Run } from "./bridge";
+import { call, on, type Run, remote } from "./bridge";
 
 interface TermData {
   session: string;
@@ -80,7 +80,7 @@ export default function Terminal({ id, name, showCli, run, open, command }: Prop
 
   return (
     <div className="term">
-      {!open && (
+      {!open && !remote() && (
         <div className="logs-bar">
           <span className="muted">컨테이너 안의 셸입니다.</span>
           <span className="spacer" />

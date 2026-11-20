@@ -124,8 +124,15 @@ export async function call<T>(method: string, ...args: unknown[]): Promise<T> {
     }
   }
   const res = await fetch(`/api/call/${method}`, { method: "POST", body: JSON.stringify(args) });
+  if (res.status === 401) {
+    window.dispatchEvent(new Event("boxforge-signed-out"));
+    throw new Error("로그인이 필요합니다.");
+  }
   const body = await res.json();
   if (body.error) throw new Error(body.error);
+  // A file the server wrote for this browser: fetched at once, and what
+  // the caller is told is its name, not a path on the server.
+  if (method.endsWith("Save") && typeof body.result === "string" && fetchable(body.result)) return download(body.result) as T;
   return body.result as T;
 }
 
@@ -159,4 +166,45 @@ export function on(event: string, cb: Listener): () => void {
 export function openURL(url: string) {
   if (w.runtime?.BrowserOpenURL) w.runtime.BrowserOpenURL(url);
   else window.open(url, "_blank", "noopener");
+}
+
+/** Whether the page is in the desktop app's window (not a browser). */
+export const inWindow = () => !!bound();
+
+// What the web server said about itself: whether it is the one for use
+// from other machines, and where it writes files for the browser to fetch.
+let server: { remote?: boolean; outbox?: string } = {};
+export const setServer = (s: { remote?: boolean; outbox?: string }) => {
+  server = s ?? {};
+};
+
+/** Whether BoxForge is being used from a browser, on a server elsewhere. */
+export const remote = () => !!server.remote;
+
+const fetchable = (path: string) => !!server.outbox && (path.startsWith(server.outbox + "/") || path.startsWith(server.outbox + "\\"));
+
+/** Has the browser fetch a file the server wrote for it; returns its name. */
+export function download(path: string): string {
+  const name = path.split(/[\\/]/).pop()!;
+  const a = document.createElement("a");
+  a.href = `/api/outbox/${encodeURIComponent(name)}`;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  return `${name} (브라우저가 내려받음)`;
+}
+
+/** Sends a file to the server; returns where the server put it. */
+export async function upload(file: File): Promise<string> {
+  const res = await fetch("/api/upload", { method: "POST", body: file, headers: { "X-File-Name": encodeURIComponent(file.name) } });
+  const body = await res.json();
+  if (body.error) throw new Error(body.error);
+  return body.result as string;
+}
+
+/** Ends the sign-in. */
+export async function signOut() {
+  await fetch("/api/logout", { method: "POST" });
+  location.reload();
 }

@@ -74,11 +74,11 @@ func (a *App) PickExportFile(name string) (string, error) {
 	if saveBundle != nil {
 		return saveBundle(name + BundleExt)
 	}
-	home, err := os.UserHomeDir()
+	dir, err := downloads()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "Downloads", name+BundleExt), nil
+	return filepath.Join(dir, name+BundleExt), nil
 }
 
 // PickExportFileDefault proposes a place for a bundle without asking.

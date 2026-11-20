@@ -989,15 +989,33 @@ func (a *App) VolumeSave(name, item string) (string, error) {
 	}, item, name)
 }
 
+// outbox is set when the app is served to browsers on other machines:
+// files "saved to this PC" are then written there, for the browser to
+// fetch, instead of into the Downloads folder of the server.
+var outbox string
+
+// SetRemote tells the app it is served to browsers elsewhere, and where
+// to write the files they are to fetch.
+func SetRemote(dir string) { outbox = dir }
+
+// downloads is the folder files are saved into.
+func downloads() (string, error) {
+	dir := outbox
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, "Downloads")
+	}
+	return dir, os.MkdirAll(dir, 0o755)
+}
+
 // saveOut copies what get returns for item into the Downloads folder; top
 // names the result when item is the top folder itself.
 func saveOut(get archiver, item, top string) (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := downloads()
 	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, "Downloads")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)

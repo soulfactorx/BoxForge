@@ -8,6 +8,9 @@
 # (BoxForge-<os>-<arch>[.exe], BoxForge-darwin-universal, checksums.txt)
 # are part of its contract: see internal/update.
 #
+# The web server (cmd/boxforge-server) needs no window toolkit, so its
+# programs for every platform are built on the Linux runner.
+#
 # Signing is optional. With the repository secrets WINDOWS_CERTIFICATE (a
 # .pfx file, base64) and WINDOWS_CERTIFICATE_PASSWORD the Windows program
 # is signed; without them it is published unsigned.
@@ -120,6 +123,16 @@ jobs:
             ditto -c -k --keepParent "$app" out/BoxForge-macos.zip
           else
             mv "build/bin/${{ matrix.output }}" out/
+          fi
+          if [ "${{ runner.os }}" = Linux ]; then
+            # The web server: the UI built above is inside it.
+            for target in linux/amd64 linux/arm64 windows/amd64; do
+              os="${target%/*}"; arch="${target#*/}"; ext=""
+              if [ "$os" = windows ]; then ext=".exe"; fi
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+                -ldflags "-s -w -X github.com/soulfactorx/boxforge/internal/version.Version=${{ needs.plan.outputs.version }}" \
+                -o "out/BoxForge-server-$os-$arch$ext" ./cmd/boxforge-server
+            done
           fi
           ls -l out
       - name: Sign (Windows, when a certificate is configured)

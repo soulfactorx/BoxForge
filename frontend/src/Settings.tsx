@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { call, openURL, type Run } from "./bridge";
+import { call, openURL, type Run, remote, signOut as leaveServer } from "./bridge";
 import { Dialog } from "./ui";
 
 export interface UpdateInfo {
@@ -150,6 +150,17 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
         )}
       </div>
 
+      {remote() && (
+        <div className="panel" data-testid="server-panel">
+          <h2>웹 서버</h2>
+          <p className="muted">
+            지금 다른 기기의 브라우저로 서버의 BoxForge를 쓰고 있습니다. 파일을 저장하면 이 브라우저가 내려받고, 폴더 · 파일 경로를 적는 칸은 서버 쪽 경로입니다. 서버 프로그램은 스스로 업데이트하지 않으니 새 버전은 서버에서 파일을 바꿔
+            주세요.
+          </p>
+          <button onClick={leaveServer}>로그아웃</button>
+        </div>
+      )}
+
       <div className="panel" data-testid="update-panel">
         <h2>업데이트</h2>
         <div className="setting">
@@ -169,7 +180,7 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
             </span>
           </span>
           <span className="setting-actions">
-            {update?.installed ? (
+            {remote() ? null : update?.installed ? (
               <button className="primary" onClick={() => call("Restart")}>
                 다시 시작
               </button>

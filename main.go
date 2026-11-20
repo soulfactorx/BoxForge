@@ -4,7 +4,7 @@ package main
 
 import (
 	"context"
-	"embed"
+	_ "embed"
 	"log"
 	"os"
 	"sync/atomic"
@@ -16,12 +16,10 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/soulfactorx/boxforge/frontend"
 	"github.com/soulfactorx/boxforge/internal/app"
 	"github.com/soulfactorx/boxforge/internal/desktop"
 )
-
-//go:embed all:frontend/dist
-var assets embed.FS
 
 //go:embed build/appicon.png
 var icon []byte
@@ -80,7 +78,7 @@ func main() {
 		Height:      800,
 		MinWidth:    900,
 		MinHeight:   560,
-		AssetServer: &assetserver.Options{Assets: assets},
+		AssetServer: &assetserver.Options{Assets: frontend.Dist},
 		OnStartup: func(c context.Context) {
 			ctx.Store(c)
 			ctx := c

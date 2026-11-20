@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Avatar } from "./brand";
-import { call, openURL, type Container, type Image, type Run, type Size } from "./bridge";
+import { call, openURL, type Container, type Image, type Run, type Size, remote } from "./bridge";
 import { ago, bytes, isUp, stateLabel, statusText } from "./format";
 import { ExportDialog, ImportDialog } from "./Bundle";
 import type { RunInit } from "./recipes";
@@ -175,7 +175,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
     if (c.state === "paused") items.push({ label: "재개", onClick: () => act(c, "unpause") });
     else if (c.state === "running") items.push({ label: "일시정지", onClick: () => act(c, "pause") });
     if (c.state === "running") {
-      items.push({ label: "외부 터미널 열기", onClick: () => run(`docker exec -it ${c.name} sh`, () => call("OpenTerminal", c.name)) });
+      if (!remote()) items.push({ label: "외부 터미널 열기", onClick: () => run(`docker exec -it ${c.name} sh`, () => call("OpenTerminal", c.name)) });
     }
     items.push({ label: "설정 바꿔 다시 만들기", onClick: () => settingsOf(c).then(onRecreate, () => {}) });
     items.push({ label: "다른 엔진으로 복사", onClick: () => setCopying(c) });
