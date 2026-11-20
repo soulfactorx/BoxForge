@@ -224,7 +224,7 @@ export default function App() {
             onOpen={(id) => setDetail({ id, tab: "overview" })}
           />}
         <div hidden={page !== "compose"}>
-          <Compose containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />
+          <Compose containers={containers} run={run} showCli={showCli} onOpen={(id) => setDetail({ id, tab: "overview" })} />
         </div>
         {/* Kept alive while hidden: a build or a compose command goes on,
             and its form and output are still there on coming back. */}

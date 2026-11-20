@@ -2,18 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, openURL, type Container, type Run } from "./bridge";
 import { published } from "./Containers";
 import { isUp, stateLabel } from "./format";
+import ComposeProject, { type Project } from "./ComposeProject";
 import { Dialog, IconButton } from "./ui";
-
-interface Project {
-  name: string;
-  workDir: string;
-  files: string[];
-  members: Container[];
-}
 
 interface Props {
   containers: Container[];
   run: Run;
+  showCli: (cmd: string) => void;
   onOpen: (containerId: string) => void;
 }
 
@@ -26,7 +21,8 @@ const naming: Record<Action, string> = { up: "올리기", down: "내리기", sto
 
 const dirname = (file: string) => file.replace(/[\\/][^\\/]*$/, "");
 
-export default function Compose({ containers, run, onOpen }: Props) {
+export default function Compose({ containers, run, showCli, onOpen }: Props) {
+  const [opened, setOpened] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const [missing, setMissing] = useState("");
   const [busy, setBusy] = useState<{ key: string; text: string } | null>(null);
@@ -68,7 +64,7 @@ export default function Compose({ containers, run, onOpen }: Props) {
   }, [output]);
 
   // Runs one compose command, its output shown as it comes.
-  const compose = async (title: string, command: string, req: { project: string; workDir: string; files: string[]; action: Action }) => {
+  const compose = async (title: string, command: string, req: { project: string; workDir: string; files: string[]; action: Action; services?: string[] }) => {
     if (busy) return;
     const key = `c${++serial.current}`;
     setBusy({ key: req.project || req.files[0], text: doing[req.action] });
@@ -82,10 +78,12 @@ export default function Compose({ containers, run, onOpen }: Props) {
     setOutput((o) => (o ? { ...o, lines: o.lines.concat(ok ? "✔ 끝났습니다." : "✖ 실패했습니다. 아래 상태 표시줄에 이유가 있습니다.") } : o));
   };
 
-  const act = (p: Project, action: Action) =>
-    compose(`${p.name} · ${naming[action]}`, `docker compose -p ${p.name} ${action === "up" ? "up -d" : action}`, {
-      project: p.name, workDir: p.workDir, files: p.files, action,
-    });
+  const act = (p: Project, action: Action, services: string[] = []) =>
+    compose(
+      `${p.name}${services.length ? " / " + services.join(", ") : ""} · ${naming[action]}`,
+      `docker compose -p ${p.name} ${action === "up" ? "up -d" : action}${services.length ? " " + services.join(" ") : ""}`,
+      { project: p.name, workDir: p.workDir, files: p.files, action, services },
+    );
 
   const openFile = async () => {
     const file = (opening ?? "").trim();
@@ -155,7 +153,18 @@ export default function Compose({ containers, run, onOpen }: Props) {
         </div>
       )}
 
-      {projects.length === 0 ? (
+      {opened && projects.find((p) => p.name === opened) ? (
+        <ComposeProject
+          project={projects.find((p) => p.name === opened)!}
+          run={run}
+          showCli={showCli}
+          busy={off || !!busy}
+          act={act}
+          onDown={() => setDowning(projects.find((p) => p.name === opened)!)}
+          onOpen={onOpen}
+          onBack={() => setOpened(null)}
+        />
+      ) : projects.length === 0 ? (
         <p className="empty">Compose 프로젝트가 없습니다. "Compose 파일 열기"로 compose.yaml을 골라 올려 보세요.</p>
       ) : (
         projects.map((p) => {
@@ -165,13 +174,20 @@ export default function Compose({ containers, run, onOpen }: Props) {
             <article key={p.name} className="project" data-testid={`project-${p.name}`}>
               <header>
                 <div className="project-title">
-                  <h2>{p.name}</h2>
+                  <h2>
+                    <button className="link name" title="구조 · 서비스 · 파일 · 로그 보기" onClick={() => setOpened(p.name)}>
+                      {p.name}
+                    </button>
+                  </h2>
                   <span className={"state " + (up === p.members.length ? "running" : up > 0 ? "paused" : "")}>
                     <span className="dot" />
                     {mine ? busy.text + "…" : `${p.members.length}개 중 ${up}개 실행`}
                   </span>
                 </div>
                 <div className="actions">
+                  <button onClick={() => setOpened(p.name)}>
+                    자세히
+                  </button>
                   <IconButton icon="play" label="올리기 (파일대로 만들고 시작)" tone="go" disabled={off || !!busy} onClick={() => act(p, "up")} />
                   <IconButton icon="restart" label="재시작" disabled={off || !!busy || up === 0} onClick={() => act(p, "restart")} />
                   <IconButton icon="stop" label="중지 (컨테이너는 남김)" tone="danger" disabled={off || !!busy || up === 0} onClick={() => act(p, "stop")} />

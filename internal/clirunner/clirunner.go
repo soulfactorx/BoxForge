@@ -68,7 +68,15 @@ func Output(ctx context.Context, env []string, name string, args ...string) (str
 		cmd.Env = append(os.Environ(), env...)
 	}
 	HideWindow(cmd)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if err != nil {
+		// The tool's last words say why better than "exit status 1".
+		if lines := strings.Split(strings.TrimSpace(stderr.String()), "\n"); lines[len(lines)-1] != "" {
+			err = fmt.Errorf("%s", strings.TrimSpace(lines[len(lines)-1]))
+		}
+	}
 	return strings.TrimSpace(string(out)), err
 }
 

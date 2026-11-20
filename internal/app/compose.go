@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/soulfactorx/boxforge/internal/clirunner"
@@ -37,6 +38,8 @@ type ComposeRequest struct {
 	WorkDir string   `json:"workDir"`
 	Files   []string `json:"files"` // compose files; may be empty for a known project
 	Action  string   `json:"action"`
+	// Services narrows start, stop, restart and up to these; empty for all.
+	Services []string `json:"services"`
 }
 
 // What each action runs after `docker compose -p <project>`.
@@ -83,6 +86,14 @@ func (a *App) ComposeAction(req ComposeRequest) error {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		dir = ""
 	}
+	for _, s := range req.Services {
+		if !kubeName.MatchString(strings.ToLower(s)) && !composeService.MatchString(s) {
+			return fmt.Errorf("%q is not a service name", s)
+		}
+	}
+	if req.Action != "down" && req.Action != "pull" {
+		tail = append(append([]string{}, tail...), req.Services...)
+	}
 	name, full, env := a.docker(append(args, tail...)...)
 	if name != "docker" {
 		// Run inside WSL: this PC's folder means nothing there, and the
@@ -96,14 +107,180 @@ func (a *App) ComposeAction(req ComposeRequest) error {
 	})
 }
 
+var composeService = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// composeArgs starts a compose command line for a project: its name, and
+// those of its files that this PC can see.
+func (a *App) composeArgs(project string, files []string) []string {
+	args := []string{"compose", "--ansi", "never"}
+	if project != "" {
+		args = append(args, "-p", project)
+	}
+	for _, f := range files {
+		if _, err := os.Stat(f); err == nil {
+			args = append(args, "-f", a.hostPath(f))
+		}
+	}
+	return args
+}
+
+// ComposeConfig returns the project as Compose reads its files, in JSON:
+// every service with its image, ports, volumes and what it depends on.
+func (a *App) ComposeConfig(project string, files []string) (string, error) {
+	args := a.composeArgs(project, files)
+	if len(args) < 5 {
+		return "", fmt.Errorf("the project's compose file can't be found on this PC")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	name, full, env := a.docker(append(args, "config", "--format", "json")...)
+	return clirunner.Output(ctx, env, name, full...)
+}
+
+// ComposeLogs returns the last lines of every service of a project, each
+// with its service's name and its time.
+func (a *App) ComposeLogs(project string, tail int) (string, error) {
+	if project == "" {
+		return "", fmt.Errorf("name a project")
+	}
+	if tail <= 0 || tail > 5000 {
+		tail = 300
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	name, full, env := a.docker("compose", "--ansi", "never", "-p", project, "logs", "--no-color", "--timestamps", "--tail", fmt.Sprint(tail))
+	return clirunner.Output(ctx, env, name, full...)
+}
+
+// writeBeside writes text to file through a temporary beside it, keeping
+// the file's permissions: a failure midway leaves the old text.
+func writeBeside(file, text string) error {
+	mode := os.FileMode(0o644)
+	if st, err := os.Stat(file); err == nil {
+		mode = st.Mode().Perm()
+	}
+	tmp := file + ".boxforge-tmp"
+	if err := os.WriteFile(tmp, []byte(text), mode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, file); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func isYAML(file string) bool {
+	switch strings.ToLower(filepath.Ext(file)) {
+	case ".yml", ".yaml":
+		return true
+	}
+	return false
+}
+
+// ComposeSave writes a compose file's text back.
+func (a *App) ComposeSave(file, text string) error {
+	if !isYAML(file) {
+		return fmt.Errorf("%s is not a .yml or .yaml file", filepath.Base(file))
+	}
+	if _, err := os.Stat(file); err != nil {
+		return err
+	}
+	return writeBeside(file, text)
+}
+
+// Change is what bringing a project up would do to one of its parts.
+type Change struct {
+	Kind   string `json:"kind"` // Container, Network, Volume
+	Name   string `json:"name"`
+	Action string `json:"action"` // keep, create, recreate, start, remove
+}
+
+// What Compose's dry run says about an object, and what that comes to.
+var dryActions = map[string]string{
+	"Running": "keep", "Recreate": "recreate", "Recreated": "recreate",
+	"Creating": "create", "Created": "create", "Starting": "start", "Started": "start",
+	"Removing": "remove", "Removed": "remove",
+}
+
+// How much an action outranks another said of the same object: a
+// container recreated is also started, and that is not the news.
+var dryRank = map[string]int{"keep": 1, "start": 2, "create": 3, "remove": 4, "recreate": 5}
+
+// parseDryRun reads the lines of `docker compose --dry-run up`.
+func parseDryRun(lines []string) []Change {
+	var out []Change
+	at := map[string]int{}
+	for _, line := range lines {
+		f := strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "DRY-RUN MODE -"))
+		if len(f) != 3 {
+			continue
+		}
+		action, ok := dryActions[f[2]]
+		if !ok || (f[0] != "Container" && f[0] != "Network" && f[0] != "Volume") {
+			continue
+		}
+		key := f[0] + "/" + f[1]
+		if i, seen := at[key]; seen {
+			if dryRank[action] > dryRank[out[i].Action] {
+				out[i].Action = action
+			}
+			continue
+		}
+		at[key] = len(out)
+		out = append(out, Change{Kind: f[0], Name: f[1], Action: action})
+	}
+	return out
+}
+
+// ComposePreview says what bringing the project up would do if one of its
+// files held text instead of what is saved: which containers stay, which
+// are made anew, which go. Nothing is changed.
+func (a *App) ComposePreview(project string, files []string, file, text string) ([]Change, error) {
+	if !isYAML(file) {
+		return nil, fmt.Errorf("%s is not a .yml or .yaml file", filepath.Base(file))
+	}
+	// The trial copy sits beside the real file, so that paths in it that
+	// are relative to the file mean the same.
+	trial := filepath.Join(filepath.Dir(file), ".boxforge-preview-"+filepath.Base(file))
+	if err := os.WriteFile(trial, []byte(text), 0o600); err != nil {
+		return nil, err
+	}
+	defer os.Remove(trial)
+	args := []string{"compose", "--dry-run", "--ansi", "never", "--progress", "plain"}
+	if project != "" {
+		args = append(args, "-p", project)
+	}
+	for _, f := range files {
+		if f == file {
+			f = trial
+		} else if _, err := os.Stat(f); err != nil {
+			continue
+		}
+		args = append(args, "-f", a.hostPath(f))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	name, full, env := a.docker(append(args, "up", "-d", "--remove-orphans")...)
+	var lines []string
+	err := clirunner.Run(ctx, "", env, name, full, func(line string) { lines = append(lines, line) })
+	if err != nil {
+		// The trial file's name means nothing to the user.
+		return nil, fmt.Errorf("%s", strings.ReplaceAll(err.Error(), trial, filepath.Base(file)))
+	}
+	changes := parseDryRun(lines)
+	if changes == nil {
+		changes = []Change{}
+	}
+	return changes, nil
+}
+
 // The largest compose file ComposeFile will read.
 const composeFileLimit = 1 << 20
 
 // ComposeFile returns a compose file's text.
 func (a *App) ComposeFile(file string) (string, error) {
-	switch strings.ToLower(filepath.Ext(file)) {
-	case ".yml", ".yaml":
-	default:
+	if !isYAML(file) {
 		return "", fmt.Errorf("%s is not a .yml or .yaml file", filepath.Base(file))
 	}
 	st, err := os.Stat(file)
