@@ -244,7 +244,7 @@ Docker가 어려운 이유는 대개 (a) 용어, (b) 플래그가 많은 `run`, 
 | **B. 범용 폼** | CLI `--help`에서 생성한 폼 + JSON 출력 표 | buildx 세부, context, manifest, plugin, checkpoint, swarm 등 |
 | **C. 내장 터미널** | 선택된 엔진 환경이 설정된 셸 | 그 외 전부 |
 
-등급 A는 해당 영역의 **하위 명령 전부**를 뜻한다. 예를 들어 컨테이너는 run · create · start · stop · restart · kill · pause · unpause · **rename** · update(자원 상한 변경) · rm · logs · exec · attach · cp · diff · commit · export · inspect · stats · top · port · wait · prune을 모두 화면에서 한다. 이름 변경 같은 단순 작업은 목록에서 이름을 더블클릭해 바로 고친다.
+등급 A는 해당 영역의 **하위 명령 전부**를 뜻한다. 예를 들어 컨테이너는 run · create · start · stop · restart · kill · pause · unpause · **rename** · update(자원 상한 변경) · rm · logs · exec · attach · cp · diff · commit · export · inspect · stats · top · port · wait · prune을 모두 화면에서 한다. 이름 변경 같은 단순 작업은 목록의 이름 옆 연필 버튼으로 그 자리에서 고친다(이름을 누르면 상세가 열린다).
 
 `coverage.yaml`(명령 → 등급 → 화면)을 두고, 설치된 `docker`의 명령 트리와 대조하는 검사 스크립트로 누락을 찾는다.
 

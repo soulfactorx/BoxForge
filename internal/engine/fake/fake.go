@@ -4,8 +4,11 @@ package fake
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +19,8 @@ import (
 type Runtime struct {
 	mu   sync.Mutex
 	list []engine.Container
+	imgs []engine.Image
+	next int
 	subs map[chan engine.Event]struct{}
 }
 
@@ -32,7 +37,7 @@ func New() *Runtime {
 			ports = []engine.Port{}
 		}
 		return engine.Container{
-			ID: id, Name: name, Image: image, State: state, Status: status,
+			ID: id, Name: name, Image: image, ImageID: "sha256:" + image, State: state, Status: status,
 			Failed: engine.FailedStatus(state, status), Created: now - 3600,
 			Ports: ports, Project: project, Service: service, Labels: labels,
 		}
@@ -40,7 +45,15 @@ func New() *Runtime {
 	tcp := func(pub, priv uint16) engine.Port {
 		return engine.Port{IP: "0.0.0.0", Public: pub, Private: priv, Proto: "tcp"}
 	}
+	img := func(tag string, mib int64) engine.Image {
+		return engine.Image{ID: "sha256:" + tag, Tags: []string{tag}, Size: mib << 20, Created: now - 86400}
+	}
 	return &Runtime{
+		imgs: []engine.Image{
+			img("nginx:1.27", 188), img("postgres:17", 438), img("node:22", 1120),
+			img("redis:7", 117), img("alpine:3", 8),
+			{ID: "sha256:dangling", Tags: []string{}, Size: 64 << 20, Created: now - 172800},
+		},
 		subs: map[chan engine.Event]struct{}{},
 		list: []engine.Container{
 			c("a1", "web", "nginx:1.27", "running", "Up 1 hour", "", "", tcp(8080, 80)),
@@ -93,6 +106,17 @@ func (r *Runtime) Events(ctx context.Context) (<-chan engine.Event, <-chan error
 }
 
 func (r *Runtime) Containers() engine.ContainerService { return containers{r} }
+func (r *Runtime) Images() engine.ImageService         { return images{r} }
+
+// announce tells every subscriber. Callers hold r.mu.
+func (r *Runtime) announce(ev engine.Event) {
+	for ch := range r.subs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
 
 type containers struct{ r *Runtime }
 
@@ -120,12 +144,7 @@ func (c containers) change(id, action string, f func(*engine.Container) error) e
 		if action == "destroy" {
 			c.r.list = append(c.r.list[:i], c.r.list[i+1:]...)
 		}
-		for ch := range c.r.subs {
-			select {
-			case ch <- ev:
-			default:
-			}
-		}
+		c.r.announce(ev)
 		return nil
 	}
 	return fmt.Errorf("No such container: %s", id)
@@ -192,4 +211,148 @@ func (c containers) Remove(_ context.Context, id string, force, _ bool) error {
 		}
 		return nil
 	})
+}
+
+func (c containers) Inspect(_ context.Context, id string) ([]byte, error) {
+	c.r.mu.Lock()
+	defer c.r.mu.Unlock()
+	for _, it := range c.r.list {
+		if it.ID == id || it.Name == id {
+			return json.Marshal(map[string]any{
+				"Id": it.ID, "Name": "/" + it.Name, "Config": map[string]any{"Image": it.Image},
+				"State": map[string]any{"Status": it.State},
+			})
+		}
+	}
+	return nil, fmt.Errorf("No such container: %s", id)
+}
+
+func (c containers) Logs(ctx context.Context, id string, _ int, w io.Writer) error {
+	fmt.Fprintf(w, "fake log line 1 for %s\nfake log line 2\n", id)
+	<-ctx.Done()
+	return nil
+}
+
+func (c containers) Run(_ context.Context, spec engine.RunSpec) (string, error) {
+	c.r.mu.Lock()
+	defer c.r.mu.Unlock()
+	name := spec.Name
+	c.r.next++
+	id := fmt.Sprintf("n%d", c.r.next)
+	if name == "" {
+		name = "fake_" + id
+	}
+	for _, it := range c.r.list {
+		if it.Name == name {
+			return "", fmt.Errorf("Conflict. The container name %q is already in use", name)
+		}
+	}
+	ports := []engine.Port{}
+	for _, p := range spec.Ports {
+		ports = append(ports, engine.Port{IP: "0.0.0.0", Public: p.Host, Private: p.Container, Proto: "tcp"})
+	}
+	c.r.list = append(c.r.list, engine.Container{
+		ID: id, Name: name, Image: spec.Image, ImageID: "sha256:" + spec.Image, State: "running",
+		Status: "Up 1 second", Created: time.Now().Unix(), Ports: ports, Labels: map[string]string{},
+	})
+	c.r.announce(engine.Event{Type: "container", Action: "start", ID: id})
+	return id, nil
+}
+
+type images struct{ r *Runtime }
+
+func (i images) List(context.Context) ([]engine.Image, error) {
+	i.r.mu.Lock()
+	defer i.r.mu.Unlock()
+	return append([]engine.Image{}, i.r.imgs...), nil
+}
+
+func (i images) Exists(_ context.Context, ref string) bool {
+	i.r.mu.Lock()
+	defer i.r.mu.Unlock()
+	for _, im := range i.r.imgs {
+		for _, t := range im.Tags {
+			if t == ref {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (i images) Pull(_ context.Context, ref string, progress func(engine.PullProgress)) error {
+	if !strings.Contains(ref, ":") {
+		ref += ":latest"
+	}
+	if strings.HasPrefix(ref, "missing") {
+		return fmt.Errorf("pull access denied for %s, repository does not exist", ref)
+	}
+	if progress != nil {
+		progress(engine.PullProgress{Status: "Downloading", Current: 50, Total: 100})
+	}
+	i.r.mu.Lock()
+	defer i.r.mu.Unlock()
+	i.r.imgs = append(i.r.imgs, engine.Image{ID: "sha256:" + ref, Tags: []string{ref}, Size: 10 << 20, Created: time.Now().Unix()})
+	i.r.announce(engine.Event{Type: "image", Action: "pull", ID: ref})
+	return nil
+}
+
+func (i images) Remove(_ context.Context, id string, force bool) error {
+	i.r.mu.Lock()
+	defer i.r.mu.Unlock()
+	for n, im := range i.r.imgs {
+		if im.ID != id && !contains(im.Tags, id) {
+			continue
+		}
+		if !force {
+			for _, c := range i.r.list {
+				if c.ImageID == im.ID {
+					return fmt.Errorf("conflict: unable to delete %s (must be forced) - container %s is using its referenced image", id, c.ID)
+				}
+			}
+		}
+		i.r.imgs = append(i.r.imgs[:n], i.r.imgs[n+1:]...)
+		i.r.announce(engine.Event{Type: "image", Action: "delete", ID: im.ID})
+		return nil
+	}
+	return fmt.Errorf("No such image: %s", id)
+}
+
+func (i images) Tag(_ context.Context, source, target string) error {
+	i.r.mu.Lock()
+	defer i.r.mu.Unlock()
+	for n := range i.r.imgs {
+		if i.r.imgs[n].ID == source || contains(i.r.imgs[n].Tags, source) {
+			i.r.imgs[n].Tags = append(i.r.imgs[n].Tags, target)
+			i.r.announce(engine.Event{Type: "image", Action: "tag", ID: i.r.imgs[n].ID})
+			return nil
+		}
+	}
+	return fmt.Errorf("No such image: %s", source)
+}
+
+func (i images) Prune(context.Context) (int64, error) {
+	i.r.mu.Lock()
+	defer i.r.mu.Unlock()
+	var freed int64
+	kept := i.r.imgs[:0]
+	for _, im := range i.r.imgs {
+		if len(im.Tags) == 0 {
+			freed += im.Size
+			continue
+		}
+		kept = append(kept, im)
+	}
+	i.r.imgs = kept
+	i.r.announce(engine.Event{Type: "image", Action: "prune"})
+	return freed, nil
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

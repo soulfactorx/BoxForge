@@ -1,58 +1,50 @@
 import { useMemo, useState } from "react";
-import { call, openURL, type Container } from "./bridge";
+import { call, openURL, type Container, type Run } from "./bridge";
+import { ago, isUp, stateLabel, statusText } from "./format";
+import { Dialog, IconButton, Menu, type MenuItem } from "./ui";
 
-type Run = (command: string, action: () => Promise<unknown>) => Promise<boolean>;
 type Filter = "all" | "running" | "stopped" | "failed";
-
-const isUp = (c: Container) => c.state === "running" || c.state === "paused" || c.state === "restarting";
 
 function bucket(c: Container): Exclude<Filter, "all"> {
   if (isUp(c)) return "running";
   return c.failed ? "failed" : "stopped";
 }
 
-const stateLabel: Record<string, string> = {
-  running: "실행 중",
-  paused: "일시정지",
-  restarting: "재시작 중",
-  exited: "중지됨",
-  created: "생성됨",
-  dead: "오류",
-  removing: "삭제 중",
-};
-
-function ago(unix: number) {
-  const s = Math.max(0, Date.now() / 1000 - unix);
-  if (s < 60) return "방금";
-  if (s < 3600) return `${Math.floor(s / 60)}분 전`;
-  if (s < 86400) return `${Math.floor(s / 3600)}시간 전`;
-  return `${Math.floor(s / 86400)}일 전`;
-}
-
 /** Published ports, one per host port. */
-function published(c: Container) {
+export function published(c: Container) {
   const seen = new Set<number>();
   return c.ports.filter((p) => p.public > 0 && !seen.has(p.public) && seen.add(p.public));
 }
 
 type Item = { key: string; project: string; members: Container[] };
 
-export default function Containers({ containers, run }: { containers: Container[]; run: Run }) {
+interface Props {
+  containers: Container[];
+  run: Run;
+  onOpen: (id: string, tab?: "overview" | "logs") => void;
+  onNew: () => void;
+}
+
+export default function Containers({ containers, run, onOpen, onNew }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  const [showSystem, setShowSystem] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
   const [removing, setRemoving] = useState<{ c: Container; volumes: boolean } | null>(null);
 
+  const hidden = useMemo(() => containers.filter((c) => c.system).length, [containers]);
+  const visible = useMemo(() => (showSystem ? containers : containers.filter((c) => !c.system)), [containers, showSystem]);
+
   const counts = useMemo(() => {
-    const n = { all: containers.length, running: 0, stopped: 0, failed: 0 };
-    containers.forEach((c) => n[bucket(c)]++);
+    const n = { all: visible.length, running: 0, stopped: 0, failed: 0 };
+    visible.forEach((c) => n[bucket(c)]++);
     return n;
-  }, [containers]);
+  }, [visible]);
 
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const shown = containers.filter(
+    const shown = visible.filter(
       (c) =>
         (filter === "all" || bucket(c) === filter) &&
         (!q || c.name.toLowerCase().includes(q) || c.image.toLowerCase().includes(q) || c.project.toLowerCase().includes(q)),
@@ -74,7 +66,7 @@ export default function Containers({ containers, run }: { containers: Container[
     }
     out.forEach((g) => g.members.sort((a, b) => a.name.localeCompare(b.name)));
     return out.sort((a, b) => a.key.localeCompare(b.key));
-  }, [containers, filter, query]);
+  }, [visible, filter, query]);
 
   const act = (c: Container, action: string) =>
     run(`docker ${action} ${c.name}`, () => call("ContainerAction", c.id, action));
@@ -110,6 +102,18 @@ export default function Containers({ containers, run }: { containers: Container[
       return next;
     });
 
+  const menu = (c: Container): MenuItem[] => {
+    const items: MenuItem[] = [
+      { label: "상세 보기", onClick: () => onOpen(c.id) },
+      { label: "로그 보기", onClick: () => onOpen(c.id, "logs") },
+      { label: "이름 변경", onClick: () => setRenaming({ id: c.id, draft: c.name }) },
+    ];
+    if (c.state === "paused") items.push({ label: "재개", onClick: () => act(c, "unpause") });
+    else if (c.state === "running") items.push({ label: "일시정지", onClick: () => act(c, "pause") });
+    if (isUp(c)) items.push({ label: "강제 종료", onClick: () => act(c, "kill"), danger: true });
+    return items;
+  };
+
   const row = (c: Container, nested: boolean) => (
     <tr key={c.id} className={nested ? "nested" : ""} data-testid={`row-${c.name}`}>
       <td className="name-cell">
@@ -128,12 +132,13 @@ export default function Containers({ containers, run }: { containers: Container[
             onBlur={() => setRenaming(null)}
           />
         ) : (
-          <span
-            className="name"
-            title="더블클릭하면 이름을 바꿉니다"
-            onDoubleClick={() => setRenaming({ id: c.id, draft: c.name })}
-          >
-            {c.name}
+          <span className="name-line">
+            <button className="link name" onClick={() => onOpen(c.id)}>
+              {c.name}
+            </button>
+            <span className="hover-only">
+              <IconButton icon="edit" label="이름 변경" onClick={() => setRenaming({ id: c.id, draft: c.name })} />
+            </span>
           </span>
         )}
         <span className="sub">{c.image}</span>
@@ -143,9 +148,11 @@ export default function Containers({ containers, run }: { containers: Container[
           <span className="dot" />
           {c.failed ? "실패" : stateLabel[c.state] ?? c.state}
         </span>
-        <span className="sub">{c.status}</span>
+        <span className="sub" title={c.status}>
+          {statusText(c)}
+        </span>
       </td>
-      <td>
+      <td className="ports">
         {published(c).length === 0
           ? "—"
           : published(c).map((p) => (
@@ -159,23 +166,16 @@ export default function Containers({ containers, run }: { containers: Container[
               </button>
             ))}
       </td>
-      <td className="muted">{ago(c.created)}</td>
+      <td className="muted nowrap">{ago(c.created)}</td>
       <td className="actions">
-        {c.state === "paused" ? (
-          <button onClick={() => act(c, "unpause")}>재개</button>
-        ) : isUp(c) ? (
-          <>
-            <button onClick={() => act(c, "stop")}>중지</button>
-            <button onClick={() => act(c, "restart")}>재시작</button>
-            <button onClick={() => act(c, "pause")}>일시정지</button>
-          </>
+        {isUp(c) && <IconButton icon="restart" label="재시작" onClick={() => act(c, "restart")} />}
+        {isUp(c) ? (
+          <IconButton icon="stop" label="중지" tone="danger" onClick={() => act(c, "stop")} />
         ) : (
-          <button onClick={() => act(c, "start")}>시작</button>
+          <IconButton icon="play" label="시작" tone="go" onClick={() => act(c, "start")} />
         )}
-        <button onClick={() => setRenaming({ id: c.id, draft: c.name })}>이름 변경</button>
-        <button className="danger" onClick={() => setRemoving({ c, volumes: false })}>
-          삭제
-        </button>
+        <IconButton icon="trash" label="삭제" tone="danger" onClick={() => setRemoving({ c, volumes: false })} />
+        <Menu items={menu(c)} />
       </td>
     </tr>
   );
@@ -203,12 +203,13 @@ export default function Containers({ containers, run }: { containers: Container[
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        <button className="primary" onClick={onNew}>
+          새 컨테이너 실행
+        </button>
       </header>
 
       {items.length === 0 ? (
-        <p className="empty">
-          {containers.length === 0 ? "컨테이너가 없습니다." : "조건에 맞는 컨테이너가 없습니다."}
-        </p>
+        <p className="empty">{visible.length === 0 ? "컨테이너가 없습니다." : "조건에 맞는 컨테이너가 없습니다."}</p>
       ) : (
         <table className="grid">
           <thead>
@@ -228,7 +229,7 @@ export default function Containers({ containers, run }: { containers: Container[
               return [
                 <tr key={"g:" + g.project} className="group" data-testid={`group-${g.project}`}>
                   <td colSpan={4}>
-                    <button className="twisty" aria-expanded={open} onClick={() => toggle(g.project)}>
+                    <button className="twisty" aria-expanded={open} aria-label={open ? "접기" : "펼치기"} onClick={() => toggle(g.project)}>
                       {open ? "▾" : "▸"}
                     </button>
                     <strong>{g.project}</strong>
@@ -237,8 +238,8 @@ export default function Containers({ containers, run }: { containers: Container[
                     </span>
                   </td>
                   <td className="actions">
-                    {up < g.members.length && <button onClick={() => actAll(g, "start")}>모두 시작</button>}
-                    {up > 0 && <button onClick={() => actAll(g, "stop")}>모두 중지</button>}
+                    {up < g.members.length && <IconButton icon="play" label="모두 시작" tone="go" onClick={() => actAll(g, "start")} />}
+                    {up > 0 && <IconButton icon="stop" label="모두 중지" tone="danger" onClick={() => actAll(g, "stop")} />}
                   </td>
                 </tr>,
                 ...(open ? g.members.map((c) => row(c, true)) : []),
@@ -248,31 +249,38 @@ export default function Containers({ containers, run }: { containers: Container[
         </table>
       )}
 
+      {hidden > 0 && (
+        <p className="footnote">
+          {showSystem
+            ? `빌드 도구가 만든 컨테이너 ${hidden}개를 함께 보여주고 있습니다.`
+            : `빌드 도구가 만든 컨테이너 ${hidden}개는 숨겼습니다.`}
+          <button className="link" onClick={() => setShowSystem(!showSystem)}>
+            {showSystem ? "숨기기" : "보기"}
+          </button>
+        </p>
+      )}
+
       {removing && (
-        <div className="overlay" onClick={() => setRemoving(null)}>
-          <div className="dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <h2>컨테이너 삭제</h2>
-            <p>
-              <strong>{removing.c.name}</strong> 컨테이너를 삭제합니다. 컨테이너 안에서 바뀐 파일은 사라지며 되돌릴 수
-              없습니다.
-            </p>
-            {isUp(removing.c) && <p className="warn">지금 실행 중입니다. 강제로 멈춘 뒤 삭제합니다.</p>}
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={removing.volumes}
-                onChange={(e) => setRemoving({ ...removing, volumes: e.target.checked })}
-              />
-              이 컨테이너의 이름 없는 볼륨도 함께 삭제
-            </label>
-            <div className="dialog-actions">
-              <button onClick={() => setRemoving(null)}>취소</button>
-              <button className="danger solid" onClick={confirmRemove}>
-                삭제
-              </button>
-            </div>
+        <Dialog title="컨테이너 삭제" onClose={() => setRemoving(null)}>
+          <p>
+            <strong>{removing.c.name}</strong> 컨테이너를 삭제합니다. 컨테이너 안에서 바뀐 파일은 사라지며 되돌릴 수 없습니다.
+          </p>
+          {isUp(removing.c) && <p className="warn">지금 실행 중입니다. 강제로 멈춘 뒤 삭제합니다.</p>}
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={removing.volumes}
+              onChange={(e) => setRemoving({ ...removing, volumes: e.target.checked })}
+            />
+            이 컨테이너의 이름 없는 볼륨도 함께 삭제
+          </label>
+          <div className="dialog-actions">
+            <button onClick={() => setRemoving(null)}>취소</button>
+            <button className="danger solid" onClick={confirmRemove}>
+              삭제
+            </button>
           </div>
-        </div>
+        </Dialog>
       )}
     </section>
   );

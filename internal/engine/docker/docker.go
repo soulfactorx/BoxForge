@@ -3,11 +3,20 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/docker/go-connections/nat"
 
 	"github.com/soulfactorx/boxforge/internal/engine"
 )
@@ -84,6 +93,7 @@ func (r *Runtime) Events(ctx context.Context) (<-chan engine.Event, <-chan error
 }
 
 func (r *Runtime) Containers() engine.ContainerService { return containers{r.cli} }
+func (r *Runtime) Images() engine.ImageService         { return images{r.cli} }
 
 type containers struct{ cli *client.Client }
 
@@ -103,18 +113,22 @@ func (c containers) List(ctx context.Context) ([]engine.Container, error) {
 			ports = append(ports, engine.Port{IP: p.IP, Private: p.PrivatePort, Public: p.PublicPort, Proto: p.Type})
 		}
 		state := string(s.State)
+		code, _ := engine.ExitCode(s.Status)
 		out = append(out, engine.Container{
-			ID:      s.ID,
-			Name:    name,
-			Image:   s.Image,
-			State:   state,
-			Status:  s.Status,
-			Failed:  engine.FailedStatus(state, s.Status),
-			Created: s.Created,
-			Ports:   ports,
-			Project: s.Labels[engine.LabelComposeProject],
-			Service: s.Labels[engine.LabelComposeService],
-			Labels:  s.Labels,
+			ID:       s.ID,
+			Name:     name,
+			Image:    s.Image,
+			ImageID:  s.ImageID,
+			State:    state,
+			Status:   s.Status,
+			Failed:   engine.FailedStatus(state, s.Status),
+			ExitCode: code,
+			System:   engine.SystemName(name),
+			Created:  s.Created,
+			Ports:    ports,
+			Project:  s.Labels[engine.LabelComposeProject],
+			Service:  s.Labels[engine.LabelComposeService],
+			Labels:   s.Labels,
 		})
 	}
 	return out, nil
@@ -143,4 +157,164 @@ func (c containers) Rename(ctx context.Context, id, name string) error {
 }
 func (c containers) Remove(ctx context.Context, id string, force, volumes bool) error {
 	return c.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: force, RemoveVolumes: volumes})
+}
+
+func (c containers) Inspect(ctx context.Context, id string) ([]byte, error) {
+	_, raw, err := c.cli.ContainerInspectWithRaw(ctx, id, false)
+	return raw, err
+}
+
+func (c containers) Logs(ctx context.Context, id string, tail int, w io.Writer) error {
+	info, err := c.cli.ContainerInspect(ctx, id)
+	if err != nil {
+		return err
+	}
+	rc, err := c.cli.ContainerLogs(ctx, id, container.LogsOptions{
+		ShowStdout: true, ShowStderr: true, Follow: true, Tail: strconv.Itoa(tail),
+	})
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	// A container with a terminal sends its output as it is; one without
+	// interleaves stdout and stderr in framed chunks.
+	if info.Config != nil && info.Config.Tty {
+		_, err = io.Copy(w, rc)
+	} else {
+		_, err = stdcopy.StdCopy(w, w, rc)
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
+func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error) {
+	exposed := nat.PortSet{}
+	bindings := nat.PortMap{}
+	for _, p := range spec.Ports {
+		proto := p.Proto
+		if proto == "" {
+			proto = "tcp"
+		}
+		port, err := nat.NewPort(proto, strconv.Itoa(int(p.Container)))
+		if err != nil {
+			return "", err
+		}
+		exposed[port] = struct{}{}
+		bindings[port] = append(bindings[port], nat.PortBinding{HostPort: strconv.Itoa(int(p.Host))})
+	}
+	binds := make([]string, 0, len(spec.Mounts))
+	for _, m := range spec.Mounts {
+		binds = append(binds, m.Source+":"+m.Target)
+	}
+	created, err := c.cli.ContainerCreate(ctx,
+		&container.Config{Image: spec.Image, Env: spec.Env, Cmd: spec.Command, ExposedPorts: exposed},
+		&container.HostConfig{
+			PortBindings:  bindings,
+			Binds:         binds,
+			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(spec.Restart)},
+		},
+		nil, nil, spec.Name)
+	if err != nil {
+		return "", err
+	}
+	if err := c.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		// Created but not started (a taken port, say): it stays, visible
+		// in the list, for the user to fix or remove.
+		return created.ID, err
+	}
+	return created.ID, nil
+}
+
+type images struct{ cli *client.Client }
+
+func (i images) List(ctx context.Context) ([]engine.Image, error) {
+	list, err := i.cli.ImageList(ctx, image.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]engine.Image, 0, len(list))
+	for _, s := range list {
+		tags := make([]string, 0, len(s.RepoTags))
+		for _, t := range s.RepoTags {
+			if t != "<none>:<none>" {
+				tags = append(tags, t)
+			}
+		}
+		out = append(out, engine.Image{ID: s.ID, Tags: tags, Size: s.Size, Created: s.Created})
+	}
+	return out, nil
+}
+
+func (i images) Exists(ctx context.Context, ref string) bool {
+	_, err := i.cli.ImageInspect(ctx, ref)
+	return err == nil
+}
+
+func (i images) Pull(ctx context.Context, ref string, progress func(engine.PullProgress)) error {
+	rc, err := i.cli.ImagePull(ctx, ref, image.PullOptions{})
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	// The engine reports each layer on its own; the sum over the layers
+	// seen so far is the whole pull's progress.
+	type layer struct{ current, total int64 }
+	layers := map[string]layer{}
+	dec := json.NewDecoder(rc)
+	for {
+		var m struct {
+			ID             string `json:"id"`
+			Status         string `json:"status"`
+			Error          string `json:"error"`
+			ProgressDetail struct {
+				Current int64 `json:"current"`
+				Total   int64 `json:"total"`
+			} `json:"progressDetail"`
+		}
+		if err := dec.Decode(&m); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if m.Error != "" {
+			return errors.New(m.Error)
+		}
+		switch {
+		case m.ID != "" && m.Status == "Downloading" && m.ProgressDetail.Total > 0:
+			layers[m.ID] = layer{m.ProgressDetail.Current, m.ProgressDetail.Total}
+		case m.ID != "" && (m.Status == "Download complete" || m.Status == "Pull complete" || m.Status == "Already exists"):
+			if l, ok := layers[m.ID]; ok {
+				layers[m.ID] = layer{l.total, l.total}
+			}
+		}
+		var p engine.PullProgress
+		p.Status = m.Status
+		for _, l := range layers {
+			p.Current += l.current
+			p.Total += l.total
+		}
+		if progress != nil {
+			progress(p)
+		}
+	}
+}
+
+func (i images) Remove(ctx context.Context, id string, force bool) error {
+	_, err := i.cli.ImageRemove(ctx, id, image.RemoveOptions{Force: force, PruneChildren: true})
+	return err
+}
+
+func (i images) Tag(ctx context.Context, source, target string) error {
+	return i.cli.ImageTag(ctx, source, target)
+}
+
+func (i images) Prune(ctx context.Context) (int64, error) {
+	rep, err := i.cli.ImagesPrune(ctx, filters.NewArgs(filters.Arg("dangling", "true")))
+	if err != nil {
+		return 0, fmt.Errorf("prune images: %w", err)
+	}
+	return int64(rep.SpaceReclaimed), nil
 }

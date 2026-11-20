@@ -16,6 +16,7 @@ func TestFailedStatus(t *testing.T) {
 		{"created", "Created", false},
 		{"dead", "Dead", true},
 		{"exited", "", false},
+		{"exited", "Exited (255) 13 hours ago", false},
 	} {
 		if got := FailedStatus(c.state, c.status); got != c.want {
 			t.Errorf("FailedStatus(%q, %q) = %v, want %v", c.state, c.status, got, c.want)

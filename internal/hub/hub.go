@@ -15,6 +15,7 @@ import (
 const (
 	EventEngine     = "engine"     // payload: Status
 	EventContainers = "containers" // payload: []engine.Container
+	EventImages     = "images"     // payload: []engine.Image
 )
 
 // Status is whether the engine is reachable, and what it is.
@@ -40,11 +41,12 @@ type Hub struct {
 	mu         sync.Mutex
 	status     Status
 	containers []engine.Container
+	images     []engine.Image
 }
 
 func New(rt engine.Runtime, emit Emit) *Hub {
 	return &Hub{
-		rt: rt, emit: emit, containers: []engine.Container{},
+		rt: rt, emit: emit, containers: []engine.Container{}, images: []engine.Image{},
 		Debounce: 150 * time.Millisecond, RetryMin: time.Second, RetryMax: 10 * time.Second,
 	}
 }
@@ -61,6 +63,13 @@ func (h *Hub) Containers() []engine.Container {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.containers
+}
+
+// Images returns the last known image list.
+func (h *Hub) Images() []engine.Image {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.images
 }
 
 // Run connects, mirrors, and reconnects after a lost connection, until ctx ends.
@@ -109,7 +118,7 @@ func (h *Hub) session(ctx context.Context) error {
 			if !ok {
 				return <-errs
 			}
-			if ev.Type != "container" || due != nil {
+			if (ev.Type != "container" && ev.Type != "image") || due != nil {
 				continue
 			}
 			timer = time.NewTimer(h.Debounce)
@@ -140,11 +149,27 @@ func (h *Hub) reload(ctx context.Context) error {
 	if list == nil {
 		list = []engine.Container{}
 	}
+	images, err := h.rt.Images().List(ctx)
+	if err != nil {
+		return err
+	}
+	if images == nil {
+		images = []engine.Image{}
+	}
+	uses := map[string]int{}
+	for _, c := range list {
+		uses[c.ImageID]++
+	}
+	for i := range images {
+		images[i].InUse = uses[images[i].ID]
+	}
 	h.mu.Lock()
 	h.containers = list
+	h.images = images
 	h.mu.Unlock()
 	h.setStatus(Status{Connected: true, Info: &info})
 	h.emit(EventContainers, list)
+	h.emit(EventImages, images)
 	return nil
 }
 

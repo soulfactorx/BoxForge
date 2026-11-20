@@ -15,11 +15,50 @@ export interface Container {
   state: string;
   status: string;
   failed: boolean;
+  exitCode: number;
+  system: boolean;
+  imageId: string;
   created: number;
   ports: Port[];
   project: string;
   service: string;
 }
+
+export interface Image {
+  id: string;
+  tags: string[];
+  size: number;
+  created: number;
+  inUse: number;
+}
+
+export interface RunSpec {
+  image: string;
+  name: string;
+  ports: { host: number; container: number; proto: string }[];
+  mounts: { source: string; target: string }[];
+  env: string[];
+  restart: string;
+  command: string[];
+}
+
+export interface PullState {
+  ref: string;
+  status: string;
+  percent: number;
+  done: boolean;
+  error: string;
+}
+
+export interface LogChunk {
+  id: string;
+  text: string;
+  end: boolean;
+  error: string;
+}
+
+/** Runs one engine call for the user, showing the docker command it stands for. Resolves false when it failed. */
+export type Run = (command: string, action: () => Promise<unknown>) => Promise<boolean>;
 
 export interface EngineInfo {
   runtime: string;
