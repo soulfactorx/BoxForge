@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image } from "./bridge";
+import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Size } from "./bridge";
 import Containers from "./Containers";
 import Detail, { type Tab } from "./Detail";
 import Images from "./Images";
@@ -7,7 +7,12 @@ import RunDialog from "./RunDialog";
 import { Icon } from "./ui";
 
 type Page = "containers" | "images";
-const upcoming = ["볼륨", "네트워크", "Compose", "빌드"];
+const upcoming: [string, string][] = [
+  ["볼륨", "volume"],
+  ["네트워크", "network"],
+  ["Compose", "compose"],
+  ["빌드", "build"],
+];
 
 function gib(bytes: number) {
   return (bytes / 2 ** 30).toFixed(1) + " GB";
@@ -17,6 +22,7 @@ export default function App() {
   const [engine, setEngine] = useState<EngineStatus>({ connected: false, error: "", info: null });
   const [containers, setContainers] = useState<Container[]>([]);
   const [images, setImages] = useState<Image[]>([]);
+  const [sizes, setSizes] = useState<Record<string, Size>>({});
   const [page, setPage] = useState<Page>("containers");
   const [detail, setDetail] = useState<{ id: string; tab: Tab } | null>(null);
   const [running, setRunning] = useState<string | null>(null); // the run dialog's starting image
@@ -39,6 +45,17 @@ export default function App() {
     load();
     return () => off.forEach((f) => f());
   }, []);
+
+  // Disk use is slow for the engine to measure, so it is asked for apart
+  // from the list, once the set of containers has settled.
+  const ids = containers.map((c) => c.id).sort().join(",");
+  useEffect(() => {
+    if (!ids) return;
+    const timer = setTimeout(() => {
+      call<Record<string, Size>>("ContainerSizes").then((s) => setSizes(s ?? {})).catch(() => {});
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [ids]);
 
   const showCli = useCallback((command: string) => {
     setCli(command);
@@ -80,9 +97,9 @@ export default function App() {
         <nav>
           {nav("containers", "box", "컨테이너", shownCount)}
           {nav("images", "layers", "이미지", images.length)}
-          {upcoming.map((name) => (
+          {upcoming.map(([name, icon]) => (
             <div key={name} className="nav-item disabled" title="아직 만들지 않은 화면입니다">
-              <span className="icon" />
+              <Icon name={icon} />
               <span>{name}</span>
               <span className="soon">예정</span>
             </div>
@@ -119,12 +136,19 @@ export default function App() {
         {page === "containers" && (
           <Containers
             containers={containers}
+            sizes={sizes}
             run={run}
             onOpen={(id, tab = "overview") => setDetail({ id, tab })}
             onNew={() => setRunning("")}
           />
         )}
-        {page === "images" && <Images images={images} run={run} onRun={(image) => setRunning(image)} />}
+        {page === "images" && <Images
+            images={images}
+            containers={containers}
+            run={run}
+            onRun={(image) => setRunning(image)}
+            onOpen={(id) => setDetail({ id, tab: "overview" })}
+          />}
       </main>
 
       {open && detail && (

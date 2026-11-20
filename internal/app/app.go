@@ -7,6 +7,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,8 +31,11 @@ type App struct {
 	emit   hub.Emit
 	cancel context.CancelFunc
 
-	mu   sync.Mutex
-	logs map[string]context.CancelFunc // open log streams, by container ID
+	mu    sync.Mutex
+	logs  map[string]context.CancelFunc // open log streams, by container ID
+	stats map[string]context.CancelFunc // open stats streams, by container ID
+	terms map[string]engine.Session     // open terminals, by session ID
+	seq   int
 }
 
 // New picks the engine: BOXFORGE_ENGINE=fake for the in-memory one, else
@@ -54,6 +58,8 @@ func Start(a *App, emit hub.Emit) {
 	a.cancel = cancel
 	a.emit = emit
 	a.logs = map[string]context.CancelFunc{}
+	a.stats = map[string]context.CancelFunc{}
+	a.terms = map[string]engine.Session{}
 	a.hub = hub.New(a.rt, emit)
 	go a.hub.Run(ctx)
 }
@@ -63,6 +69,17 @@ func Stop(a *App) {
 	if a.cancel != nil {
 		a.cancel()
 	}
+	a.mu.Lock()
+	for _, cancel := range a.logs {
+		cancel()
+	}
+	for _, cancel := range a.stats {
+		cancel()
+	}
+	for _, s := range a.terms {
+		_ = s.Close()
+	}
+	a.mu.Unlock()
 	_ = a.rt.Close()
 }
 
@@ -304,4 +321,137 @@ func (a *App) RunContainer(spec engine.RunSpec) (string, error) {
 		}
 	}
 	return a.rt.Containers().Run(ctx, spec)
+}
+
+// Measuring disk use walks every container's files.
+const sizeTimeout = 2 * time.Minute
+
+// ContainerSizes measures every container's disk use, by container ID.
+func (a *App) ContainerSizes() (map[string]engine.Size, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+	defer cancel()
+	return a.rt.Containers().Sizes(ctx)
+}
+
+// StatsSample is the payload of a "stats" event.
+type StatsSample struct {
+	ID string `json:"id"`
+	engine.Stats
+}
+
+// StartStats begins sending the container's resource use as "stats" events,
+// about one a second, until StopStats or the container stops.
+func (a *App) StartStats(id string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.mu.Lock()
+	if old := a.stats[id]; old != nil {
+		old()
+	}
+	a.stats[id] = cancel
+	a.mu.Unlock()
+	go func() {
+		_ = a.rt.Containers().Stats(ctx, id, func(s engine.Stats) {
+			a.emit("stats", StatsSample{ID: id, Stats: s})
+		})
+	}()
+}
+
+// StopStats ends the stream StartStats began.
+func (a *App) StopStats(id string) {
+	a.mu.Lock()
+	if cancel := a.stats[id]; cancel != nil {
+		cancel()
+		delete(a.stats, id)
+	}
+	a.mu.Unlock()
+}
+
+// TermData is the payload of a "term" event: terminal output, base64 since
+// it is bytes, not text. End marks the shell's exit.
+type TermData struct {
+	Session string `json:"session"`
+	Data    string `json:"data"`
+	End     bool   `json:"end"`
+}
+
+// The shell a terminal starts: bash where the image has it, else sh.
+var shell = []string{"/bin/sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"}
+
+// TermOpen starts a shell in the container on a terminal of the given size
+// and returns the session's ID. Its output arrives as "term" events.
+func (a *App) TermOpen(id string, cols, rows int) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	s, err := a.rt.Containers().Exec(ctx, id, shell, uint(max(cols, 1)), uint(max(rows, 1)))
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	a.seq++
+	session := fmt.Sprintf("t%d", a.seq)
+	a.terms[session] = s
+	a.mu.Unlock()
+	go func() {
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := s.Read(buf)
+			if n > 0 {
+				a.emit("term", TermData{Session: session, Data: base64.StdEncoding.EncodeToString(buf[:n])})
+			}
+			if err != nil {
+				break
+			}
+		}
+		a.mu.Lock()
+		_, open := a.terms[session]
+		delete(a.terms, session)
+		a.mu.Unlock()
+		_ = s.Close()
+		if open { // not closed by the page: tell it the shell is gone
+			a.emit("term", TermData{Session: session, End: true})
+		}
+	}()
+	return session, nil
+}
+
+func (a *App) term(session string) (engine.Session, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := a.terms[session]
+	if s == nil {
+		return nil, fmt.Errorf("the terminal session has ended")
+	}
+	return s, nil
+}
+
+// TermWrite sends what was typed to the terminal.
+func (a *App) TermWrite(session, data string) error {
+	s, err := a.term(session)
+	if err != nil {
+		return err
+	}
+	_, err = s.Write([]byte(data))
+	return err
+}
+
+// TermResize tells the shell its window changed size.
+func (a *App) TermResize(session string, cols, rows int) error {
+	s, err := a.term(session)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	return s.Resize(ctx, uint(max(cols, 1)), uint(max(rows, 1)))
+}
+
+// TermClose ends the terminal session.
+func (a *App) TermClose(session string) {
+	a.mu.Lock()
+	s := a.terms[session]
+	delete(a.terms, session)
+	a.mu.Unlock()
+	if s != nil {
+		_ = s.Close()
+	}
 }

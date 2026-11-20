@@ -24,6 +24,11 @@ export interface Container {
   service: string;
 }
 
+export interface Size {
+  rw: number;
+  rootFs: number;
+}
+
 export interface Image {
   id: string;
   tags: string[];

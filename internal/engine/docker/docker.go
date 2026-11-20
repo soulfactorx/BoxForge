@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
 
@@ -225,6 +226,130 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 		return created.ID, err
 	}
 	return created.ID, nil
+}
+
+func (c containers) Sizes(ctx context.Context) (map[string]engine.Size, error) {
+	list, err := c.cli.ContainerList(ctx, container.ListOptions{All: true, Size: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]engine.Size, len(list))
+	for _, s := range list {
+		out[s.ID] = engine.Size{RW: s.SizeRw, RootFS: s.SizeRootFs}
+	}
+	return out, nil
+}
+
+// session is an attached exec.
+type session struct {
+	cli  *client.Client
+	id   string
+	conn net.Conn
+	r    io.Reader
+}
+
+func (s *session) Read(p []byte) (int, error)  { return s.r.Read(p) }
+func (s *session) Write(p []byte) (int, error) { return s.conn.Write(p) }
+func (s *session) Close() error                { return s.conn.Close() }
+func (s *session) Resize(ctx context.Context, cols, rows uint) error {
+	return s.cli.ContainerExecResize(ctx, s.id, container.ResizeOptions{Height: rows, Width: cols})
+}
+
+func (c containers) Exec(ctx context.Context, id string, cmd []string, cols, rows uint) (engine.Session, error) {
+	size := [2]uint{rows, cols}
+	created, err := c.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+		Cmd: cmd, Tty: true, AttachStdin: true, AttachStdout: true, AttachStderr: true,
+		ConsoleSize: &size, Env: []string{"TERM=xterm-256color"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	att, err := c.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{Tty: true, ConsoleSize: &size})
+	if err != nil {
+		return nil, err
+	}
+	return &session{cli: c.cli, id: created.ID, conn: att.Conn, r: att.Reader}, nil
+}
+
+// statsSample is the part of the engine's stats JSON that Stats reads.
+type statsSample struct {
+	CPUStats, PreCPUStats struct {
+		CPUUsage struct {
+			TotalUsage uint64 `json:"total_usage"`
+		} `json:"cpu_usage"`
+		SystemUsage uint64 `json:"system_cpu_usage"`
+		OnlineCPUs  uint64 `json:"online_cpus"`
+	}
+	MemoryStats struct {
+		Usage uint64            `json:"usage"`
+		Limit uint64            `json:"limit"`
+		Stats map[string]uint64 `json:"stats"`
+	} `json:"memory_stats"`
+	Networks map[string]struct {
+		RxBytes uint64 `json:"rx_bytes"`
+		TxBytes uint64 `json:"tx_bytes"`
+	} `json:"networks"`
+}
+
+func (s *statsSample) UnmarshalJSON(b []byte) error {
+	// The two CPU blocks share a shape but not a JSON name.
+	type plain statsSample
+	aux := struct {
+		*plain
+		CPU    json.RawMessage `json:"cpu_stats"`
+		PreCPU json.RawMessage `json:"precpu_stats"`
+	}{plain: (*plain)(s)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if len(aux.CPU) > 0 {
+		if err := json.Unmarshal(aux.CPU, &s.CPUStats); err != nil {
+			return err
+		}
+	}
+	if len(aux.PreCPU) > 0 {
+		return json.Unmarshal(aux.PreCPU, &s.PreCPUStats)
+	}
+	return nil
+}
+
+func (c containers) Stats(ctx context.Context, id string, each func(engine.Stats)) error {
+	res, err := c.cli.ContainerStats(ctx, id, true)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	dec := json.NewDecoder(res.Body)
+	for {
+		var s statsSample
+		if err := dec.Decode(&s); err != nil {
+			if ctx.Err() != nil || errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		out := engine.Stats{MemLimit: int64(s.MemoryStats.Limit)}
+		// As the docker CLI computes them: the container's share of the
+		// CPU time that passed, times the CPUs; memory without the page
+		// cache the kernel can take back.
+		cpu := float64(s.CPUStats.CPUUsage.TotalUsage) - float64(s.PreCPUStats.CPUUsage.TotalUsage)
+		sys := float64(s.CPUStats.SystemUsage) - float64(s.PreCPUStats.SystemUsage)
+		if cpu > 0 && sys > 0 && s.PreCPUStats.SystemUsage > 0 {
+			out.CPU = cpu / sys * float64(max(s.CPUStats.OnlineCPUs, 1)) * 100
+		}
+		cache := s.MemoryStats.Stats["inactive_file"]
+		if cache == 0 {
+			cache = s.MemoryStats.Stats["total_inactive_file"]
+		}
+		if cache < s.MemoryStats.Usage {
+			out.MemUsed = int64(s.MemoryStats.Usage - cache)
+		}
+		for _, n := range s.Networks {
+			out.NetRx += int64(n.RxBytes)
+			out.NetTx += int64(n.TxBytes)
+		}
+		each(out)
+	}
 }
 
 type images struct{ cli *client.Client }

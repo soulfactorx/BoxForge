@@ -299,3 +299,41 @@ ul.plain li { word-break: break-all; }
 .check { display: flex; gap: 8px; align-items: center; margin: 12px 0 0; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .dialog-actions button { padding: 5px 14px; }
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+}
+.avatar svg { width: 18px; height: 18px; }
+.name-wrap { display: flex; align-items: center; gap: 10px; }
+.name-text { min-width: 0; }
+.grid tr.nested .name-cell { padding-left: 34px; }
+.pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; font-size: 12px; }
+.grid th button.sort { border: none; background: none; padding: 0; color: inherit; font: inherit; display: inline-flex; align-items: center; gap: 3px; }
+.grid th button.sort .icon { width: 12px; height: 12px; opacity: 0.5; }
+.grid th button.sort.on { color: var(--text); }
+.used { display: grid; gap: 1px; justify-items: start; }
+.used button.link { padding: 0; }
+
+.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.charts-note { grid-column: 1 / -1; font-size: 12px; margin: 0; }
+.spark { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 6px; min-width: 0; }
+.spark-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.spark-head strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.spark-head span:last-child { margin-left: auto; }
+.spark svg { display: block; width: 100%; height: 56px; margin-top: 4px; cursor: crosshair; }
+.spark-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.spark-base { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.spark-cross { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.spark-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.spark-scale { display: flex; justify-content: space-between; font-size: 11px; }
+
+.term { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.term-box { flex: 1; min-height: 240px; background: #0f1218; border-radius: 8px; padding: 8px; overflow: hidden; }

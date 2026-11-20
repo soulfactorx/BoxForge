@@ -1,6 +1,7 @@
 import type { Container } from "./bridge";
 
 export function ago(unix: number) {
+  if (unix <= 0) return "알 수 없음"; // an image built without a date
   const s = Math.max(0, Date.now() / 1000 - unix);
   if (s < 60) return "방금";
   if (s < 3600) return `${Math.floor(s / 60)}분 전`;

@@ -259,6 +259,46 @@ func (c containers) Run(_ context.Context, spec engine.RunSpec) (string, error) 
 	return id, nil
 }
 
+func (c containers) Sizes(context.Context) (map[string]engine.Size, error) {
+	c.r.mu.Lock()
+	defer c.r.mu.Unlock()
+	out := map[string]engine.Size{}
+	for i, it := range c.r.list {
+		out[it.ID] = engine.Size{RW: int64(i) << 20, RootFS: int64(100+i*40) << 20}
+	}
+	return out, nil
+}
+
+// echo is a terminal that answers every write with the same bytes.
+type echo struct {
+	r *io.PipeReader
+	w *io.PipeWriter
+}
+
+func (e echo) Read(p []byte) (int, error)               { return e.r.Read(p) }
+func (e echo) Write(p []byte) (int, error)              { return e.w.Write(p) }
+func (e echo) Close() error                             { return e.w.Close() }
+func (e echo) Resize(context.Context, uint, uint) error { return nil }
+
+func (c containers) Exec(_ context.Context, id string, _ []string, _, _ uint) (engine.Session, error) {
+	r, w := io.Pipe()
+	go fmt.Fprintf(w, "fake shell in %s\r\n$ ", id)
+	return echo{r, w}, nil
+}
+
+func (c containers) Stats(ctx context.Context, _ string, each func(engine.Stats)) error {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for n := 0; ; n++ {
+		each(engine.Stats{CPU: float64(5 + n%7*3), MemUsed: int64(120+n%5*4) << 20, MemLimit: 2 << 30, NetRx: int64(n) << 10, NetTx: int64(n) << 9})
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+		}
+	}
+}
+
 type images struct{ r *Runtime }
 
 func (i images) List(context.Context) ([]engine.Image, error) {

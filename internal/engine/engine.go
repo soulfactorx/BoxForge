@@ -89,6 +89,30 @@ type RunSpec struct {
 	Command []string    `json:"command"` // empty: the image's own
 }
 
+// Size is the disk a container takes. RootFS is everything it sees, its
+// image included; RW is only what it has written on top of the image.
+type Size struct {
+	RW     int64 `json:"rw"`
+	RootFS int64 `json:"rootFs"`
+}
+
+// Stats is one sample of a running container's resource use. CPU is in
+// percent of one core, as `docker stats` shows it: 200 is two cores busy.
+type Stats struct {
+	CPU      float64 `json:"cpu"`
+	MemUsed  int64   `json:"memUsed"`
+	MemLimit int64   `json:"memLimit"`
+	NetRx    int64   `json:"netRx"` // bytes received since the container started
+	NetTx    int64   `json:"netTx"`
+}
+
+// Session is a command running in a container with a terminal attached:
+// reads are its output, writes its keyboard.
+type Session interface {
+	io.ReadWriteCloser
+	Resize(ctx context.Context, cols, rows uint) error
+}
+
 // Event is a change notification from the engine.
 type Event struct {
 	Type   string `json:"type"`   // container, image, volume, network
@@ -135,6 +159,15 @@ type ContainerService interface {
 	// Run creates and starts a container from an image that is present,
 	// and returns its ID.
 	Run(ctx context.Context, spec RunSpec) (string, error)
+	// Sizes measures every container's disk use, by ID. The engine walks
+	// each container's files for this, so it is slow and asked for apart
+	// from List.
+	Sizes(ctx context.Context) (map[string]Size, error)
+	// Exec starts cmd in a running container on a terminal of the given size.
+	Exec(ctx context.Context, id string, cmd []string, cols, rows uint) (Session, error)
+	// Stats calls each with a new sample about once a second until ctx
+	// ends or the container stops.
+	Stats(ctx context.Context, id string, each func(Stats)) error
 }
 
 // ImageService is the image half of a Runtime.

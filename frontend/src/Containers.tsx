@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { call, openURL, type Container, type Run } from "./bridge";
-import { ago, isUp, stateLabel, statusText } from "./format";
+import { Avatar } from "./brand";
+import { call, openURL, type Container, type Run, type Size } from "./bridge";
+import { ago, bytes, isUp, stateLabel, statusText } from "./format";
 import { Dialog, IconButton, Menu, type MenuItem } from "./ui";
 
 type Filter = "all" | "running" | "stopped" | "failed";
@@ -20,12 +21,13 @@ type Item = { key: string; project: string; members: Container[] };
 
 interface Props {
   containers: Container[];
+  sizes: Record<string, Size>;
   run: Run;
   onOpen: (id: string, tab?: "overview" | "logs") => void;
   onNew: () => void;
 }
 
-export default function Containers({ containers, run, onOpen, onNew }: Props) {
+export default function Containers({ containers, sizes, run, onOpen, onNew }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [showSystem, setShowSystem] = useState(false);
@@ -117,6 +119,9 @@ export default function Containers({ containers, run, onOpen, onNew }: Props) {
   const row = (c: Container, nested: boolean) => (
     <tr key={c.id} className={nested ? "nested" : ""} data-testid={`row-${c.name}`}>
       <td className="name-cell">
+        <div className="name-wrap">
+        <Avatar image={c.image} kind="box" />
+        <div className="name-text">
         {renaming?.id === c.id ? (
           <input
             autoFocus
@@ -142,6 +147,8 @@ export default function Containers({ containers, run, onOpen, onNew }: Props) {
           </span>
         )}
         <span className="sub">{c.image}</span>
+        </div>
+        </div>
       </td>
       <td>
         <span className={"state " + (c.failed ? "failed" : c.state)}>
@@ -165,6 +172,16 @@ export default function Containers({ containers, run, onOpen, onNew }: Props) {
                 {p.public}→{p.private}
               </button>
             ))}
+      </td>
+      <td className="num nowrap" title="컨테이너가 보는 전체 파일 크기입니다. 이미지와 겹치는 부분이 포함됩니다.">
+        {sizes[c.id] ? (
+          <>
+            {bytes(sizes[c.id].rootFs)}
+            {sizes[c.id].rw > 0 && <span className="sub">직접 쓴 것 {bytes(sizes[c.id].rw)}</span>}
+          </>
+        ) : (
+          <span className="muted">…</span>
+        )}
       </td>
       <td className="muted nowrap">{ago(c.created)}</td>
       <td className="actions">
@@ -217,6 +234,7 @@ export default function Containers({ containers, run, onOpen, onNew }: Props) {
               <th>이름</th>
               <th>상태</th>
               <th>포트</th>
+              <th className="num">크기</th>
               <th>생성</th>
               <th className="actions">작업</th>
             </tr>
@@ -228,7 +246,7 @@ export default function Containers({ containers, run, onOpen, onNew }: Props) {
               const open = !collapsed.has(g.project);
               return [
                 <tr key={"g:" + g.project} className="group" data-testid={`group-${g.project}`}>
-                  <td colSpan={4}>
+                  <td colSpan={5}>
                     <button className="twisty" aria-expanded={open} aria-label={open ? "접기" : "펼치기"} onClick={() => toggle(g.project)}>
                       {open ? "▾" : "▸"}
                     </button>

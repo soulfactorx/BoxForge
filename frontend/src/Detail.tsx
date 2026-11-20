@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, openURL, type Container, type LogChunk } from "./bridge";
+import Charts from "./Charts";
 import { published } from "./Containers";
+import Terminal from "./Terminal";
 import { ago, shortId, stateLabel, statusText } from "./format";
 import { IconButton } from "./ui";
 
-export type Tab = "overview" | "logs" | "inspect";
+export type Tab = "overview" | "logs" | "terminal" | "inspect";
 
 // The most lines a log view keeps; older ones are dropped.
 const maxLines = 5000;
@@ -86,6 +88,7 @@ function Overview({ c, raw }: { c: Container; raw: string }) {
   const restart = info?.HostConfig?.RestartPolicy?.Name;
   return (
     <div className="overview">
+      {c.state === "running" && <Charts id={c.id} />}
       <dl className="facts">
         <dt>상태</dt>
         <dd>
@@ -219,6 +222,7 @@ export default function Detail({ c, tab, onTab, onClose, showCli }: Props) {
   const tabs: [Tab, string][] = [
     ["overview", "개요"],
     ["logs", "로그"],
+    ["terminal", "터미널"],
     ["inspect", "원본"],
   ];
   return (
@@ -238,6 +242,12 @@ export default function Detail({ c, tab, onTab, onClose, showCli }: Props) {
         {error && <p className="warn">{error}</p>}
         {tab === "overview" && <Overview c={c} raw={raw} />}
         {tab === "logs" && <Logs c={c} showCli={showCli} />}
+        {tab === "terminal" &&
+          (c.state === "running" ? (
+            <Terminal id={c.id} name={c.name} showCli={showCli} />
+          ) : (
+            <p className="muted">터미널은 실행 중인 컨테이너에서만 열 수 있습니다. 먼저 컨테이너를 시작하세요.</p>
+          ))}
         {tab === "inspect" && (
           <>
             <p className="muted">엔진이 이 컨테이너에 대해 알고 있는 전부입니다.</p>
