@@ -164,6 +164,21 @@ func wanted(ctx context.Context, url, name string) (string, error) {
 	return "", fmt.Errorf("%s is not in the release's checksum list", name)
 }
 
+// program is where this program's file was when it started. It is asked
+// once, then: after an update has moved the running file aside, Linux
+// answers with the moved file's name (….old), which is the old version.
+var program, programErr = func() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}()
+
+// Program returns the path this program is started by: the place an
+// update puts the new version.
+func Program() (string, error) { return program, programErr }
+
 // Apply downloads the release's program and puts it in place of the one
 // running, which goes on running until it is closed. progress is told the
 // bytes fetched so far and the total (0 while unknown).
@@ -171,11 +186,8 @@ func Apply(ctx context.Context, r Release, progress func(done, total int64)) err
 	if !r.HasProgram() {
 		return errors.New("this release has no program for this kind of PC")
 	}
-	exe, err := os.Executable()
+	exe, err := Program()
 	if err != nil {
-		return err
-	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return err
 	}
 	want, err := wanted(ctx, r.sums, AssetName())
@@ -250,10 +262,17 @@ func Apply(ctx context.Context, r Release, progress func(done, total int64)) err
 
 // Cleanup removes what an earlier update left beside the program.
 func Cleanup() {
-	if exe, err := os.Executable(); err == nil {
-		if exe, err = filepath.EvalSymlinks(exe); err == nil {
-			os.Remove(exe + ".old")
-			os.Remove(exe + ".new")
+	exe, err := Program()
+	if err != nil {
+		return
+	}
+	os.Remove(exe + ".new")
+	// Also the .old.old… files a version that lost track of its own name left.
+	if left, err := filepath.Glob(exe + ".old*"); err == nil {
+		for _, f := range left {
+			if strings.Trim(strings.TrimPrefix(f, exe), ".old") == "" {
+				os.Remove(f)
+			}
 		}
 	}
 }

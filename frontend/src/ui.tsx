@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 const paths: Record<string, ReactNode> = {
   play: <path d="M6 4.5v11l9-5.5z" />,
@@ -66,22 +66,46 @@ export interface MenuItem {
 export function Menu({ items, label = "더보기" }: { items: MenuItem[]; label?: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  // The list is placed on the window, not in the table it belongs to: a
+  // table's panel cuts off whatever reaches past its edge. It opens under
+  // the button, or above it when there is no room below.
+  const [at, setAt] = useState<CSSProperties>({ visibility: "hidden" });
+  const place = () => {
+    if (!ref.current || !list.current) return;
+    const b = ref.current.getBoundingClientRect();
+    const h = list.current.offsetHeight;
+    const w = list.current.offsetWidth;
+    const below = window.innerHeight - b.bottom;
+    const top = below >= h + 8 || b.top < h + 8 ? Math.min(b.bottom + 4, Math.max(8, window.innerHeight - h - 8)) : b.top - h - 4;
+    setAt({ top, left: Math.max(8, Math.min(b.right - w, window.innerWidth - w - 8)) });
+  };
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open]);
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const shut = () => setOpen(false);
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && shut();
+    const key = (e: KeyboardEvent) => e.key === "Escape" && shut();
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", key);
+    // The page moving under it: the list follows its button.
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
     return () => {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", key);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+      setAt({ visibility: "hidden" });
     };
   }, [open]);
   return (
     <span className="menu-wrap" ref={ref}>
       <IconButton icon="more" label={label} onClick={() => setOpen(!open)} />
       {open && (
-        <div className="menu" role="menu">
+        <div className="menu" role="menu" ref={list} style={at}>
           {items.map((it) => (
             <button
               type="button"

@@ -51,10 +51,8 @@ button.primary:hover { background: var(--accent); filter: brightness(1.08); }
 .icon-btn.go { color: var(--ok); }
 .menu-wrap { position: relative; display: inline-block; }
 .menu {
-  position: absolute;
-  right: 0;
-  top: 34px;
-  z-index: 20;
+  position: fixed;
+  z-index: 200;
   min-width: 150px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -970,3 +968,6 @@ button.link.add-remote { padding: 0; }
 .forwards { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .forward { display: flex; align-items: center; gap: 10px; }
 .forward .spacer { flex: 1; }
+
+.grid .state, .grid td .sub { white-space: nowrap; }
+.grid th { white-space: nowrap; }

@@ -93,11 +93,8 @@ func SetQuit(f func()) { quit = f }
 // Restart starts the program afresh (the new one, after an update) and
 // closes this one.
 func (a *App) Restart() error {
-	exe, err := os.Executable()
+	exe, err := update.Program()
 	if err != nil {
-		return err
-	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return err
 	}
 	cmd := exec.Command(exe)
