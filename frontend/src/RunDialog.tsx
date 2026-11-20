@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { call, on, type Image, type PullState, type Run, type RunSpec } from "./bridge";
+import { call, on, type Image, type Network, type PullState, type Run, type RunSpec } from "./bridge";
 import { shq, words } from "./format";
 import { recipes, type Pair, type RunInit } from "./recipes";
 import { Dialog, IconButton, Progress } from "./ui";
@@ -7,6 +7,7 @@ import { Dialog, IconButton, Progress } from "./ui";
 interface Defaults {
   ports: { host: number; container: number }[];
   volumes: string[];
+  shell: boolean;
 }
 
 const restarts: [string, string][] = [
@@ -43,12 +44,16 @@ const filled = (rows: Pair[]) => rows.filter((r) => r.a.trim() && r.b.trim());
 interface Props {
   init: RunInit;
   images: Image[];
+  networks: Network[];
   run: Run;
   onClose: () => void;
   onStarted: (id: string) => void;
 }
 
-export default function RunDialog({ init, images, run, onClose, onStarted }: Props) {
+export default function RunDialog({ init, images, networks, run, onClose, onStarted }: Props) {
+  const replace = init.replace;
+  const [network, setNetwork] = useState(init.network ?? "");
+  const [keepOpen, setKeepOpen] = useState<boolean | null>(init.interactive ?? null);
   const [image, setImage] = useState(init.image);
   const [name, setName] = useState(init.name ?? "");
   const [ports, setPorts] = useState<Pair[]>(init.ports ?? []);
@@ -94,6 +99,10 @@ export default function RunDialog({ init, images, run, onClose, onStarted }: Pro
 
   useEffect(() => on("pull", (p: PullState) => setPull(p.done ? null : p)), []);
 
+  // A base image runs a bare shell, which ends at once with no terminal:
+  // unless told otherwise, such a one is given a terminal to wait at.
+  const shellOnly = !!declared?.shell && !command.trim();
+  const interactive = keepOpen ?? shellOnly;
   const badPort = filled(ports).find((p) => !/^\d+$/.test(p.a.trim()) || !/^\d+$/.test(p.b.trim()) || +p.a > 65535 || +p.b > 65535 || +p.a < 1 || +p.b < 1);
   const spec: RunSpec = {
     image: image.trim(),
@@ -103,10 +112,13 @@ export default function RunDialog({ init, images, run, onClose, onStarted }: Pro
     env: env.filter((e) => e.a.trim()).map((e) => `${e.a.trim()}=${e.b}`),
     restart,
     command: words(command),
+    interactive,
+    network: network || undefined,
   };
 
   const cli = [
-    "docker run -d",
+    replace ? `docker rm -f ${shq(replace.name)} && docker run ${interactive ? "-dit" : "-d"}` : interactive ? "docker run -dit" : "docker run -d",
+    spec.network && `--network ${shq(spec.network)}`,
     spec.name && `--name ${shq(spec.name)}`,
     ...spec.ports.map((p) => `-p ${p.host}:${p.container}`),
     ...spec.mounts.map((m) => `-v ${shq(m.source + ":" + m.target)}`),
@@ -125,7 +137,7 @@ export default function RunDialog({ init, images, run, onClose, onStarted }: Pro
     let id = "";
     const ok = await run(cli, async () => {
       try {
-        id = await call<string>("RunContainer", spec);
+        id = replace ? await call<string>("RecreateContainer", replace.id, spec) : await call<string>("RunContainer", spec);
       } catch (e: any) {
         setError(e.message);
         throw e;
@@ -138,7 +150,13 @@ export default function RunDialog({ init, images, run, onClose, onStarted }: Pro
 
   const local = images.flatMap((im) => im.tags);
   return (
-    <Dialog title="새 컨테이너 실행" onClose={busy ? () => {} : onClose} wide>
+    <Dialog title={replace ? `${replace.name}: 설정 바꿔 다시 만들기` : "새 컨테이너 실행"} onClose={busy ? () => {} : onClose} wide>
+      {replace && (
+        <p className="note-box">
+          포트 · 저장 공간 · 환경변수 · 네트워크는 컨테이너를 만들 때만 정할 수 있어서, 바꾸려면 지금 컨테이너를 지우고 새로 만듭니다. 볼륨에 든 데이터는 그대로 남지만,{" "}
+          <strong>컨테이너 안에서 직접 바꾼 파일은 사라집니다.</strong> 새로 만들지 못하면 지금 것을 그대로 되돌려 놓습니다.
+        </p>
+      )}
       <form
         className="run-form"
         onSubmit={(e) => {
@@ -146,7 +164,7 @@ export default function RunDialog({ init, images, run, onClose, onStarted }: Pro
           submit();
         }}
       >
-        {!init.image && (
+        {!init.image && !replace && (
           <div className="recipe-chips" aria-label="자주 쓰는 프로그램">
             <span className="muted">빠른 시작</span>
             {recipes.map((r) => (
@@ -210,6 +228,31 @@ export default function RunDialog({ init, images, run, onClose, onStarted }: Pro
           실행 명령
           <input placeholder="비워 두면 이미지에 정해진 대로 실행합니다" value={command} onChange={(e) => setCommand(e.target.value)} />
         </label>
+        <label>
+          네트워크
+          <select aria-label="네트워크" value={network} onChange={(e) => setNetwork(e.target.value)}>
+            <option value="">기본 네트워크</option>
+            {networks
+              .filter((n) => !n.builtin)
+              .map((n) => (
+                <option key={n.id} value={n.name}>
+                  {n.name}
+                </option>
+              ))}
+          </select>
+          <span className="help">같은 네트워크의 컨테이너끼리는 서로 이름으로 접속할 수 있습니다. 네트워크는 "네트워크" 화면에서 만듭니다.</span>
+        </label>
+        {shellOnly && keepOpen === null && (
+          <p className="note-box" data-testid="shell-note">
+            이 이미지는 프로그램 없이 셸만 들어 있는 기본 이미지입니다. 그냥 실행하면 셸이 할 일이 없어 바로 끝나므로, 터미널을 연 채로 켜 둡니다. 실행한 뒤 "터미널" 탭에서 쓰면 됩니다.
+          </p>
+        )}
+        <label className="check">
+          <input type="checkbox" aria-label="터미널을 연 채로 켜 두기" checked={interactive} onChange={(e) => setKeepOpen(e.target.checked)} />
+          <span>
+            터미널을 연 채로 켜 두기 <span className="muted">(-it · 셸만 실행하는 이미지에 필요)</span>
+          </span>
+        </label>
 
         <div className="cli-preview">
           <span className="muted">같은 일을 하는 명령</span>
@@ -235,7 +278,7 @@ export default function RunDialog({ init, images, run, onClose, onStarted }: Pro
             취소
           </button>
           <button className="primary" type="submit" disabled={!spec.image || !!badPort || busy}>
-            {busy ? "실행하는 중…" : "실행"}
+            {busy ? (replace ? "다시 만드는 중…" : "실행하는 중…") : replace ? "지우고 다시 만들기" : "실행"}
           </button>
         </div>
       </form>

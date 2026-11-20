@@ -13,6 +13,11 @@ export interface RunInit {
   env?: Pair[];
   restart?: string;
   command?: string;
+  network?: string;
+  /** Keep a terminal open (docker run -it). */
+  interactive?: boolean;
+  /** The container this one replaces: "change settings" makes it anew. */
+  replace?: { id: string; name: string };
 }
 
 export interface Recipe extends RunInit {

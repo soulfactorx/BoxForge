@@ -74,7 +74,18 @@ function Logs({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) 
 }
 
 // What an exit code says about how a container ended.
-function reason(code: number, oom: boolean, message: string): { title: string; text: string; logs: boolean } {
+const shells = ["sh", "bash", "ash", "dash", "zsh"];
+
+function reason(code: number, oom: boolean, message: string, info?: any): { title: string; text: string; logs: boolean } {
+  // A base image's bare shell, started with no terminal: it has nothing to
+  // read and ends at once. Not an error, and starting it again changes nothing.
+  const program = String(info?.Path ?? "").split("/").pop() ?? "";
+  if (code === 0 && !message && shells.includes(program) && (info?.Args ?? []).length === 0 && !info?.Config?.Tty)
+    return {
+      title: "셸이 할 일이 없어 바로 끝났습니다",
+      text: 'alpine · ubuntu 같은 기본 이미지는 프로그램 없이 셸만 실행합니다. 셸은 입력을 받을 터미널이 없으면 곧바로 끝나고, 로그도 남기지 않습니다. 오류가 아니며, 다시 시작해도 똑같습니다. 목록의 "…" → "설정 바꿔 다시 만들기"에서 "터미널을 연 채로 켜 두기"를 켜면 계속 떠 있습니다.',
+      logs: false,
+    };
   if (oom) return { title: "메모리가 부족해 강제로 종료됐습니다", text: "프로그램이 엔진이 허용한 것보다 많은 메모리를 썼습니다. 메모리 한도를 늘리거나 프로그램의 사용량을 줄여야 합니다.", logs: true };
   if (message) return { title: "시작하지 못했습니다", text: message, logs: false };
   switch (code) {
@@ -115,7 +126,7 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
   const command = [info?.Path, ...(info?.Args ?? [])].filter(Boolean).join(" ");
   const restart = info?.HostConfig?.RestartPolicy?.Name;
   const st = info?.State;
-  const why = st && (st.Status === "exited" || st.Status === "dead" || (st.Status === "created" && st.Error)) ? reason(st.ExitCode ?? 0, !!st.OOMKilled, st.Error ?? "") : null;
+  const why = st && (st.Status === "exited" || st.Status === "dead" || (st.Status === "created" && st.Error)) ? reason(st.ExitCode ?? 0, !!st.OOMKilled, st.Error ?? "", info) : null;
   return (
     <div className="overview">
       {c.state === "running" && <Charts id={c.id} />}

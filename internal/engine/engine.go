@@ -120,6 +120,9 @@ type RunSpec struct {
 	// every right on the engine's machine, and memory-backed directories.
 	Privileged bool     `json:"privileged"`
 	Tmpfs      []string `json:"tmpfs"`
+	// Interactive keeps a terminal and the input open, as `docker run -it`
+	// does: what a bare shell needs to stay running.
+	Interactive bool `json:"interactive"`
 	// Network is whose network the container uses instead of one of its
 	// own: "container:<name>" shares that container's.
 	Network string `json:"network"`
@@ -169,6 +172,23 @@ type Usage struct {
 type ImageDefaults struct {
 	Ports   []PortSpec `json:"ports"`   // the ports its program listens on
 	Volumes []string   `json:"volumes"` // the folders it keeps data in
+	// Shell: what the image runs by default is a bare shell, which ends
+	// at once unless it has a terminal to wait at.
+	Shell bool `json:"shell"`
+}
+
+// BareShell reports whether an image's default command is nothing but a
+// shell: what base images (alpine, ubuntu, debian, busybox) run.
+func BareShell(entrypoint, cmd []string) bool {
+	if len(entrypoint) != 0 || len(cmd) != 1 {
+		return false
+	}
+	name := cmd[0][strings.LastIndex(cmd[0], "/")+1:]
+	switch name {
+	case "sh", "bash", "ash", "dash", "zsh", "ksh", "fish":
+		return true
+	}
+	return false
 }
 
 // Event is a change notification from the engine.

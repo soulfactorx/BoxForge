@@ -305,7 +305,10 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 		}
 	}
 	created, err := c.cli.ContainerCreate(ctx,
-		&container.Config{Image: spec.Image, Env: spec.Env, Cmd: spec.Command, ExposedPorts: exposed},
+		&container.Config{
+			Image: spec.Image, Env: spec.Env, Cmd: spec.Command, ExposedPorts: exposed,
+			Tty: spec.Interactive, OpenStdin: spec.Interactive,
+		},
 		&container.HostConfig{
 			PortBindings:  bindings,
 			Binds:         binds,
@@ -737,6 +740,7 @@ func (i images) Defaults(ctx context.Context, ref string) (engine.ImageDefaults,
 		d.Volumes = append(d.Volumes, dir)
 	}
 	sort.Strings(d.Volumes)
+	d.Shell = engine.BareShell(in.Config.Entrypoint, in.Config.Cmd)
 	return d, nil
 }
 

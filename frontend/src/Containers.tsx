@@ -3,6 +3,7 @@ import { Avatar } from "./brand";
 import { call, openURL, type Container, type Image, type Run, type Size } from "./bridge";
 import { ago, bytes, isUp, stateLabel, statusText } from "./format";
 import { ExportDialog, ImportDialog } from "./Bundle";
+import type { RunInit } from "./recipes";
 import EngineCopy, { explain } from "./EngineCopy";
 import { Dialog, IconButton, Menu, type MenuItem } from "./ui";
 
@@ -38,9 +39,32 @@ interface Props {
   run: Run;
   onOpen: (id: string, tab?: "overview" | "logs") => void;
   onNew: () => void;
+  onRecreate: (init: RunInit) => void;
 }
 
-export default function Containers({ containers, sizes, images, run, onOpen, onNew }: Props) {
+/** Reads a container's settings back into the form that made it. */
+async function settingsOf(c: Container): Promise<RunInit> {
+  const info = JSON.parse(await call<string>("InspectContainer", c.id));
+  const env: string[] = info?.Config?.Env ?? [];
+  const mode: string = info?.HostConfig?.NetworkMode ?? "";
+  const own = c.networks.map((n) => n.network).find((n) => !["bridge", "host", "none"].includes(n));
+  return {
+    image: c.image,
+    name: c.name,
+    ports: c.ports.filter((p) => p.public).map((p) => ({ a: String(p.public), b: String(p.private) })),
+    mounts: (info?.Mounts ?? []).filter((m: any) => m.Destination && (m.Name || m.Source)).map((m: any) => ({ a: m.Type === "volume" ? m.Name : m.Source, b: m.Destination })),
+    env: env
+      .filter((e) => !/^(PATH|HOSTNAME)=/.test(e))
+      .map((e) => ({ a: e.slice(0, e.indexOf("=")), b: e.slice(e.indexOf("=") + 1) })),
+    restart: ["always", "unless-stopped", "on-failure"].includes(info?.HostConfig?.RestartPolicy?.Name) ? info.HostConfig.RestartPolicy.Name : "",
+    command: (info?.Config?.Cmd ?? []).map((w: string) => (/[\s"']/.test(w) ? JSON.stringify(w) : w)).join(" "),
+    network: own ?? (mode && !["default", "bridge", "host", "none"].includes(mode) && !mode.startsWith("container:") ? mode : ""),
+    interactive: info?.Config?.Tty ? true : undefined,
+    replace: { id: c.id, name: c.name },
+  };
+}
+
+export default function Containers({ containers, sizes, images, run, onOpen, onNew, onRecreate }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [showSystem, setShowSystem] = useState(false);
@@ -153,6 +177,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
     if (c.state === "running") {
       items.push({ label: "외부 터미널 열기", onClick: () => run(`docker exec -it ${c.name} sh`, () => call("OpenTerminal", c.name)) });
     }
+    items.push({ label: "설정 바꿔 다시 만들기", onClick: () => settingsOf(c).then(onRecreate, () => {}) });
     items.push({ label: "다른 엔진으로 복사", onClick: () => setCopying(c) });
     items.push({ label: "파일로 내보내기", onClick: () => setExporting([c.id]) });
     if (isUp(c)) items.push({ label: "강제 종료", onClick: () => act(c, "kill"), danger: true });

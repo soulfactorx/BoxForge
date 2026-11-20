@@ -346,6 +346,28 @@ func stamp(s string) int64 {
 
 type images struct{ r *runtime }
 
+// row is one line of `nerdctl images`: one name of an image.
+type row struct{ ID, Repository, Tag, Name, Size, CreatedAt string }
+
+// unnamed reports whether the name is one containerd made up for an
+// image that came without: "import-…@sha256:…", "overlayfs@sha256:…".
+// The list shows such a name cut short, and nerdctl does not know the
+// image by what it shows.
+func (r row) unnamed() bool { return strings.Contains(r.Name, "@sha256:") }
+
+// shown is the name as the list gives it to the UI.
+func (r row) shown() string {
+	if r.Tag == "" || r.Tag == "<none>" {
+		return r.Repository
+	}
+	return r.Repository + ":" + r.Tag
+}
+
+func (s images) rows(ctx context.Context) []row {
+	b, _ := s.r.out(ctx, "images", "--no-trunc", "--format", "{{json .}}")
+	return lines[row](b)
+}
+
 func (s images) List(ctx context.Context) ([]engine.Image, error) {
 	b, err := s.r.out(ctx, "images", "--no-trunc", "--format", "{{json .}}")
 	if err != nil {
@@ -353,7 +375,10 @@ func (s images) List(ctx context.Context) ([]engine.Image, error) {
 	}
 	byID := map[string]*engine.Image{}
 	var order []string
-	for _, im := range lines[struct{ ID, Repository, Tag, Size, CreatedAt string }](b) {
+	for _, im := range lines[row](b) {
+		if im.unnamed() {
+			im.Repository = ""
+		}
 		have := byID[im.ID]
 		if have == nil {
 			have = &engine.Image{ID: im.ID, Size: size(im.Size), Created: stamp(im.CreatedAt), Tags: []string{}}
@@ -413,12 +438,27 @@ func (s images) Pull(ctx context.Context, ref string, progress func(engine.PullP
 	return nil
 }
 
+// Remove takes an image by ID or by one of its names. nerdctl wants the
+// exact name: an ID that has several names is refused, and so is a
+// made-up name as the list shows it. So the names are looked up here.
 func (s images) Remove(ctx context.Context, id string, force bool) error {
 	args := []string{"rmi"}
 	if force {
 		args = append(args, "-f")
 	}
-	return s.r.do(ctx, "image", append(args, id)...)
+	var names []string
+	for _, r := range s.rows(ctx) {
+		switch {
+		case r.ID == id || strings.TrimPrefix(r.ID, "sha256:") == id:
+			names = append(names, r.Name) // by ID: every name it has
+		case r.unnamed() && (r.shown() == id || r.Repository == id):
+			names = append(names, r.Name)
+		}
+	}
+	if len(names) == 0 {
+		names = []string{id}
+	}
+	return s.r.do(ctx, "image", append(args, names...)...)
 }
 
 func (s images) Tag(ctx context.Context, source, target string) error {
@@ -452,6 +492,8 @@ func (s images) Defaults(ctx context.Context, ref string) (engine.ImageDefaults,
 		Config struct {
 			ExposedPorts map[string]struct{}
 			Volumes      map[string]struct{}
+			Entrypoint   []string
+			Cmd          []string
 		}
 	}
 	if err := json.Unmarshal(b, &in); err != nil || len(in) == 0 {
@@ -468,6 +510,7 @@ func (s images) Defaults(ctx context.Context, ref string) (engine.ImageDefaults,
 		d.Volumes = append(d.Volumes, v)
 	}
 	sort.Strings(d.Volumes)
+	d.Shell = engine.BareShell(in[0].Config.Entrypoint, in[0].Config.Cmd)
 	return d, nil
 }
 
@@ -521,44 +564,31 @@ func (s images) Save(ctx context.Context, ref string) (io.ReadCloser, error) {
 	return s.r.reading(ctx, "save", ref)
 }
 
-// stray reports whether a tag is one containerd's importer makes up for
-// an archive's unnamed entry: "import-2026-11-21", listed as "import".
-func stray(tag string) bool {
-	return tag == "import" || tag == "import:latest" || strings.HasPrefix(tag, "import-")
-}
-
+// Load takes in an archive. One from Docker can hold the same image
+// twice, once with its name and once without; the nameless one arrives
+// under a made-up name. When the load brought a named image too, that
+// extra is taken away again.
 func (s images) Load(ctx context.Context, in io.Reader) error {
-	before, _ := s.List(ctx)
+	had := map[string]bool{}
+	for _, r := range s.rows(ctx) {
+		had[r.Name] = true
+	}
 	err := s.r.writing(ctx, in, "load")
-	// An archive from Docker can hold the same image twice, once with its
-	// name and once without; the nameless one arrives as "import". When
-	// the load brought a named image too, that extra is taken away again.
-	if after, lerr := s.List(ctx); err == nil && lerr == nil {
-		had := map[string]bool{}
-		for _, im := range before {
-			had[im.ID] = true
-		}
+	if err == nil {
 		named := false
-		var extra []engine.Image
-		for _, im := range after {
-			if had[im.ID] {
-				continue
-			}
-			all := len(im.Tags) > 0
-			for _, tag := range im.Tags {
-				all = all && stray(tag)
-			}
-			if all {
-				extra = append(extra, im)
-			} else {
+		var extra []string
+		for _, r := range s.rows(ctx) {
+			switch {
+			case had[r.Name]:
+			case r.unnamed():
+				extra = append(extra, r.Name)
+			default:
 				named = true
 			}
 		}
 		if named {
-			for _, im := range extra {
-				for _, tag := range im.Tags {
-					_, _ = s.r.out(ctx, "rmi", tag)
-				}
+			for _, name := range extra {
+				_, _ = s.r.out(ctx, "rmi", name)
 			}
 		}
 	}

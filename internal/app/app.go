@@ -496,7 +496,78 @@ func (a *App) RunContainer(spec engine.RunSpec) (string, error) {
 			return "", err
 		}
 	}
+	// A base image (alpine, ubuntu) runs a bare shell, which ends at once
+	// when started in the background with no terminal: nobody means that.
+	if len(spec.Command) == 0 && !spec.Interactive {
+		if d, err := a.eng().Images().Defaults(ctx, spec.Image); err == nil && d.Shell {
+			spec.Interactive = true
+		}
+	}
 	return a.eng().Containers().Run(ctx, spec)
+}
+
+// RecreateContainer replaces a container with one made anew from spec:
+// the way to change what can only be set when a container is made (its
+// ports, folders, variables, network). The old one is set aside first and
+// put back if the new one can't be made; its volumes stay.
+func (a *App) RecreateContainer(id string, spec engine.RunSpec) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
+	defer cancel()
+	cs := a.eng().Containers()
+	var old *engine.Container
+	for _, c := range a.mirror().Containers() {
+		if c.ID == id {
+			c := c
+			old = &c
+		}
+	}
+	if old == nil {
+		return "", fmt.Errorf("the container is no longer there")
+	}
+	wasUp := old.State == "running" || old.State == "paused"
+	if wasUp {
+		// Its ports are free only once it has stopped.
+		if err := cs.Stop(ctx, id); err != nil {
+			return "", err
+		}
+	}
+	aside := old.Name + "-old-" + time.Now().Format("150405")
+	if err := cs.Rename(ctx, id, aside); err != nil {
+		return "", err
+	}
+	back := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+		defer cancel()
+		_ = cs.Rename(ctx, id, old.Name)
+		if wasUp {
+			_ = cs.Start(ctx, id)
+		}
+	}
+	if strings.TrimSpace(spec.Name) == "" {
+		spec.Name = old.Name
+	}
+	fresh, err := a.RunContainer(spec)
+	if err != nil {
+		// Made but unable to start (a port taken, say): not left behind.
+		for _, c := range a.listNow(ctx) {
+			if c.Name == spec.Name && c.ID != id {
+				_ = cs.Remove(ctx, c.ID, true, false)
+			}
+		}
+		back()
+		return "", err
+	}
+	if err := cs.Remove(ctx, id, true, false); err != nil {
+		return fresh, fmt.Errorf("the new container is running, but the old one (%s) could not be removed: %w", aside, err)
+	}
+	return fresh, nil
+}
+
+// listNow asks the engine itself for the containers, not the mirror,
+// which may be a moment behind.
+func (a *App) listNow(ctx context.Context) []engine.Container {
+	list, _ := a.eng().Containers().List(ctx)
+	return list
 }
 
 // Measuring disk use walks every container's files.

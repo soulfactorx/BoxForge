@@ -377,6 +377,7 @@ export default function App() {
             run={run}
             onOpen={(id, tab = "overview") => setDetail({ id, tab })}
             onNew={() => setRunning({ image: "" })}
+            onRecreate={(init) => setRunning(init)}
           />
         )}
         {page === "images" && <Images
@@ -503,6 +504,7 @@ export default function App() {
           key={JSON.stringify(running)}
           init={running}
           images={images}
+          networks={networks}
           run={run}
           onClose={() => setRunning(null)}
           onStarted={(id) => {

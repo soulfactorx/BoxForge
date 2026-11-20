@@ -67,6 +67,8 @@ export interface RunSpec {
   env: string[];
   restart: string;
   command: string[];
+  interactive?: boolean;
+  network?: string;
 }
 
 export interface PullState {

@@ -250,3 +250,43 @@ func TestLive(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// TestUnnamed: an image that came without a name can be listed and
+// removed (BOXFORGE_NERDCTL_UNNAMED is an archive holding one).
+func TestUnnamed(t *testing.T) {
+	file := os.Getenv("BOXFORGE_NERDCTL_UNNAMED")
+	if file == "" {
+		t.Skip("BOXFORGE_NERDCTL_UNNAMED is not set")
+	}
+	ctx := context.Background()
+	rt, err := Connect(Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.Open(file)
+	defer f.Close()
+	before, _ := rt.Images().List(ctx)
+	if err := rt.Images().Load(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := rt.Images().List(ctx)
+	var fresh *engine.Image
+	for i, im := range after {
+		found := false
+		for _, b := range before {
+			found = found || b.ID == im.ID
+		}
+		if !found {
+			fresh = &after[i]
+		}
+	}
+	if fresh == nil {
+		t.Fatal("the loaded image is not listed")
+	}
+	if len(fresh.Tags) != 0 {
+		t.Errorf("a made-up name is shown as a tag: %v", fresh.Tags)
+	}
+	if err := rt.Images().Remove(ctx, fresh.ID, false); err != nil {
+		t.Errorf("remove: %v", err)
+	}
+}

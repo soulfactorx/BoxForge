@@ -277,6 +277,9 @@ func runArgs(spec engine.RunSpec) []string {
 	if spec.Network != "" {
 		args = append(args, "--network", spec.Network)
 	}
+	if spec.Interactive {
+		args = append(args, "-t") // nerdctl takes no -i with -d; the terminal is what keeps a shell
+	}
 	return append(append(args, spec.Image), spec.Command...)
 }
 
