@@ -16,7 +16,7 @@ import Kubernetes from "./Kubernetes";
 import RunDialog from "./RunDialog";
 import Topology from "./Topology";
 import { bytes } from "./format";
-import { Icon } from "./ui";
+import { Dialog, Icon } from "./ui";
 
 type Page = "home" | "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds" | "kube" | "settings";
 
@@ -72,6 +72,9 @@ export default function App() {
   const [history, setHistory] = useState<{ cmd: string; at: number }[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [choosing, setChoosing] = useState(false);
+  // The first time the window is closed with a tray to go to: ask.
+  const [closing, setClosing] = useState(false);
+  useEffect(() => on("closing", () => setClosing(true)), []);
   const [engineLabel, setEngineLabel] = useState("");
   const [memUsed, setMemUsed] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -406,6 +409,31 @@ export default function App() {
         />
       )}
 
+      {closing && (
+        <Dialog title="창을 닫으면 어떻게 할까요?" onClose={() => setClosing(false)}>
+          <p>BoxForge는 창을 닫아도 작업 표시줄의 트레이 아이콘으로 남아 계속 실행될 수 있습니다. 트레이 아이콘을 누르면 창이 다시 열립니다.</p>
+          <p className="muted">나중에 설정 → 화면에서 바꿀 수 있습니다.</p>
+          <div className="dialog-actions">
+            <button
+              onClick={() => {
+                setClosing(false);
+                call("CloseTo", false);
+              }}
+            >
+              완전히 종료
+            </button>
+            <button
+              className="primary"
+              onClick={() => {
+                setClosing(false);
+                call("CloseTo", true);
+              }}
+            >
+              트레이에 남기기
+            </button>
+          </div>
+        </Dialog>
+      )}
       {choosing && (
         <EngineDialog
           onClose={() => setChoosing(false)}

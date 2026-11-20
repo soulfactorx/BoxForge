@@ -13,6 +13,7 @@ import (
 
 	"github.com/soulfactorx/boxforge/internal/clirunner"
 	"github.com/soulfactorx/boxforge/internal/engine"
+	"github.com/soulfactorx/boxforge/internal/engines"
 	"github.com/soulfactorx/boxforge/internal/update"
 	"github.com/soulfactorx/boxforge/internal/version"
 )
@@ -98,6 +99,7 @@ func (a *App) Restart() error {
 		return err
 	}
 	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), "BOXFORGE_RESTARTED=1")
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -223,4 +225,63 @@ func (a *App) PickCertificate() (string, error) {
 		return "", fmt.Errorf("no file dialog here: type the path")
 	}
 	return certPicker()
+}
+
+// ---- tray
+
+// What the desktop shell gives for the tray: whether there is one, and how
+// to hide the window.
+var (
+	trayThere bool
+	hide      func()
+)
+
+// SetTray tells the app whether BoxForge has a tray icon, and how to hide
+// its window.
+func SetTray(there bool, hideWindow func()) { trayThere, hide = there, hideWindow }
+
+// TraySettings is what the settings page shows about the tray.
+type TraySettings struct {
+	Available bool `json:"available"`
+	Close     bool `json:"close"` // closing the window keeps the app in the tray
+}
+
+// Tray returns the tray settings.
+func (a *App) Tray() TraySettings {
+	return TraySettings{Available: trayThere, Close: engines.Setting("tray.close") != "off"}
+}
+
+// SetCloseToTray sets whether closing the window keeps the app in the tray.
+func (a *App) SetCloseToTray(on bool) error {
+	return engines.SetSetting("tray.close", map[bool]string{true: "on", false: "off"}[on])
+}
+
+// Closing is asked when the window is being closed. True means the app
+// stays: the window went to the tray, or, the first time, the page is
+// asking the user which they want ("closing" event).
+func (a *App) Closing() bool {
+	if !trayThere || hide == nil || engines.Setting("tray.close") == "off" {
+		return false
+	}
+	if engines.Setting("tray.told") == "" {
+		a.emit("closing", nil)
+		return true
+	}
+	hide()
+	return true
+}
+
+// CloseTo answers the first-time question: stay in the tray, or quit, now
+// and from here on.
+func (a *App) CloseTo(tray bool) error {
+	_ = engines.SetSetting("tray.told", "yes")
+	if err := a.SetCloseToTray(tray); err != nil {
+		return err
+	}
+	if tray {
+		hide()
+	} else if quit != nil {
+		quit()
+	}
+	return nil
 }

@@ -32,6 +32,7 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
   const [servers, setServers] = useState<string[]>([]);
   const [login, setLogin] = useState<{ server: string; user: string; password: string } | null>(null);
   const [note, setNote] = useState("");
+  const [tray, setTray] = useState<{ available: boolean; close: boolean } | null>(null);
   const [net, setNet] = useState<{ proxy: string; noProxy: string; canEngine: boolean; keep: boolean } | null>(null);
   const [proxy, setProxy] = useState("");
   const [noProxy, setNoProxy] = useState("");
@@ -84,6 +85,7 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
     call<string>("Version").then(setVersion, () => {});
     loadServers();
     loadNet();
+    call<{ available: boolean; close: boolean }>("Tray").then(setTray, () => {});
   }, []);
 
   const check = async () => {
@@ -128,6 +130,24 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
             ))}
           </div>
         </div>
+        {tray?.available && (
+          <label className="setting">
+            <span>
+              <strong>창을 닫아도 트레이에서 계속 실행</strong>
+              <span className="sub">닫기(X)를 눌러도 BoxForge가 꺼지지 않고 작업 표시줄의 트레이 아이콘으로 남습니다. 아이콘을 누르면 다시 열리고, 아이콘 메뉴의 "종료"로 완전히 끕니다.</span>
+            </span>
+            <input
+              type="checkbox"
+              className="switch"
+              aria-label="창을 닫아도 트레이에서 계속 실행"
+              checked={tray.close}
+              onChange={(e) => {
+                setTray({ ...tray, close: e.target.checked });
+                call("SetCloseToTray", e.target.checked);
+              }}
+            />
+          </label>
+        )}
       </div>
 
       <div className="panel" data-testid="update-panel">
