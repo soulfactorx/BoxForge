@@ -12,6 +12,13 @@ interface Props {
   onOpen: (containerId: string) => void;
 }
 
+interface Target {
+  id: string;
+  kind: string;
+  label: string;
+  distro: string;
+}
+
 type Filter = "all" | "used" | "unused";
 type SortKey = "name" | "size" | "created";
 
@@ -34,6 +41,47 @@ export default function Images({ images, containers, run, onRun, onOpen }: Props
   const [tagging, setTagging] = useState<{ row: Row; draft: string } | null>(null);
   const [pruning, setPruning] = useState(false);
   const [note, setNote] = useState("");
+  const [copying, setCopying] = useState<{ row: Row; targets: Target[] | null; target: string; busy: boolean; done: number; error: string } | null>(null);
+
+  useEffect(
+    () =>
+      on("copy", (c: { ref: string; done: number }) => setCopying((cur) => (cur && cur.busy && cur.row.ref === c.ref ? { ...cur, done: c.done } : cur))),
+    [],
+  );
+
+  const openCopy = async (row: Row) => {
+    setCopying({ row, targets: null, target: "", busy: false, done: 0, error: "" });
+    try {
+      const e = await call<{ current: string; targets: Target[] }>("Engines");
+      const others = (e.targets ?? []).filter((t) => t.id !== e.current);
+      setCopying((cur) => cur && { ...cur, targets: others, target: others[0]?.id ?? "" });
+    } catch (err: any) {
+      setCopying((cur) => cur && { ...cur, targets: [], error: err.message });
+    }
+  };
+
+  const confirmCopy = async () => {
+    if (!copying || !copying.target) return;
+    const { row, target, targets } = copying;
+    const t = targets?.find((x) => x.id === target);
+    const into = t?.kind === "wsl" ? `wsl -d ${t.distro} docker load` : t?.kind === "context" ? `docker --context ${target.slice(8)} load` : "docker --context default load";
+    setCopying({ ...copying, busy: true, done: 0, error: "" });
+    let error = "";
+    const ok = await run(`docker save ${row.ref} | ${into}`, async () => {
+      try {
+        await call("CopyImage", row.ref, target);
+      } catch (e: any) {
+        error = e.message;
+        throw e;
+      }
+    });
+    if (ok) {
+      setCopying(null);
+      setNote(`${row.ref} 이미지를 "${t?.label}"(으)로 복사했습니다.`);
+    } else {
+      setCopying((cur) => cur && { ...cur, busy: false, error });
+    }
+  };
 
   useEffect(() => on("pull", (p: PullState) => setPull(p.done ? null : p)), []);
 
@@ -225,6 +273,7 @@ export default function Images({ images, containers, run, onRun, onOpen }: Props
                   {r.ref && <IconButton icon="play" label="이 이미지로 컨테이너 실행" tone="go" onClick={() => onRun(r.ref)} />}
                   {r.ref && <IconButton icon="download" label="다시 받기 (새 버전 확인)" disabled={!!pull} onClick={() => doPull(r.ref)} />}
                   <IconButton icon="tag" label="태그 추가" onClick={() => setTagging({ row: r, draft: "" })} />
+                  {r.ref && <IconButton icon="send" label="다른 엔진으로 복사" onClick={() => openCopy(r)} />}
                   <IconButton icon="trash" label="삭제" tone="danger" onClick={() => setRemoving(r)} />
                 </td>
               </tr>
@@ -285,6 +334,46 @@ export default function Images({ images, containers, run, onRun, onOpen }: Props
               </button>
             </div>
           </form>
+        </Dialog>
+      )}
+
+      {copying && (
+        <Dialog title="다른 엔진으로 복사" onClose={copying.busy ? () => {} : () => setCopying(null)}>
+          <p>
+            <strong>{copying.row.ref}</strong> 이미지({bytes(copying.row.im.size)})를 다른 엔진에도 넣습니다. 지금 엔진의 이미지는 그대로 남습니다.
+          </p>
+          {copying.targets === null ? (
+            <p className="muted">엔진을 찾는 중…</p>
+          ) : copying.targets.length === 0 ? (
+            <p className="warn">복사할 다른 엔진이 없습니다. 엔진이 하나뿐입니다.</p>
+          ) : (
+            <select className="field" aria-label="복사할 엔진" value={copying.target} disabled={copying.busy} onChange={(e) => setCopying({ ...copying, target: e.target.value })}>
+              {copying.targets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          )}
+          {copying.busy && (
+            <div className="pull-progress" data-testid="copy-progress">
+              <span>보내는 중 · {bytes(copying.done)}</span>
+              <Progress percent={-1} />
+            </div>
+          )}
+          {copying.error && (
+            <p className="warn" role="alert">
+              {copying.error}
+            </p>
+          )}
+          <div className="dialog-actions">
+            <button onClick={() => setCopying(null)} disabled={copying.busy}>
+              취소
+            </button>
+            <button className="primary" disabled={copying.busy || !copying.target} onClick={confirmCopy}>
+              {copying.busy ? "복사하는 중…" : "복사"}
+            </button>
+          </div>
         </Dialog>
       )}
 

@@ -21,6 +21,7 @@ export interface SetupStatus {
   done: number;
   total: number;
   log: string[] | null;
+  flavors: { id: string; label: string; note: string }[] | null;
 }
 
 const mark: Record<Step["state"], string> = { todo: "○", active: "", done: "✔", error: "✖" };
@@ -29,6 +30,8 @@ const mark: Record<Step["state"], string> = { todo: "○", active: "", done: "�
 export default function SetupWizard({ onClose, onInstalled }: { onClose: () => void; onInstalled: () => void }) {
   const [st, setSt] = useState<SetupStatus | null>(null);
   const [switching, setSwitching] = useState("");
+  const [flavor, setFlavor] = useState("ubuntu");
+  const [source, setSource] = useState("");
   const told = useRef(false);
 
   useEffect(() => {
@@ -81,6 +84,29 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
           ))}
         </ol>
       )}
+      {st?.supported && !st.running && !st.installed && st.steps.find((s) => s.id === "distro")?.state !== "done" && (
+        <fieldset className="flavors">
+          <legend>어떤 Linux에 설치할까요?</legend>
+          {st.flavors?.map((f) => (
+            <label key={f.id} className={"engine-option" + (flavor === f.id ? " on" : "")} data-testid={`flavor-${f.id}`}>
+              <input type="radio" name="flavor" checked={flavor === f.id} onChange={() => setFlavor(f.id)} />
+              <span>
+                <strong>{f.label}</strong>
+                <span className="sub">{f.note}</span>
+                {f.id === "custom" && flavor === "custom" && (
+                  <input
+                    className="field"
+                    aria-label="루트 파일시스템의 경로나 주소"
+                    placeholder="예: C:\Downloads\debian-rootfs.tar.gz 또는 https://…"
+                    value={source}
+                    onChange={(e) => setSource(e.target.value)}
+                  />
+                )}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      )}
       {st?.needsRestart && (
         <p className="note-box" role="status">
           WSL을 설치했습니다. <strong>Windows를 다시 시작</strong>한 뒤 BoxForge를 열고 이 창에서 "설치 계속"을 누르면 이어서 진행합니다.
@@ -105,7 +131,7 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
           <button onClick={onClose}>닫기</button>
         )}
         {st?.supported && !st.installed && (
-          <button className="primary" disabled={st.running} onClick={() => call("SetupStart")}>
+          <button className="primary" disabled={st.running || (flavor === "custom" && !source.trim())} onClick={() => call("SetupStart", { flavor, source })}>
             {st.running ? "설치하는 중…" : st.error || st.needsRestart ? "설치 계속" : "설치 시작"}
           </button>
         )}

@@ -855,8 +855,9 @@ func (a *App) SetSetting(key, value string) error { return engines.SetSetting(ke
 // how far an installation has come. Progress arrives as "setup" events.
 func (a *App) SetupStatus() provision.Status { return a.setup.Status() }
 
-// SetupStart begins installing an engine in the background.
-func (a *App) SetupStart() bool { return a.setup.Start() }
+// SetupStart begins installing an engine in the background, into the
+// Linux the options choose.
+func (a *App) SetupStart(o provision.Options) bool { return a.setup.Start(o) }
 
 // SetupCancel stops the installation under way.
 func (a *App) SetupCancel() { a.setup.Cancel() }
@@ -875,4 +876,106 @@ func (a *App) RemoveBoxForgeEngine() error {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
 	return provision.Remove(ctx)
+}
+
+// CopyState is the payload of a "copy" event: bytes of an image sent to
+// another engine so far.
+type CopyState struct {
+	Ref  string `json:"ref"`
+	Done int64  `json:"done"`
+}
+
+// counting reports how much has been read through it, a few times a second.
+type counting struct {
+	r    io.Reader
+	n    int64
+	last time.Time
+	tell func(int64)
+}
+
+func (c *counting) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	if time.Since(c.last) > 200*time.Millisecond || err != nil {
+		c.last = time.Now()
+		c.tell(c.n)
+	}
+	return n, err
+}
+
+// CopyImage sends an image from the engine in use to another one, as
+// `docker save | docker load` across the two does. Progress arrives as
+// "copy" events.
+func (a *App) CopyImage(ref, targetID string) error {
+	a.emu.RLock()
+	current := a.target.ID
+	a.emu.RUnlock()
+	if targetID == current {
+		return fmt.Errorf("that is the engine the image is already on")
+	}
+	t := engines.Find(targetID)
+	if t.ID != targetID {
+		return fmt.Errorf("that engine is no longer in the list")
+	}
+	dst, err := connect(t)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
+	defer cancel()
+	// Ask the target first: better to learn now that it is not running
+	// than after the source has packed the image.
+	if _, err := dst.Info(ctx); err != nil {
+		return fmt.Errorf("the other engine does not answer: %w", err)
+	}
+	rc, err := a.eng().Images().Save(ctx, ref)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	return dst.Images().Load(ctx, &counting{r: rc, tell: func(n int64) {
+		a.emit("copy", CopyState{Ref: ref, Done: n})
+	}})
+}
+
+// EngineLabel says in a few words which engine is in use.
+func (a *App) EngineLabel() string {
+	a.emu.RLock()
+	defer a.emu.RUnlock()
+	return engines.Describe(a.target)
+}
+
+// MemoryUsed adds up the memory the running containers use right now.
+func (a *App) MemoryUsed() int64 {
+	rt := a.eng()
+	var ids []string
+	for _, c := range a.mirror().Containers() {
+		if c.State == "running" {
+			ids = append(ids, c.ID)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		total int64
+		slots = make(chan struct{}, 8) // at most this many asked at a time
+	)
+	for _, id := range ids {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			if s, err := rt.Containers().StatsOnce(ctx, id); err == nil {
+				mu.Lock()
+				total += s.MemUsed
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return total
 }

@@ -357,6 +357,44 @@ func (s *statsSample) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// reading turns one of the engine's samples into ours.
+func (s *statsSample) reading() engine.Stats {
+	out := engine.Stats{MemLimit: int64(s.MemoryStats.Limit)}
+	// As the docker CLI computes them: the container's share of the
+	// CPU time that passed, times the CPUs; memory without the page
+	// cache the kernel can take back.
+	cpu := float64(s.CPUStats.CPUUsage.TotalUsage) - float64(s.PreCPUStats.CPUUsage.TotalUsage)
+	sys := float64(s.CPUStats.SystemUsage) - float64(s.PreCPUStats.SystemUsage)
+	if cpu > 0 && sys > 0 && s.PreCPUStats.SystemUsage > 0 {
+		out.CPU = cpu / sys * float64(max(s.CPUStats.OnlineCPUs, 1)) * 100
+	}
+	cache := s.MemoryStats.Stats["inactive_file"]
+	if cache == 0 {
+		cache = s.MemoryStats.Stats["total_inactive_file"]
+	}
+	if cache < s.MemoryStats.Usage {
+		out.MemUsed = int64(s.MemoryStats.Usage - cache)
+	}
+	for _, n := range s.Networks {
+		out.NetRx += int64(n.RxBytes)
+		out.NetTx += int64(n.TxBytes)
+	}
+	return out
+}
+
+func (c containers) StatsOnce(ctx context.Context, id string) (engine.Stats, error) {
+	res, err := c.cli.ContainerStatsOneShot(ctx, id)
+	if err != nil {
+		return engine.Stats{}, err
+	}
+	defer res.Body.Close()
+	var s statsSample
+	if err := json.NewDecoder(res.Body).Decode(&s); err != nil {
+		return engine.Stats{}, err
+	}
+	return s.reading(), nil
+}
+
 func (c containers) Stats(ctx context.Context, id string, each func(engine.Stats)) error {
 	res, err := c.cli.ContainerStats(ctx, id, true)
 	if err != nil {
@@ -372,27 +410,7 @@ func (c containers) Stats(ctx context.Context, id string, each func(engine.Stats
 			}
 			return err
 		}
-		out := engine.Stats{MemLimit: int64(s.MemoryStats.Limit)}
-		// As the docker CLI computes them: the container's share of the
-		// CPU time that passed, times the CPUs; memory without the page
-		// cache the kernel can take back.
-		cpu := float64(s.CPUStats.CPUUsage.TotalUsage) - float64(s.PreCPUStats.CPUUsage.TotalUsage)
-		sys := float64(s.CPUStats.SystemUsage) - float64(s.PreCPUStats.SystemUsage)
-		if cpu > 0 && sys > 0 && s.PreCPUStats.SystemUsage > 0 {
-			out.CPU = cpu / sys * float64(max(s.CPUStats.OnlineCPUs, 1)) * 100
-		}
-		cache := s.MemoryStats.Stats["inactive_file"]
-		if cache == 0 {
-			cache = s.MemoryStats.Stats["total_inactive_file"]
-		}
-		if cache < s.MemoryStats.Usage {
-			out.MemUsed = int64(s.MemoryStats.Usage - cache)
-		}
-		for _, n := range s.Networks {
-			out.NetRx += int64(n.RxBytes)
-			out.NetTx += int64(n.TxBytes)
-		}
-		each(out)
+		each(s.reading())
 	}
 }
 
@@ -486,6 +504,34 @@ func (i images) Prune(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("prune images: %w", err)
 	}
 	return int64(rep.SpaceReclaimed), nil
+}
+
+func (i images) Save(ctx context.Context, ref string) (io.ReadCloser, error) {
+	return i.cli.ImageSave(ctx, []string{ref})
+}
+
+func (i images) Load(ctx context.Context, r io.Reader) error {
+	res, err := i.cli.ImageLoad(ctx, r)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	// The engine answers with progress lines; a failure is one of them.
+	dec := json.NewDecoder(res.Body)
+	for {
+		var m struct {
+			Error string `json:"error"`
+		}
+		if err := dec.Decode(&m); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if m.Error != "" {
+			return errors.New(m.Error)
+		}
+	}
 }
 
 type volumes struct{ cli *client.Client }

@@ -91,6 +91,21 @@ func currentContext() string {
 	return cfg.CurrentContext
 }
 
+// Describe says in a few words which engine a target is.
+func Describe(t Target) string {
+	if t.Kind != "default" {
+		return t.Label
+	}
+	// The default follows the docker command: say where that leads.
+	switch {
+	case os.Getenv("DOCKER_HOST") != "":
+		return "기본 엔진 (DOCKER_HOST)"
+	case currentContext() != "":
+		return "기본 엔진 (context: " + currentContext() + ")"
+	}
+	return "기본 엔진"
+}
+
 // DefaultHost is the address Default stands for; "" means the platform's
 // standard socket.
 func DefaultHost() string {

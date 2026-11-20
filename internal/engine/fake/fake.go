@@ -313,6 +313,10 @@ func (c containers) Stats(ctx context.Context, _ string, each func(engine.Stats)
 	}
 }
 
+func (c containers) StatsOnce(context.Context, string) (engine.Stats, error) {
+	return engine.Stats{MemUsed: 128 << 20, MemLimit: 2 << 30}, nil
+}
+
 type images struct{ r *Runtime }
 
 func (i images) List(context.Context) ([]engine.Image, error) {
@@ -409,6 +413,21 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func (i images) Save(_ context.Context, ref string) (io.ReadCloser, error) {
+	if !i.Exists(context.Background(), ref) {
+		return nil, fmt.Errorf("No such image: %s", ref)
+	}
+	return io.NopCloser(strings.NewReader("fake image " + ref)), nil
+}
+
+func (i images) Load(_ context.Context, r io.Reader) error {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	return i.Pull(context.Background(), strings.TrimPrefix(string(b), "fake image "), nil)
 }
 
 type volumes struct{ r *Runtime }

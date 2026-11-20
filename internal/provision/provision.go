@@ -54,56 +54,197 @@ type Status struct {
 	NeedsRestart bool     `json:"needsRestart"` // Windows must restart before the next step
 	Error        string   `json:"error"`
 	Steps        []Step   `json:"steps"`
+	Flavors      []Flavor `json:"flavors"`
 	Done         int64    `json:"done"`  // bytes downloaded so far
 	Total        int64    `json:"total"` // bytes to download; 0 while unknown
 	Log          []string `json:"log"`
 }
 
+// Flavor is a Linux the engine's distribution can be made from.
+type Flavor struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Note  string `json:"note"`
+}
+
+// Flavors are the choices offered. "custom" takes a root filesystem the
+// user names: a file on this PC or a URL.
+var Flavors = []Flavor{
+	{ID: "ubuntu", Label: "Ubuntu 24.04 LTS", Note: "가장 널리 쓰여 문제가 적습니다. 약 340MB를 내려받습니다."},
+	{ID: "alpine", Label: "Alpine Linux (최신 안정판)", Note: "아주 작고 빨리 설치됩니다. 약 4MB를 내려받습니다."},
+	{ID: "custom", Label: "다른 배포판 (직접 지정)", Note: "WSL용 루트 파일시스템(.tar, .tar.gz, .wsl)의 경로나 주소를 적습니다. Ubuntu · Debian · Alpine 계열이어야 Docker를 설치할 수 있습니다."},
+}
+
+// Options says which Linux to install into.
+type Options struct {
+	Flavor string `json:"flavor"`
+	Source string `json:"source"` // for "custom": a file path or an http(s) URL
+}
+
 var plan = []Step{
 	{ID: "wsl", Title: "WSL 2 준비"},
-	{ID: "download", Title: "Linux(Ubuntu 24.04) 내려받기"},
+	{ID: "download", Title: "Linux 내려받기"},
 	{ID: "distro", Title: "BoxForge 전용 Linux 만들기"},
 	{ID: "docker", Title: "Docker Engine 설치"},
 	{ID: "start", Title: "엔진 시작과 확인"},
 }
 
-// Where the root filesystem comes from: Ubuntu's own image server, which
-// publishes the checksums beside it. BOXFORGE_ROOTFS_URL names another
-// base for tests.
-func rootfsBase() string {
+// source is a root filesystem to import.
+type source struct {
+	url    string // "" when file is already on this PC
+	file   string // where it is, or is to be saved
+	sha256 string // "" when its publisher gives none to check against
+	keep   bool   // the user's own file: not ours to delete
+}
+
+// Where Ubuntu's root filesystem comes from: Ubuntu's own image server,
+// which publishes the checksums beside it. BOXFORGE_ROOTFS_URL names
+// another base for tests.
+func ubuntuBase() string {
 	if u := os.Getenv("BOXFORGE_ROOTFS_URL"); u != "" {
 		return strings.TrimRight(u, "/")
 	}
 	return "https://cloud-images.ubuntu.com/wsl/releases/24.04/current"
 }
 
-func rootfsName() string {
-	arch := "amd64"
-	if runtime.GOARCH == "arm64" {
-		arch = "arm64"
+// Alpine's release folder for this PC's kind of processor.
+func alpineBase() string {
+	if u := os.Getenv("BOXFORGE_ALPINE_URL"); u != "" {
+		return strings.TrimRight(u, "/")
 	}
-	return "ubuntu-noble-wsl-" + arch + "-24.04lts.rootfs.tar.gz"
+	arch := "x86_64"
+	if runtime.GOARCH == "arm64" {
+		arch = "aarch64"
+	}
+	return "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/" + arch
+}
+
+// resolve finds what to download for the chosen flavor.
+func resolve(ctx context.Context, o Options, dir string) (source, error) {
+	switch o.Flavor {
+	case "", "ubuntu":
+		arch := "amd64"
+		if runtime.GOARCH == "arm64" {
+			arch = "arm64"
+		}
+		name := "ubuntu-noble-wsl-" + arch + "-24.04lts.rootfs.tar.gz"
+		list, err := fetch(ctx, ubuntuBase()+"/SHA256SUMS")
+		if err != nil {
+			return source{}, fmt.Errorf("체크섬 목록을 받지 못했습니다: %w", err)
+		}
+		sum, err := findSum(strings.NewReader(list), name)
+		if err != nil {
+			return source{}, err
+		}
+		return source{url: ubuntuBase() + "/" + name, file: filepath.Join(dir, name), sha256: sum}, nil
+	case "alpine":
+		index, err := fetch(ctx, alpineBase()+"/latest-releases.yaml")
+		if err != nil {
+			return source{}, fmt.Errorf("Alpine의 배포 목록을 받지 못했습니다: %w", err)
+		}
+		name, sum, err := alpineRootfs(index)
+		if err != nil {
+			return source{}, err
+		}
+		return source{url: alpineBase() + "/" + name, file: filepath.Join(dir, name), sha256: sum}, nil
+	case "custom":
+		src := strings.TrimSpace(o.Source)
+		if src == "" {
+			return source{}, errors.New("루트 파일시스템의 경로나 주소를 적어 주세요.")
+		}
+		if strings.HasPrefix(src, "https://") || strings.HasPrefix(src, "http://") {
+			name := src[strings.LastIndex(src, "/")+1:]
+			if i := strings.IndexAny(name, "?#"); i >= 0 {
+				name = name[:i]
+			}
+			if name == "" {
+				name = "rootfs.tar.gz"
+			}
+			return source{url: src, file: filepath.Join(dir, name)}, nil
+		}
+		if st, err := os.Stat(src); err != nil || st.IsDir() {
+			return source{}, fmt.Errorf("%s 파일을 찾을 수 없습니다.", src)
+		}
+		return source{file: src, keep: true}, nil
+	}
+	return source{}, fmt.Errorf("unknown flavor %q", o.Flavor)
+}
+
+// alpineRootfs reads Alpine's latest-releases.yaml and returns the mini
+// root filesystem's file name and SHA-256.
+func alpineRootfs(index string) (name, sum string, err error) {
+	// The file is a list of blocks, one per download, each starting "-".
+	for _, block := range strings.Split("\n"+index, "\n-") {
+		if !strings.Contains(block, "flavor: alpine-minirootfs") {
+			continue
+		}
+		for _, line := range strings.Split(block, "\n") {
+			k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+			v = strings.Trim(strings.TrimSpace(v), `"'`)
+			switch {
+			case ok && k == "file":
+				name = v
+			case ok && k == "sha256":
+				sum = strings.ToLower(v)
+			}
+		}
+	}
+	if name == "" || len(sum) != 64 {
+		return "", "", errors.New("Alpine의 배포 목록에서 루트 파일시스템을 찾지 못했습니다.")
+	}
+	return name, sum, nil
 }
 
 // The script that installs Docker's packages, run as root inside the
-// distribution. These are the steps of Docker's own instructions for Ubuntu.
+// distribution. It looks at which Linux it is in: Docker's own package
+// repository for Ubuntu and Debian (the steps of Docker's instructions),
+// Alpine's packages for Alpine.
 const installScript = `set -e
-export DEBIAN_FRONTEND=noninteractive
-echo "[1/5] 패키지 목록 갱신"
-apt-get update -qq
-apt-get install -y -qq ca-certificates curl
-install -m 0755 -d /etc/apt/keyrings
-echo "[2/5] Docker 저장소 등록"
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-chmod a+r /etc/apt/keyrings/docker.asc
 . /etc/os-release
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-$VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
-apt-get update -qq
-echo "[3/5] Docker Engine 내려받아 설치"
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-echo "[4/5] 자동 시작 설정"
-if ! grep -q '^systemd *= *true' /etc/wsl.conf 2>/dev/null; then printf '\n[boot]\nsystemd=true\n' >> /etc/wsl.conf; fi
-systemctl enable docker >/dev/null 2>&1 || true
+case "$ID" in
+ubuntu|debian)
+  export DEBIAN_FRONTEND=noninteractive
+  echo "[1/5] 패키지 목록 갱신"
+  apt-get update -qq
+  apt-get install -y -qq ca-certificates curl
+  install -m 0755 -d /etc/apt/keyrings
+  echo "[2/5] Docker 저장소 등록"
+  curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$ID ${UBUNTU_CODENAME:-$VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+  apt-get update -qq
+  echo "[3/5] Docker Engine 내려받아 설치"
+  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  echo "[4/5] 자동 시작 설정"
+  if ! grep -q '^systemd *= *true' /etc/wsl.conf 2>/dev/null; then printf '\n[boot]\nsystemd=true\n' >> /etc/wsl.conf; fi
+  systemctl enable docker >/dev/null 2>&1 || true
+  ;;
+alpine)
+  echo "[1/5] 패키지 목록 갱신"
+  # Docker is in Alpine's community repository, beside main.
+  if ! grep -q '/community' /etc/apk/repositories; then sed -n 's#/main$#/community#p' /etc/apk/repositories >> /etc/apk/repositories; fi
+  apk update -q
+  echo "[2/5] Alpine 저장소 사용"
+  echo "[3/5] Docker Engine 내려받아 설치"
+  apk add --no-cache docker docker-cli-compose docker-cli-buildx
+  echo "[4/5] 자동 시작 설정"
+  # No systemd here: WSL runs this command each time it starts the distribution.
+  if ! grep -q 'boxforge-start' /etc/wsl.conf 2>/dev/null; then printf '\n[boot]\ncommand = /usr/local/bin/boxforge-start\n' >> /etc/wsl.conf; fi
+  ;;
+*)
+  echo "이 배포판($ID)에는 Docker를 자동으로 설치하지 못합니다. Ubuntu, Debian, Alpine 계열을 지원합니다." >&2
+  exit 4
+  ;;
+esac
+# Starts the engine where there is no systemd to do it.
+mkdir -p /usr/local/bin
+cat > /usr/local/bin/boxforge-start <<'EOS'
+#!/bin/sh
+pgrep -x dockerd >/dev/null 2>&1 && exit 0
+mkdir -p /var/log
+nohup dockerd >/var/log/dockerd.log 2>&1 &
+EOS
+chmod 755 /usr/local/bin/boxforge-start
 echo "[5/5] 설치 완료"
 `
 
@@ -212,7 +353,7 @@ func (in *Installer) Status() Status {
 		return in.snapshot()
 	}
 	ok, why := supported()
-	st := Status{Supported: ok, Reason: why, Steps: append([]Step{}, plan...), NeedsRestart: in.st.NeedsRestart, Error: in.st.Error, Log: in.st.Log}
+	st := Status{Supported: ok, Reason: why, Steps: append([]Step{}, plan...), NeedsRestart: in.st.NeedsRestart, Error: in.st.Error, Log: in.st.Log, Flavors: Flavors}
 	for i := range st.Steps {
 		st.Steps[i].State = "todo"
 	}
@@ -282,7 +423,7 @@ func (in *Installer) Cancel() {
 
 // Start begins the installation in the background. It returns false when
 // one is already running or this PC is not supported.
-func (in *Installer) Start() bool {
+func (in *Installer) Start(o Options) bool {
 	in.mu.Lock()
 	if ok, _ := supported(); !ok || in.st.Running {
 		in.mu.Unlock()
@@ -290,7 +431,7 @@ func (in *Installer) Start() bool {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	in.cancel = cancel
-	in.st = Status{Supported: true, Running: true, Steps: append([]Step{}, plan...)}
+	in.st = Status{Supported: true, Running: true, Steps: append([]Step{}, plan...), Flavors: Flavors}
 	for i := range in.st.Steps {
 		in.st.Steps[i].State = "todo"
 	}
@@ -298,7 +439,7 @@ func (in *Installer) Start() bool {
 
 	go func() {
 		defer cancel()
-		active, err := in.run(ctx)
+		active, err := in.run(ctx, o)
 		in.update(func(st *Status) {
 			st.Running = false
 			st.Done, st.Total = 0, 0
@@ -323,7 +464,7 @@ func (in *Installer) Start() bool {
 }
 
 // run does the steps in order and returns the one it stopped in.
-func (in *Installer) run(ctx context.Context) (string, error) {
+func (in *Installer) run(ctx context.Context, o Options) (string, error) {
 	// 1. WSL itself.
 	in.step("wsl", "active", "확인하는 중")
 	if !hasWSL(ctx) {
@@ -350,12 +491,26 @@ func (in *Installer) run(ctx context.Context) (string, error) {
 		in.step("distro", "done", "이미 있습니다")
 	} else {
 		// 2. The root filesystem, checked against the publisher's checksum.
-		in.step("download", "active", "")
-		file := filepath.Join(dir, rootfsName())
-		if err := in.download(ctx, file); err != nil {
+		in.step("download", "active", "무엇을 받을지 확인하는 중")
+		src, err := resolve(ctx, o, dir)
+		if err != nil {
 			return "download", err
 		}
-		in.step("download", "done", "받은 파일이 원본과 같은지 확인했습니다")
+		file := src.file
+		switch {
+		case src.url == "":
+			in.step("download", "done", "이 PC의 파일을 씁니다: "+file)
+		default:
+			in.step("download", "active", filepath.Base(file))
+			if err := in.download(ctx, src); err != nil {
+				return "download", err
+			}
+			if src.sha256 != "" {
+				in.step("download", "done", "받은 파일이 원본과 같은지 확인했습니다")
+			} else {
+				in.step("download", "done", "받았습니다. 이 주소는 대조할 체크섬이 없어 확인하지 못했습니다")
+			}
+		}
 
 		// 3. The distribution, beside and apart from the user's own.
 		in.step("distro", "active", "가상 디스크를 만드는 중")
@@ -363,7 +518,9 @@ func (in *Installer) run(ctx context.Context) (string, error) {
 		if _, err := wsl(ctx, "--import", Distro, filepath.Join(dir, "disk"), file, "--version", "2"); err != nil {
 			return "distro", fmt.Errorf("Linux를 만들지 못했습니다: %w", err)
 		}
-		_ = os.Remove(file)
+		if !src.keep {
+			_ = os.Remove(file)
+		}
 		in.step("distro", "done", "")
 	}
 
@@ -395,8 +552,10 @@ func (in *Installer) run(ctx context.Context) (string, error) {
 	in.step("start", "active", "엔진을 시작하는 중")
 	_, _ = wsl(ctx, "--terminate", Distro)
 	if _, err := inDistro(ctx, "systemctl", "start", "docker"); err != nil {
-		in.logf("systemctl: %v", err)
-		_, _ = inDistro(ctx, "service", "docker", "start")
+		// No systemd (Alpine): WSL's boot command has started the engine,
+		// or this does.
+		in.logf("systemd 없이 엔진을 시작합니다")
+		_, _ = inDistro(ctx, "/usr/local/bin/boxforge-start")
 	}
 	deadline := time.Now().Add(90 * time.Second)
 	for !engineAnswers(ctx) {
@@ -412,20 +571,18 @@ func (in *Installer) run(ctx context.Context) (string, error) {
 	return "", nil
 }
 
-// download fetches the root filesystem to file and checks its SHA-256
-// against the publisher's list.
-func (in *Installer) download(ctx context.Context, file string) error {
-	name := rootfsName()
-	want, err := checksum(ctx, rootfsBase()+"/SHA256SUMS", name)
-	if err != nil {
-		return fmt.Errorf("체크섬 목록을 받지 못했습니다: %w", err)
-	}
+// download fetches the root filesystem and, when its publisher gives a
+// SHA-256, checks it.
+func (in *Installer) download(ctx context.Context, src source) error {
+	file, want := src.file, src.sha256
 	// One already here and intact (a run interrupted after it) is kept.
-	if sum, err := sha256File(file); err == nil && sum == want {
-		in.logf("이미 받아 둔 파일을 씁니다")
-		return nil
+	if want != "" {
+		if sum, err := sha256File(file); err == nil && sum == want {
+			in.logf("이미 받아 둔 파일을 씁니다")
+			return nil
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", rootfsBase()+"/"+name, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", src.url, nil)
 	if err != nil {
 		return err
 	}
@@ -477,15 +634,15 @@ func (in *Installer) download(ctx context.Context, file string) error {
 		return err
 	}
 	in.update(func(st *Status) { st.Done = done })
-	if got := hex.EncodeToString(hash.Sum(nil)); got != want {
+	if got := hex.EncodeToString(hash.Sum(nil)); want != "" && got != want {
 		os.Remove(tmp)
 		return errors.New("받은 파일이 원본과 다릅니다(체크섬 불일치). 네트워크가 내용을 바꿨을 수 있습니다. 다시 시도해 주세요.")
 	}
 	return os.Rename(tmp, file)
 }
 
-// checksum reads a SHA256SUMS list and returns the sum for name.
-func checksum(ctx context.Context, url, name string) (string, error) {
+// fetch returns a small text file from the web.
+func fetch(ctx context.Context, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", err
@@ -498,7 +655,8 @@ func checksum(ctx context.Context, url, name string) (string, error) {
 	if res.StatusCode != 200 {
 		return "", fmt.Errorf("the server answered %s", res.Status)
 	}
-	return findSum(io.LimitReader(res.Body, 1<<20), name)
+	b, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	return string(b), err
 }
 
 // findSum finds name's line in a SHA256SUMS list: "<hex>  name" or "<hex> *name".

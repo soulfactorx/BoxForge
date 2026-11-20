@@ -199,6 +199,9 @@ type ContainerService interface {
 	// Stats calls each with a new sample about once a second until ctx
 	// ends or the container stops.
 	Stats(ctx context.Context, id string, each func(Stats)) error
+	// StatsOnce returns one sample at once. Its CPU is not filled in:
+	// that takes two samples.
+	StatsOnce(ctx context.Context, id string) (Stats, error)
 }
 
 // VolumeService is the volume part of a Runtime.
@@ -252,6 +255,10 @@ type ImageService interface {
 	Tag(ctx context.Context, source, target string) error
 	// Prune deletes untagged images no container uses, and returns the bytes freed.
 	Prune(ctx context.Context) (int64, error)
+	// Save returns the image as a tar stream, as `docker save` writes it.
+	Save(ctx context.Context, ref string) (io.ReadCloser, error)
+	// Load takes in such a stream, as `docker load` does.
+	Load(ctx context.Context, r io.Reader) error
 }
 
 // Labels Compose puts on the containers it creates.

@@ -33,3 +33,40 @@ func TestDecodeUTF16(t *testing.T) {
 		t.Errorf("decode = %q", got)
 	}
 }
+
+func TestAlpineRootfs(t *testing.T) {
+	index := `---
+-
+  title: "Standard"
+  flavor: alpine-standard
+  file: alpine-standard-3.22.1-x86_64.iso
+  sha256: 1111111111111111111111111111111111111111111111111111111111111111
+-
+  title: "Mini root filesystem"
+  desc: |
+    Minimal root filesystem.
+    For use in containers
+    and minimal chroots.
+  branch: v3.22
+  arch: x86_64
+  version: 3.22.1
+  flavor: alpine-minirootfs
+  file: alpine-minirootfs-3.22.1-x86_64.tar.gz
+  iso: alpine-minirootfs-3.22.1-x86_64.tar.gz
+  size: 3464252
+  sha256: 2A2ACE7E1E3F0EBA4B0D4A9E7F6FDF50C4D2B4AB3D1D2D0E2C8A4F8C6E6F1A9B
+  sha512: abcdef
+-
+  title: "Virtual"
+  flavor: alpine-virt
+  file: alpine-virt-3.22.1-x86_64.iso
+  sha256: 3333333333333333333333333333333333333333333333333333333333333333
+`
+	name, sum, err := alpineRootfs(index)
+	if err != nil || name != "alpine-minirootfs-3.22.1-x86_64.tar.gz" || sum != "2a2ace7e1e3f0eba4b0d4a9e7f6fdf50c4d2b4ab3d1d2d0e2c8a4f8c6e6f1a9b" {
+		t.Errorf("got %q %q %v", name, sum, err)
+	}
+	if _, _, err := alpineRootfs("-\n  flavor: alpine-standard\n  file: x.iso\n"); err == nil {
+		t.Error("no error when the list has no mini root filesystem")
+	}
+}

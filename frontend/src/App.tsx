@@ -9,12 +9,15 @@ import Detail, { type Tab } from "./Detail";
 import EngineDialog from "./EngineDialog";
 import Images from "./Images";
 import RunDialog from "./RunDialog";
+import Topology from "./Topology";
+import { bytes } from "./format";
 import { Icon } from "./ui";
 
-type Page = "containers" | "images" | "volumes" | "networks" | "compose" | "builds";
+type Page = "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds";
 
 const pageCommand: Record<Page, string> = {
   containers: "docker ps -a --size",
+  map: "docker ps -a && docker network ls && docker volume ls",
   compose: "docker compose ls -a",
   images: "docker images",
   volumes: "docker volume ls",
@@ -39,6 +42,8 @@ export default function App() {
   const [history, setHistory] = useState<{ cmd: string; at: number }[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [choosing, setChoosing] = useState(false);
+  const [engineLabel, setEngineLabel] = useState("");
+  const [memUsed, setMemUsed] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
   const cli = history.length ? history[history.length - 1].cmd : "";
@@ -78,6 +83,25 @@ export default function App() {
 
   // Every command BoxForge's work stands for goes through here: the newest
   // shows in the status bar, all of them in the history panel.
+  // Which engine this is, asked again whenever the connection changes.
+  useEffect(() => {
+    call<string>("EngineLabel").then(setEngineLabel, () => {});
+  }, [engine.connected, engine.info?.name]);
+
+  // What the running containers use, looked at every few seconds.
+  const runningCount = containers.filter((c) => c.state === "running").length;
+  useEffect(() => {
+    if (!engine.connected) return setMemUsed(null);
+    let stale = false;
+    const ask = () => call<number>("MemoryUsed").then((n) => !stale && setMemUsed(n), () => {});
+    ask();
+    const timer = setInterval(ask, 5000);
+    return () => {
+      stale = true;
+      clearInterval(timer);
+    };
+  }, [engine.connected, engineLabel, runningCount]);
+
   const showCli = useCallback((command: string) => {
     setCopied("");
     setHistory((h) => (h.length && h[h.length - 1].cmd === command ? h : h.concat({ cmd: command, at: Date.now() }).slice(-200)));
@@ -122,6 +146,10 @@ export default function App() {
         <div className="brand">BoxForge</div>
         <nav>
           {nav("containers", "box", "컨테이너", shownCount)}
+          <button className={"nav-item" + (page === "map" ? " active" : "")} onClick={() => setPage("map")} data-testid="nav-map">
+            <Icon name="map" />
+            <span>관계도</span>
+          </button>
           {nav("compose", "compose", "Compose", new Set(containers.filter((c) => c.project).map((c) => c.project)).size)}
           {nav("images", "layers", "이미지", images.length)}
           {nav("volumes", "volume", "볼륨", volumes.length)}
@@ -137,6 +165,11 @@ export default function App() {
             <strong>{info ? `${info.runtime} ${info.version}` : "엔진"}</strong>
             <span className="muted">{engine.connected ? "실행 중" : "연결 안 됨"}</span>
           </div>
+          {engineLabel && (
+            <div className="engine-name" data-testid="engine-name">
+              {engineLabel}
+            </div>
+          )}
           {info && engine.connected && (
             <dl>
               <dt>실행 중</dt>
@@ -145,9 +178,16 @@ export default function App() {
               </dd>
               <dt>CPU</dt>
               <dd>{info.cpus}개</dd>
-              <dt>메모리</dt>
-              <dd>{gib(info.memTotal)}</dd>
+              <dt title="실행 중인 컨테이너들이 지금 쓰는 메모리 / 엔진이 쓸 수 있는 메모리">메모리</dt>
+              <dd data-testid="engine-memory">
+                {memUsed === null ? "…" : bytes(memUsed)} / {gib(info.memTotal)}
+              </dd>
             </dl>
+          )}
+          {info && engine.connected && memUsed !== null && info.memTotal > 0 && (
+            <div className="meter" role="img" aria-label={`메모리 ${Math.round((memUsed * 100) / info.memTotal)}% 사용`}>
+              <div style={{ width: `${Math.min(100, (memUsed * 100) / info.memTotal)}%` }} />
+            </div>
           )}
           <span className="engine-change">엔진 바꾸기</span>
         </button>
@@ -182,6 +222,15 @@ export default function App() {
         </div>
         {/* Kept alive while hidden: a build or a compose command goes on,
             and its form and output are still there on coming back. */}
+        {page === "map" && (
+          <Topology
+            containers={containers}
+            networks={networks}
+            volumes={volumes}
+            onOpen={(id) => setDetail({ id, tab: "overview" })}
+            onGo={(to) => setPage(to)}
+          />
+        )}
         <div hidden={page !== "builds"}>
           <Builds run={run} onRun={(image) => setRunning(image)} />
         </div>
@@ -211,6 +260,7 @@ export default function App() {
             setDetail(null);
             setSizes(null);
             showCli(command);
+            call<string>("EngineLabel").then(setEngineLabel, () => {});
           }}
         />
       )}
