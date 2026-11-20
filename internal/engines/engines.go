@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -23,8 +24,8 @@ import (
 
 // Target is one engine the user can choose.
 type Target struct {
-	ID     string `json:"id"`     // "default", "context:<name>", "wsl:<distro>"
-	Kind   string `json:"kind"`   // default, context, wsl
+	ID     string `json:"id"`     // "default", "context:<name>", "wsl:<distro>", "ssh:<user@host>", "podman:<n>"
+	Kind   string `json:"kind"`   // default, context, wsl, ssh, podman
 	Label  string `json:"label"`  // what the list shows
 	Host   string `json:"host"`   // the engine's address, for a context
 	Distro string `json:"distro"` // the WSL distribution, for wsl
@@ -173,6 +174,12 @@ func Discover() []Target {
 	for _, d := range Distros() {
 		out = append(out, Target{ID: "wsl:" + d, Kind: "wsl", Label: "WSL: " + d + " 안의 Docker", Distro: d})
 	}
+	for i, sock := range podmanSockets() {
+		out = append(out, Target{ID: fmt.Sprintf("podman:%d", i), Kind: "podman", Label: "Podman (Docker 호환, 실험적)", Host: sock})
+	}
+	for _, addr := range load().Remotes {
+		out = append(out, Target{ID: "ssh:" + addr, Kind: "ssh", Label: "원격(SSH): " + addr, Host: addr})
+	}
 	return out
 }
 
@@ -192,10 +199,94 @@ func InWSL(distro string, args ...string) (string, []string) {
 	return wslExe(), append([]string{"-d", distro, "-u", "root", "--"}, args...)
 }
 
-// Dialer returns the way to connect to a WSL target's engine.
+// podmanSockets finds Podman's Docker-compatible API on this PC.
+func podmanSockets() []string {
+	var out []string
+	if runtime.GOOS == "windows" {
+		for _, pipe := range []string{`\\.\pipe\podman-machine-default`} {
+			if _, err := os.Stat(pipe); err == nil {
+				out = append(out, "npipe://"+strings.ReplaceAll(pipe, `\`, "/"))
+			}
+		}
+		return out
+	}
+	candidates := []string{"/run/podman/podman.sock"}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		candidates = append([]string{filepath.Join(dir, "podman", "podman.sock")}, candidates...)
+	}
+	for _, sock := range candidates {
+		if st, err := os.Stat(sock); err == nil && st.Mode()&os.ModeSocket != 0 {
+			out = append(out, "unix://"+sock)
+		}
+	}
+	return out
+}
+
+// sshExe is the SSH client; BOXFORGE_SSH names a stand-in for tests.
+func sshExe() string {
+	if p := os.Getenv("BOXFORGE_SSH"); p != "" {
+		return p
+	}
+	return "ssh"
+}
+
+// A remote engine's address: user@host, with an optional :port. It starts
+// with a letter or digit, so it can never be read as an option of ssh.
+var remoteAddr = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*(:[0-9]{1,5})?$`)
+
+// SSHCommand is the command that runs args on a remote engine's machine.
+// It never asks for a password: sign-in is by key, as the docker command's
+// own ssh:// connections are.
+func SSHCommand(addr string, args ...string) (string, []string) {
+	host, port, _ := strings.Cut(addr, ":")
+	full := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
+	if port != "" {
+		full = append(full, "-p", port)
+	}
+	return sshExe(), append(append(full, host), args...)
+}
+
+// AddRemote remembers a remote engine reached over SSH.
+func AddRemote(addr string) error {
+	addr = strings.TrimSpace(strings.TrimPrefix(addr, "ssh://"))
+	if !remoteAddr.MatchString(addr) {
+		return fmt.Errorf("write the address as user@host or user@host:port")
+	}
+	c := load()
+	for _, have := range c.Remotes {
+		if have == addr {
+			return nil
+		}
+	}
+	c.Remotes = append(c.Remotes, addr)
+	sort.Strings(c.Remotes)
+	return store(c)
+}
+
+// RemoveRemote forgets a remote engine.
+func RemoveRemote(addr string) error {
+	c := load()
+	kept := c.Remotes[:0]
+	for _, have := range c.Remotes {
+		if have != addr {
+			kept = append(kept, have)
+		}
+	}
+	c.Remotes = kept
+	return store(c)
+}
+
+// Dialer returns the way to connect to an engine reached through a helper
+// command: one inside a WSL distribution, or on another machine over SSH.
 func (t Target) Dialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, _, _ string) (net.Conn, error) {
-		name, args := InWSL(t.Distro, "docker", "system", "dial-stdio")
+		var name string
+		var args []string
+		if t.Kind == "ssh" {
+			name, args = SSHCommand(t.Host, "docker", "system", "dial-stdio")
+		} else {
+			name, args = InWSL(t.Distro, "docker", "system", "dial-stdio")
+		}
 		return dialCommand(ctx, name, args...)
 	}
 }
@@ -230,6 +321,7 @@ func configFile() string {
 
 type config struct {
 	Engine   string            `json:"engine"`
+	Remotes  []string          `json:"remotes,omitempty"` // engines on other machines: user@host[:port]
 	Settings map[string]string `json:"settings,omitempty"`
 }
 

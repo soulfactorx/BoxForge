@@ -172,6 +172,7 @@ func (in *Installer) flavors() []Flavor {
 type Options struct {
 	Flavor string `json:"flavor"`
 	Source string `json:"source"` // for "custom": a file path or an http(s) URL
+	Proxy  string `json:"proxy"`  // downloads inside the distribution go through it; "" for none
 }
 
 var plan = []Step{
@@ -298,6 +299,8 @@ func alpineRootfs(index string) (name, sum string, err error) {
 // repository for Ubuntu and Debian (the steps of Docker's instructions),
 // Alpine's packages for Alpine.
 const installScript = `set -e
+# $1: a proxy to download through, when BoxForge was given one.
+if [ -n "$1" ]; then export http_proxy="$1" https_proxy="$1" HTTP_PROXY="$1" HTTPS_PROXY="$1"; fi
 . /etc/os-release
 case "$ID" in
 ubuntu|debian)
@@ -341,7 +344,12 @@ echo "[5/5] 설치 완료"
 // systemd. Without (Alpine) it puts a starter where WSL's boot command
 // finds it, runs it, and waits for the engine's socket; when the engine
 // does not come up it prints the end of the engine's own log, which says why.
-const startScript = `mkdir -p /usr/local/bin /var/log
+// starterFiles writes, inside the distribution, the two small programs
+// BoxForge keeps there: the one that starts the engine where there is no
+// systemd, and the one that keeps the distribution alive. Every script
+// that depends on them begins with this, so that a fix to them reaches a
+// distribution set up by an earlier version.
+const starterFiles = `mkdir -p /usr/local/bin /var/log
 cat > /usr/local/bin/boxforge-start <<'EOS'
 #!/bin/sh
 # Starts the Docker engine where there is no systemd to do it: when WSL
@@ -351,6 +359,8 @@ cat > /usr/local/bin/boxforge-start <<'EOS'
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 sock=/var/run/docker.sock
 pgrep -x dockerd >/dev/null 2>&1 && [ -S "$sock" ] && exit 0
+# The proxy the engine pulls images through, when one was set in BoxForge.
+if [ -f /etc/boxforge/proxy.env ]; then set -a; . /etc/boxforge/proxy.env; set +a; fi
 # dockerd wants the cgroup controllers mounted; systemd or OpenRC would have.
 if ! mountpoint -q /sys/fs/cgroup; then mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || mount -t tmpfs -o mode=0755 cgroup /sys/fs/cgroup; fi
 if [ ! -e /sys/fs/cgroup/cgroup.controllers ]; then
@@ -384,7 +394,30 @@ done
 exit 1
 EOS
 chmod 755 /usr/local/bin/boxforge-start
-if [ -d /run/systemd/system ]; then
+cat > /usr/local/bin/boxforge-keepalive <<'EOS'
+#!/bin/sh
+# Does nothing, for as long as it is left to: a process WSL sees running
+# keeps the distribution, and so the engine and its containers, alive
+# after BoxForge's window has closed. "stop" ends the one that runs.
+pidfile=/run/boxforge-keepalive.pid
+if [ "$1" = stop ]; then
+  [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null
+  rm -f "$pidfile"
+  exit 0
+fi
+[ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null && exit 0
+echo $$ > "$pidfile"
+while :; do sleep 3600; done
+EOS
+chmod 755 /usr/local/bin/boxforge-keepalive
+`
+
+// The script that starts the engine, run as root inside the distribution
+// each time the installer reaches its last step. With systemd it asks
+// systemd. Without (Alpine) it runs the starter and waits for the
+// engine's socket; when the engine does not come up it prints the end of
+// the engine's own log, which says why.
+const startScript = starterFiles + `if [ -d /run/systemd/system ]; then
   systemctl start docker && exit 0
   journalctl -u docker -n 25 --no-pager 2>/dev/null >&2
   exit 1
@@ -398,6 +431,106 @@ if [ "$code" = 2 ]; then echo "--- 엔진이 시작하자마자 끝났습니다.
 if [ -s /var/log/dockerd.log ]; then tail -n 25 /var/log/dockerd.log >&2; else echo "(엔진이 로그를 한 줄도 남기지 않았습니다)" >&2; fi
 exit 1
 `
+
+// restartEngine stops the engine and starts it again, so that settings
+// written for it take effect.
+const restartEngine = `if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload
+  systemctl restart docker
+else
+  pkill -x dockerd 2>/dev/null
+  i=0
+  while pgrep -x dockerd >/dev/null 2>&1 && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
+  /usr/local/bin/boxforge-start
+fi
+`
+
+// proxyScript makes the engine pull through a proxy ($1; "" for none)
+// except for the hosts in $2. dockerd reads the proxy from its
+// environment: systemd gives it from a drop-in, the starter from the same file.
+const proxyScript = starterFiles + `mkdir -p /etc/boxforge
+if [ -n "$1" ]; then
+  printf 'HTTP_PROXY=%s\nHTTPS_PROXY=%s\nNO_PROXY=%s\nhttp_proxy=%s\nhttps_proxy=%s\nno_proxy=%s\n' "$1" "$1" "$2" "$1" "$1" "$2" > /etc/boxforge/proxy.env
+else
+  rm -f /etc/boxforge/proxy.env
+fi
+if [ -d /run/systemd/system ]; then
+  mkdir -p /etc/systemd/system/docker.service.d
+  printf '[Service]\nEnvironmentFile=-/etc/boxforge/proxy.env\n' > /etc/systemd/system/docker.service.d/boxforge-proxy.conf
+fi
+` + restartEngine
+
+// caScript adds the certificate file $1 to the ones the distribution, and
+// so the engine, trusts: what a company's network needs when it inspects
+// HTTPS traffic.
+const caScript = starterFiles + `[ -f "$1" ] || { echo "the certificate file can't be read from inside WSL: $1" >&2; exit 1; }
+grep -q 'BEGIN CERTIFICATE' "$1" || { echo "that file is not a PEM certificate (it should begin with -----BEGIN CERTIFICATE-----)" >&2; exit 1; }
+mkdir -p /usr/local/share/ca-certificates
+cp "$1" "/usr/local/share/ca-certificates/boxforge-$2.crt"
+update-ca-certificates >/dev/null 2>&1 || { echo "update-ca-certificates failed" >&2; exit 1; }
+` + restartEngine
+
+// runScript runs one of these scripts as root inside a distribution,
+// telling line each line it prints.
+func runScript(ctx context.Context, distro, script string, line func(string), args ...string) error {
+	dir, err := dataDir()
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, "run-*.sh")
+	if err != nil {
+		return err
+	}
+	file := f.Name()
+	defer os.Remove(file)
+	if _, err := f.WriteString(script); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	name, full := engines.InWSL(distro, append([]string{"sh", engines.WSLPath(file)}, args...)...)
+	return clirunner.Run(ctx, "", []string{"WSL_UTF8=1"}, name, full, line)
+}
+
+// SetProxy makes the engine in a distribution use a proxy ("" for none),
+// and restarts it.
+func SetProxy(ctx context.Context, distro, proxy, noProxy string) error {
+	return runScript(ctx, distro, proxyScript, nil, proxy, noProxy)
+}
+
+// TrustCA adds a certificate file on this PC to those the engine in a
+// distribution trusts, and restarts it.
+func TrustCA(ctx context.Context, distro, file string) error {
+	name := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' {
+			return r
+		}
+		return '-'
+	}, strings.TrimSuffix(filepath.Base(file), filepath.Ext(file)))
+	return runScript(ctx, distro, caScript, nil, engines.WSLPath(file), name)
+}
+
+// Keep starts (or, with on false, ends) the process that keeps a
+// distribution alive while BoxForge is closed.
+func Keep(distro string, on bool) error {
+	if !on {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_, err := wsl(ctx, "-d", distro, "-u", "root", "--", "/usr/local/bin/boxforge-keepalive", "stop")
+		return err
+	}
+	// Started and left: it is meant to outlive this program. A second one
+	// finds the first running and ends at once.
+	cmd := exec.Command(wslExe(), "-d", distro, "-u", "root", "--", "/usr/local/bin/boxforge-keepalive")
+	clirunner.HideWindow(cmd)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
 
 // Installer runs the installation, one at a time.
 type Installer struct {
@@ -691,7 +824,7 @@ func (in *Installer) run(ctx context.Context, o Options) (string, error) {
 			return "docker", err
 		}
 		defer os.Remove(script)
-		name, args := engines.InWSL(Distro, "sh", engines.WSLPath(script))
+		name, args := engines.InWSL(Distro, "sh", engines.WSLPath(script), o.Proxy)
 		err := clirunner.Run(ctx, "", []string{"WSL_UTF8=1"}, name, args, func(line string) {
 			if strings.HasPrefix(line, "[") {
 				in.step("docker", "active", line)

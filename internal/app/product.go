@@ -212,3 +212,18 @@ func (a *App) PruneContainers() (int64, error) {
 	defer cancel()
 	return a.eng().Containers().Prune(ctx)
 }
+
+// certPicker asks the user to choose a certificate file; the desktop shell sets it.
+var certPicker func() (string, error)
+
+// SetCertPicker gives the app the shell's file dialog for certificates.
+func SetCertPicker(f func() (string, error)) { certPicker = f }
+
+// PickCertificate opens a file dialog and returns the chosen path, "" when
+// the user cancelled.
+func (a *App) PickCertificate() (string, error) {
+	if certPicker == nil {
+		return "", fmt.Errorf("no file dialog here: type the path")
+	}
+	return certPicker()
+}

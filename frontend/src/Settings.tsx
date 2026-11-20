@@ -32,11 +32,58 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
   const [servers, setServers] = useState<string[]>([]);
   const [login, setLogin] = useState<{ server: string; user: string; password: string } | null>(null);
   const [note, setNote] = useState("");
+  const [net, setNet] = useState<{ proxy: string; noProxy: string; canEngine: boolean; keep: boolean } | null>(null);
+  const [proxy, setProxy] = useState("");
+  const [noProxy, setNoProxy] = useState("");
+  const [cert, setCert] = useState<string | null>(null);
+  const [working, setWorking] = useState("");
+
+  const loadNet = () =>
+    call<{ proxy: string; noProxy: string; canEngine: boolean; keep: boolean }>("Network").then((n) => {
+      setNet(n);
+      setProxy(n.proxy);
+      setNoProxy(n.noProxy);
+    }, () => {});
+
+  const saveProxy = async () => {
+    setWorking("proxy");
+    if (await run(proxy.trim() ? `# 프록시 ${proxy.trim()} 적용, 엔진 재시작` : "# 프록시 해제, 엔진 재시작", () => call("SetProxy", proxy, noProxy))) {
+      setNote(proxy.trim() ? "프록시를 적용했습니다." : "프록시를 껐습니다.");
+      loadNet();
+    }
+    setWorking("");
+  };
+
+  const trust = async () => {
+    const file = (cert ?? "").trim();
+    if (!file) return;
+    setWorking("cert");
+    if (await run(`# 인증서 ${file} 를 엔진이 믿는 목록에 추가, 엔진 재시작`, () => call("TrustCertificate", file))) {
+      setCert(null);
+      setNote("인증서를 추가했습니다. 엔진이 다시 시작됐습니다.");
+    }
+    setWorking("");
+  };
+
+  const browseCert = async () => {
+    try {
+      const file = await call<string>("PickCertificate");
+      if (file) setCert(file);
+    } catch {
+      // No file dialog in a browser: the path is typed instead.
+    }
+  };
+
+  const keep = async (on: boolean) => {
+    setNet((n) => n && { ...n, keep: on });
+    await run(on ? "# 앱을 닫아도 엔진 유지" : "# 앱을 닫으면 엔진도 쉬게 함", () => call("SetKeepEngine", on));
+  };
 
   const loadServers = () => call<string[]>("Registries").then((s) => setServers((s ?? []).sort()), () => {});
   useEffect(() => {
     call<string>("Version").then(setVersion, () => {});
     loadServers();
+    loadNet();
   }, []);
 
   const check = async () => {
@@ -138,6 +185,54 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
           </span>
           <button onClick={onEngine}>엔진 설치 · 선택</button>
         </div>
+        <label className="setting">
+          <span>
+            <strong>앱을 닫아도 엔진 유지</strong>
+            <span className="sub">
+              WSL 안의 엔진은 BoxForge를 닫으면 잠시 뒤 멈춥니다. 켜 두면 컨테이너가 계속 돕니다(PC를 껐다 켜면 BoxForge를 한 번 열어야 다시
+              시작됩니다).{net && !net.canEngine && " 지금 엔진은 WSL 안의 엔진이 아니라 해당하지 않습니다."}
+            </span>
+          </span>
+          <input type="checkbox" className="switch" aria-label="앱을 닫아도 엔진 유지" checked={!!net?.keep} onChange={(e) => keep(e.target.checked)} />
+        </label>
+      </div>
+
+      <div className="panel" data-testid="network-panel">
+        <h2>회사 네트워크</h2>
+        <p className="muted">
+          회사에서 프록시를 거쳐야 인터넷이 되거나, 보안 장비가 HTTPS를 검사하는 경우에 필요합니다. 해당하지 않으면 비워 두세요.
+          {net && !net.canEngine && " 지금 엔진은 WSL 안의 엔진이 아니어서, 프록시는 BoxForge 자신의 내려받기(업데이트, 엔진 설치)에만 적용됩니다."}
+        </p>
+        <form
+          className="run-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveProxy();
+          }}
+        >
+          <label>
+            프록시 주소
+            <input placeholder="예: http://proxy.company.com:8080" aria-label="프록시 주소" value={proxy} onChange={(e) => setProxy(e.target.value)} />
+          </label>
+          <label>
+            프록시를 거치지 않을 주소
+            <input placeholder="예: localhost,127.0.0.1,.company.com" aria-label="프록시 제외 주소" value={noProxy} onChange={(e) => setNoProxy(e.target.value)} />
+          </label>
+          <div className="dialog-actions">
+            <button type="submit" disabled={!!working || (net !== null && proxy === net.proxy && noProxy === net.noProxy)}>
+              {working === "proxy" ? "적용하는 중…" : "프록시 적용"}
+            </button>
+          </div>
+        </form>
+        <div className="setting">
+          <span>
+            <strong>사내 인증서</strong>
+            <span className="sub">이미지를 받을 때 "certificate signed by unknown authority" 오류가 나면, IT 부서에서 받은 루트 인증서(.crt, .pem)를 추가합니다.</span>
+          </span>
+          <button disabled={!net?.canEngine} onClick={() => setCert("")}>
+            인증서 추가
+          </button>
+        </div>
       </div>
 
       <div className="panel" data-testid="registries">
@@ -171,6 +266,33 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
           프로젝트 페이지 · 문제 알리기
         </button>
       </div>
+
+      {cert !== null && (
+        <Dialog title="사내 인증서 추가" onClose={() => setCert(null)}>
+          <p>엔진이 이 인증서로 서명된 서버를 믿게 됩니다. 추가한 뒤 엔진이 다시 시작되며, 실행 중인 컨테이너는 잠시 멈췄다 켜질 수 있습니다.</p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              trust();
+            }}
+          >
+            <div className="pair">
+              <input autoFocus className="field" aria-label="인증서 파일 경로" placeholder="예: C:\\certs\\company-root.crt" value={cert} onChange={(e) => setCert(e.target.value)} />
+              <button type="button" onClick={browseCert}>
+                찾아보기
+              </button>
+            </div>
+            <div className="dialog-actions">
+              <button type="button" onClick={() => setCert(null)}>
+                취소
+              </button>
+              <button className="primary" type="submit" disabled={!cert.trim() || !!working}>
+                {working === "cert" ? "추가하는 중…" : "추가"}
+              </button>
+            </div>
+          </form>
+        </Dialog>
+      )}
 
       {login && (
         <Dialog title="레지스트리 로그인" onClose={() => setLogin(null)}>

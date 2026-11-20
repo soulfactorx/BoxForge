@@ -347,7 +347,7 @@ tr:hover .member .unlink, .member .unlink:focus { visibility: visible; }
 ul.doomed { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 select.field { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
 
-.crumbs { margin-bottom: 10px; word-break: break-all; }
+.crumbs { flex: none; margin-bottom: 10px; word-break: break-all; }
 .crumbs button.link { padding: 0; }
 .file-name { display: flex; align-items: center; gap: 8px; }
 .file-name .icon { color: var(--muted); }
@@ -952,3 +952,17 @@ ul.servers li { display: flex; justify-content: space-between; align-items: cent
 
 .recipe > span:last-child, .ways button > span { min-width: 0; }
 .recipe .sub, .recipe strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.file-browser { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.pod-term { height: 52vh; display: flex; }
+.pod-term .term { flex: 1; }
+.add-remote { margin: 2px 0 10px; }
+button.link.add-remote { padding: 0; }
+.glossary summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+.glossary summary::before { content: "▸"; color: var(--muted); }
+.glossary[open] summary::before { content: "▾"; }
+.glossary summary h2 { margin: 0; }
+.glossary dl { display: grid; grid-template-columns: 96px 1fr; gap: 8px 16px; margin: 14px 0 0; }
+.glossary dt { font-weight: 600; }
+.glossary dd { margin: 0; color: var(--muted); }
+.settings .run-form { margin-bottom: 4px; }

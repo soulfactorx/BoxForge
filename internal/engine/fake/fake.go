@@ -323,6 +323,14 @@ func (c containers) Output(context.Context, string, []string, []byte) (string, s
 
 func (c containers) Prune(context.Context) (int64, error) { return 0, nil }
 
+func (c containers) Files(ctx context.Context, _, p string) ([]engine.FileEntry, error) {
+	return volumes{c.r}.Files(ctx, "", p)
+}
+
+func (c containers) Archive(ctx context.Context, _, p string) (io.ReadCloser, error) {
+	return volumes{c.r}.Archive(ctx, "", p)
+}
+
 func (c containers) Commit(context.Context, string, string) error { return nil }
 
 func (c containers) CreateFrom(ctx context.Context, _ []byte, img string) (string, []string, error) {

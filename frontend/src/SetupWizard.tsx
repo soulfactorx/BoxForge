@@ -140,7 +140,10 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
           <button onClick={onClose}>닫기</button>
         )}
         {st?.supported && !st.installed && (
-          <button className="primary" disabled={st.running || !flavor || (flavor === "custom" && !source.trim())} onClick={() => call("SetupStart", { flavor, source })}>
+          <button className="primary" disabled={st.running || !flavor || (flavor === "custom" && !source.trim())} onClick={async () => {
+              const net = await call<{ proxy: string }>("Network").catch(() => ({ proxy: "" }));
+              call("SetupStart", { flavor, source, proxy: net.proxy });
+            }}>
             {st.running ? "설치하는 중…" : st.error || st.needsRestart ? "설치 계속" : "설치 시작"}
           </button>
         )}

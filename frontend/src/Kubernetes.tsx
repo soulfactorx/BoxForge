@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, type PullState, type Run } from "./bridge";
 import { ago } from "./format";
+import Terminal from "./Terminal";
 import { Dialog, IconButton, Menu, Progress } from "./ui";
 
 interface KubeState {
@@ -107,6 +108,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const [events, setEvents] = useState<Item[]>([]);
   const [text, setText] = useState<{ title: string; body: string; reload?: () => Promise<string> } | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
+  const [shell, setShell] = useState<{ namespace: string; name: string } | null>(null);
   const [applied, setApplied] = useState("");
   const [removing, setRemoving] = useState(false);
   const [note, setNote] = useState("");
@@ -341,6 +343,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                           <button onClick={() => open(`${name} 로그`, `logs ${name} -n ${namespace} --tail=500`, () => call<string>("KubeLogs", namespace, name))}>로그</button>
                           <Menu
                             items={[
+                              ...(s.text === "Running" || s.text === "NotReady" ? [{ label: "터미널", onClick: () => setShell({ namespace, name }) }] : []),
                               { label: "자세히 (describe)", onClick: () => open(name, `describe pod ${name} -n ${namespace}`, () => call<string>("KubeDescribe", "pod", namespace, name)) },
                               { label: "삭제 (워크로드가 새로 만듦)", onClick: () => act(`delete pod ${name} -n ${namespace}`, "KubeDelete", "pod", namespace, name), danger: true },
                             ]}
@@ -499,6 +502,24 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </button>
             )}
             <button onClick={() => setText(null)}>닫기</button>
+          </div>
+        </Dialog>
+      )}
+
+      {shell && (
+        <Dialog title={`${shell.name} 터미널`} onClose={() => setShell(null)} wide>
+          <div className="pod-term" data-testid="pod-term">
+            <Terminal
+              id={shell.namespace + "/" + shell.name}
+              name={shell.name}
+              run={run}
+              showCli={showCli}
+              command={kubectl(`exec -it ${shell.name} -n ${shell.namespace} -- sh`)}
+              open={(cols, rows) => call<string>("KubeTermOpen", shell.namespace, shell.name, cols, rows)}
+            />
+          </div>
+          <div className="dialog-actions">
+            <button onClick={() => setShell(null)}>닫기</button>
           </div>
         </Dialog>
       )}

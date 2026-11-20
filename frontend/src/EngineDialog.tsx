@@ -7,7 +7,7 @@ const ownEngine = "wsl:BoxForge";
 
 interface Target {
   id: string;
-  kind: "default" | "context" | "wsl";
+  kind: "default" | "context" | "wsl" | "ssh" | "podman";
   label: string;
   host: string;
   distro: string;
@@ -17,6 +17,8 @@ const hint: Record<Target["kind"], (t: Target) => string> = {
   default: () => "터미널에서 docker 명령을 쳤을 때 쓰이는 엔진입니다.",
   context: (t) => t.host,
   wsl: (t) => `${t.distro} 배포판 안에 설치된 Docker Engine에 연결합니다. 네트워크 포트를 열지 않습니다.`,
+  ssh: (t) => `다른 PC나 서버의 Docker Engine에 SSH로 연결합니다 (${t.host}). 비밀번호 없이 키로 로그인되어 있어야 합니다.`,
+  podman: (t) => `Podman의 Docker 호환 API에 연결합니다 (${t.host}). 일부 기능은 다르게 동작할 수 있습니다.`,
 };
 
 const install = [
@@ -34,6 +36,38 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
   const [canInstall, setCanInstall] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [remote, setRemote] = useState<string | null>(null);
+  const [remoteError, setRemoteError] = useState("");
+
+  const addRemote = async () => {
+    const addr = (remote ?? "").trim().replace(/^ssh:\/\//, "");
+    setError("");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*(:[0-9]{1,5})?$/.test(addr)) {
+      setRemoteError("주소는 user@host 또는 user@host:포트 꼴로 적어 주세요. 예: dev@192.168.0.10");
+      return;
+    }
+    setRemoteError("");
+    try {
+      await call("AddRemoteEngine", addr);
+      setRemote(null);
+      await load();
+      setPicked("ssh:" + addr.replace(/^ssh:\/\//, ""));
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const dropRemote = async (id: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      await call("RemoveRemoteEngine", id);
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+    setBusy(false);
+  };
 
   const load = () =>
     call<{ current: string; targets: Target[] }>("Engines").then(
@@ -104,7 +138,15 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
     try {
       await call("UseEngine", t.id);
       onSwitched(
-        t.kind === "wsl" ? `wsl -d ${t.distro} docker info` : t.kind === "context" ? `docker context use ${t.id.slice(8)}` : "docker context use default",
+        t.kind === "wsl"
+          ? `wsl -d ${t.distro} docker info`
+          : t.kind === "context"
+            ? `docker context use ${t.id.slice(8)}`
+            : t.kind === "ssh"
+              ? `docker -H ssh://${t.host} info`
+              : t.kind === "podman"
+                ? `docker -H ${t.host} info`
+                : "docker context use default",
       );
       onClose();
     } catch (e: any) {
@@ -127,6 +169,19 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
               {t.id === current && <span className="pill tag-inline">사용 중</span>}
               <span className="sub">{t.id === ownEngine ? "BoxForge가 설치한 Docker Engine입니다." : hint[t.kind](t)}</span>
             </span>
+            {t.kind === "ssh" && (
+              <button
+                type="button"
+                className="link"
+                disabled={busy}
+                onClick={(e) => {
+                  e.preventDefault();
+                  dropRemote(t.id);
+                }}
+              >
+                목록에서 빼기
+              </button>
+            )}
             {t.id === ownEngine && (
               <button
                 type="button"
@@ -158,6 +213,32 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
             Docker Engine 설치
           </button>
         </div>
+      )}
+      {remote === null ? (
+        <button className="link add-remote" disabled={busy} onClick={() => setRemote("")}>
+          + 다른 PC의 엔진 추가 (SSH)
+        </button>
+      ) : (
+        <form
+          className="pair add-remote"
+          onSubmit={(e) => {
+            e.preventDefault();
+            addRemote();
+          }}
+        >
+          <input autoFocus className="field" aria-label="원격 엔진 주소" placeholder="user@host 또는 user@host:포트" value={remote} onChange={(e) => setRemote(e.target.value)} />
+          <button type="submit" className="primary" disabled={!remote.trim()}>
+            추가
+          </button>
+          <button type="button" onClick={() => setRemote(null)}>
+            취소
+          </button>
+        </form>
+      )}
+      {remote !== null && remoteError && (
+        <p className="warn" role="alert">
+          {remoteError}
+        </p>
       )}
       <details className="engine-help">
         <summary>직접 설치하고 싶다면</summary>

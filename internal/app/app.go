@@ -62,9 +62,9 @@ func connect(t engines.Target) (engine.Runtime, error) {
 		return fake.New(), nil
 	}
 	switch t.Kind {
-	case "wsl":
+	case "wsl", "ssh":
 		return docker.ConnectDialer(t.Dialer())
-	case "context":
+	case "context", "podman":
 		return docker.Connect(t.Host)
 	}
 	return docker.Connect(engines.DefaultHost())
@@ -98,6 +98,10 @@ func Start(a *App, emit hub.Emit) {
 	a.emu.Lock()
 	a.follow()
 	a.emu.Unlock()
+	a.keepAlive()
+	if p := engines.Setting("proxy.url"); p != "" {
+		setProxyEnv(p, engines.Setting("proxy.no"))
+	}
 }
 
 // follow starts a hub on a.rt. Callers hold emu for writing.
@@ -190,6 +194,7 @@ func (a *App) UseEngine(id string) error {
 	a.rt, a.target = rt, t
 	a.follow()
 	a.emu.Unlock()
+	a.keepAlive()
 	return engines.Save(id)
 }
 
@@ -204,8 +209,11 @@ func (a *App) docker(args ...string) (name string, full []string, env []string) 
 		// The docker command inside the distribution, beside its engine.
 		name, full = engines.InWSL(t.Distro, append([]string{"docker"}, args...)...)
 		return name, full, nil
-	case "context":
+	case "context", "podman":
 		return "docker", args, []string{"DOCKER_HOST=" + t.Host}
+	case "ssh":
+		// The docker command speaks SSH itself.
+		return "docker", args, []string{"DOCKER_HOST=ssh://" + t.Host}
 	}
 	return "docker", args, nil
 }
@@ -530,6 +538,11 @@ func (a *App) TermOpen(id string, cols, rows int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return a.attach(s), nil
+}
+
+// attach gives a terminal session an ID and sends its output to the page.
+func (a *App) attach(s engine.Session) string {
 	a.mu.Lock()
 	a.seq++
 	session := fmt.Sprintf("t%d", a.seq)
@@ -555,7 +568,7 @@ func (a *App) TermOpen(id string, cols, rows int) (string, error) {
 			a.emit("term", TermData{Session: session, End: true})
 		}
 	}()
-	return session, nil
+	return session
 }
 
 func (a *App) term(session string) (engine.Session, error) {
@@ -716,11 +729,14 @@ func firstFile(r io.Reader) (*tar.Reader, *tar.Header, error) {
 	}
 }
 
-// VolumePreview returns the start of a file inside a volume.
-func (a *App) VolumePreview(name, file string) (FilePreview, error) {
+// archiver gets a file or folder as a tar stream.
+type archiver func(ctx context.Context, item string) (io.ReadCloser, error)
+
+// preview returns the start of a file.
+func preview(get archiver, file string) (FilePreview, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
-	rc, err := a.eng().Volumes().Archive(ctx, name, file)
+	rc, err := get(ctx, file)
 	if err != nil {
 		return FilePreview{}, err
 	}
@@ -746,6 +762,39 @@ func (a *App) VolumePreview(name, file string) (FilePreview, error) {
 	return p, nil
 }
 
+// VolumePreview returns the start of a file inside a volume.
+func (a *App) VolumePreview(name, file string) (FilePreview, error) {
+	return preview(func(ctx context.Context, item string) (io.ReadCloser, error) {
+		return a.eng().Volumes().Archive(ctx, name, item)
+	}, file)
+}
+
+// ContainerFiles lists one directory inside a container.
+func (a *App) ContainerFiles(id, dir string) ([]engine.FileEntry, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+	defer cancel()
+	list, err := a.eng().Containers().Files(ctx, id, dir)
+	if list == nil {
+		list = []engine.FileEntry{}
+	}
+	return list, err
+}
+
+// ContainerPreview returns the start of a file inside a container.
+func (a *App) ContainerPreview(id, file string) (FilePreview, error) {
+	return preview(func(ctx context.Context, item string) (io.ReadCloser, error) {
+		return a.eng().Containers().Archive(ctx, id, item)
+	}, file)
+}
+
+// ContainerSave copies a file out of a container into the user's Downloads
+// folder (a directory as a .tar of itself) and returns where it went.
+func (a *App) ContainerSave(id, item string) (string, error) {
+	return saveOut(func(ctx context.Context, it string) (io.ReadCloser, error) {
+		return a.eng().Containers().Archive(ctx, id, it)
+	}, item, "container")
+}
+
 // freePath returns dir/name, or dir/"name (2)" and so on when taken.
 func freePath(dir, name string) string {
 	ext := filepath.Ext(name)
@@ -764,6 +813,14 @@ func freePath(dir, name string) string {
 // VolumeSave copies a file out of a volume into the user's Downloads folder
 // (a directory is saved as a .tar of itself) and returns where it went.
 func (a *App) VolumeSave(name, item string) (string, error) {
+	return saveOut(func(ctx context.Context, it string) (io.ReadCloser, error) {
+		return a.eng().Volumes().Archive(ctx, name, it)
+	}, item, name)
+}
+
+// saveOut copies what get returns for item into the Downloads folder; top
+// names the result when item is the top folder itself.
+func saveOut(get archiver, item, top string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -774,7 +831,7 @@ func (a *App) VolumeSave(name, item string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
-	rc, err := a.eng().Volumes().Archive(ctx, name, item)
+	rc, err := get(ctx, item)
 	if err != nil {
 		return "", err
 	}
@@ -782,7 +839,7 @@ func (a *App) VolumeSave(name, item string) (string, error) {
 
 	leaf := path.Base(path.Clean("/" + item))
 	if leaf == "/" || leaf == "." {
-		leaf = name
+		leaf = top
 	}
 	// What the engine sends is a tar either way. A lone file is taken out
 	// of it; a directory is kept as the tar it is.
@@ -797,7 +854,7 @@ func (a *App) VolumeSave(name, item string) (string, error) {
 		src = tr
 	} else {
 		rc.Close()
-		again, err := a.eng().Volumes().Archive(ctx, name, item)
+		again, err := get(ctx, item)
 		if err != nil {
 			return "", err
 		}
@@ -1157,4 +1214,130 @@ func (a *App) CopyContainer(key, id, targetID string, o CopyOptions) ([]string, 
 		notes = []string{}
 	}
 	return notes, err
+}
+
+// ---- engines on other machines
+
+// AddRemoteEngine remembers an engine on another machine, reached over
+// SSH as user@host[:port]. Sign-in there is by key, not password.
+func (a *App) AddRemoteEngine(addr string) error { return engines.AddRemote(addr) }
+
+// RemoveRemoteEngine forgets a remote engine, switching away from it first.
+func (a *App) RemoveRemoteEngine(id string) error {
+	a.emu.RLock()
+	current := a.target.ID
+	a.emu.RUnlock()
+	if current == id {
+		if err := a.UseEngine(engines.Default.ID); err != nil {
+			return fmt.Errorf("switch to another engine first: %w", err)
+		}
+	}
+	return engines.RemoveRemote(strings.TrimPrefix(id, "ssh:"))
+}
+
+// ---- the network the engine is on: proxy and certificates
+
+// setProxyEnv makes this program's own downloads (updates, the installer)
+// go through the proxy.
+func setProxyEnv(proxy, noProxy string) {
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY"} {
+		if proxy == "" {
+			os.Unsetenv(k)
+		} else {
+			os.Setenv(k, proxy)
+		}
+	}
+	if noProxy == "" {
+		os.Unsetenv("NO_PROXY")
+	} else {
+		os.Setenv("NO_PROXY", noProxy)
+	}
+}
+
+// NetworkSettings is the proxy BoxForge was given, and whether the engine
+// in use is one it can configure (one inside a WSL distribution).
+type NetworkSettings struct {
+	Proxy     string `json:"proxy"`
+	NoProxy   string `json:"noProxy"`
+	CanEngine bool   `json:"canEngine"`
+	Keep      bool   `json:"keep"`
+}
+
+// wslTarget returns the distribution of the engine in use, "" when the
+// engine is not inside WSL.
+func (a *App) wslTarget() string {
+	a.emu.RLock()
+	defer a.emu.RUnlock()
+	if a.target.Kind == "wsl" {
+		return a.target.Distro
+	}
+	return ""
+}
+
+// Network returns the network settings.
+func (a *App) Network() NetworkSettings {
+	return NetworkSettings{
+		Proxy: engines.Setting("proxy.url"), NoProxy: engines.Setting("proxy.no"),
+		CanEngine: a.wslTarget() != "", Keep: engines.Setting("engine.keep") == "on",
+	}
+}
+
+// SetProxy sets the proxy ("" for none) for BoxForge's own downloads and,
+// when the engine is inside WSL, for the engine, which is restarted.
+func (a *App) SetProxy(proxy, noProxy string) error {
+	proxy, noProxy = strings.TrimSpace(proxy), strings.TrimSpace(noProxy)
+	if proxy != "" && !strings.HasPrefix(proxy, "http://") && !strings.HasPrefix(proxy, "https://") {
+		return fmt.Errorf("the proxy address starts with http:// or https://")
+	}
+	if err := engines.SetSetting("proxy.url", proxy); err != nil {
+		return err
+	}
+	if err := engines.SetSetting("proxy.no", noProxy); err != nil {
+		return err
+	}
+	setProxyEnv(proxy, noProxy)
+	if distro := a.wslTarget(); distro != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+		defer cancel()
+		return provision.SetProxy(ctx, distro, proxy, noProxy)
+	}
+	return nil
+}
+
+// TrustCertificate adds a certificate file (PEM) to those the engine
+// trusts, and restarts the engine. Only for an engine inside WSL.
+func (a *App) TrustCertificate(file string) error {
+	distro := a.wslTarget()
+	if distro == "" {
+		return fmt.Errorf("this can be done only for an engine inside WSL")
+	}
+	if _, err := os.Stat(file); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+	defer cancel()
+	return provision.TrustCA(ctx, distro, file)
+}
+
+// keepAlive applies the "keep the engine running" setting to the engine in use.
+func (a *App) keepAlive() {
+	if distro := a.wslTarget(); distro != "" && engines.Setting("engine.keep") == "on" {
+		_ = provision.Keep(distro, true)
+	}
+}
+
+// SetKeepEngine chooses whether an engine inside WSL goes on running
+// after BoxForge is closed.
+func (a *App) SetKeepEngine(on bool) error {
+	value := "off"
+	if on {
+		value = "on"
+	}
+	if err := engines.SetSetting("engine.keep", value); err != nil {
+		return err
+	}
+	if distro := a.wslTarget(); distro != "" {
+		return provision.Keep(distro, on)
+	}
+	return nil
 }

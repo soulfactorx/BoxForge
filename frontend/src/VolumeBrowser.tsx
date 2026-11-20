@@ -22,17 +22,23 @@ const kindLabel: Record<string, string> = { dir: "폴더", file: "파일", link:
 
 /** Looks inside a volume: folders to walk, files to read or save. Read-only. */
 interface Props {
+  /** What is looked into: a volume (by name) or a container (by ID). */
+  kind?: "Volume" | "Container";
   name: string;
   label: string;
   run: Run;
   showCli: (cmd: string) => void;
-  onClose: () => void;
+  onClose?: () => void;
+  /** Shown inside another panel instead of as a panel of its own. */
+  embedded?: boolean;
 }
 
-export default function VolumeBrowser({ name, label, run, showCli, onClose }: Props) {
-  // What BoxForge does to look inside: a throwaway container with the
-  // volume attached read-only. Any small image does; alpine stands for it.
-  const inside = (tail: string) => `docker run --rm -v ${name}:/v:ro alpine ${tail}`;
+export default function VolumeBrowser({ kind = "Volume", name, label, run, showCli, onClose, embedded }: Props) {
+  // What BoxForge does to look inside a volume: a throwaway container with
+  // it attached read-only (any small image does; alpine stands for it). A
+  // container is asked directly.
+  const root = kind === "Volume" ? "/v" : "";
+  const inside = (tail: string) => (kind === "Volume" ? `docker run --rm -v ${name}:/v:ro alpine ${tail}` : `docker exec ${label} ${tail}`);
   const [dir, setDir] = useState("/");
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState("");
@@ -43,8 +49,8 @@ export default function VolumeBrowser({ name, label, run, showCli, onClose }: Pr
     let stale = false;
     setEntries(null);
     setError("");
-    showCli(inside(`ls -la ${shq("/v" + (dir === "/" ? "" : dir))}`));
-    call<Entry[]>("VolumeFiles", name, dir).then(
+    showCli(inside(`ls -la ${shq(root + (dir === "/" ? "" : dir) || "/")}`));
+    call<Entry[]>(`${kind}Files`, name, dir).then(
       (l) => !stale && setEntries(l ?? []),
       (e) => !stale && setError(e.message),
     );
@@ -56,9 +62,9 @@ export default function VolumeBrowser({ name, label, run, showCli, onClose }: Pr
   const show = async (path: string) => {
     setOpen({ path, preview: null });
     setSaved("");
-    showCli(inside(`cat ${shq("/v" + path)}`));
+    showCli(inside(`cat ${shq(root + path)}`));
     try {
-      const preview = await call<Preview>("VolumePreview", name, path);
+      const preview = await call<Preview>(`${kind}Preview`, name, path);
       setOpen((cur) => (cur?.path === path ? { path, preview } : cur));
     } catch (e: any) {
       setOpen(null);
@@ -71,8 +77,9 @@ export default function VolumeBrowser({ name, label, run, showCli, onClose }: Pr
     setSaved("");
     const leaf = path.split("/").pop() ?? "";
     const dir_ = "/v" + path.slice(0, path.length - leaf.length - 1);
-    const command = inside(`tar -cf - -C ${shq(dir_ || "/v")} ${shq(leaf)}`) + ` | tar -xf - -C ~/Downloads`;
-    if (await run(command, async () => (where = await call<string>("VolumeSave", name, path)))) {
+    const command =
+      kind === "Volume" ? inside(`tar -cf - -C ${shq(dir_ || "/v")} ${shq(leaf)}`) + ` | tar -xf - -C ~/Downloads` : `docker cp ${label}:${shq(path)} ~/Downloads/`;
+    if (await run(command, async () => (where = await call<string>(`${kind}Save`, name, path)))) {
       setSaved(where);
     }
   };
@@ -85,13 +92,8 @@ export default function VolumeBrowser({ name, label, run, showCli, onClose }: Pr
     return next;
   }, "/");
 
-  return (
-    <aside className="drawer" data-testid="volume-browser">
-      <header>
-        <h2>{label} 볼륨의 내용</h2>
-        <IconButton icon="close" label="닫기" onClick={onClose} />
-      </header>
-      <div className="drawer-body">
+  const body = (
+    <>
         <nav className="crumbs" aria-label="현재 위치">
           {crumbs.map(([path, text], i) => (
             <span key={path}>
@@ -148,7 +150,7 @@ export default function VolumeBrowser({ name, label, run, showCli, onClose }: Pr
         ) : entries === null && !error ? (
           <p className="muted">읽는 중…</p>
         ) : entries && entries.length === 0 ? (
-          <p className="muted">{dir === "/" ? "비어 있는 볼륨입니다." : "비어 있는 폴더입니다."}</p>
+          <p className="muted">{dir === "/" && kind === "Volume" ? "비어 있는 볼륨입니다." : "비어 있는 폴더입니다."}</p>
         ) : (
           entries && (
             <table className="grid files">
@@ -194,8 +196,23 @@ export default function VolumeBrowser({ name, label, run, showCli, onClose }: Pr
             </table>
           )
         )}
-        <p className="muted footnote">읽기 전용입니다. 여기서는 볼륨 안의 파일을 바꾸거나 지울 수 없습니다.</p>
+        <p className="muted footnote">읽기 전용입니다. 여기서는 파일을 바꾸거나 지울 수 없습니다.</p>
+    </>
+  );
+  if (embedded) {
+    return (
+      <div className="file-browser" data-testid="file-browser">
+        {body}
       </div>
+    );
+  }
+  return (
+    <aside className="drawer" data-testid="volume-browser">
+      <header>
+        <h2>{label} 볼륨의 내용</h2>
+        <IconButton icon="close" label="닫기" onClick={() => onClose?.()} />
+      </header>
+      <div className="drawer-body">{body}</div>
     </aside>
   );
 }

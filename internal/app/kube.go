@@ -255,6 +255,24 @@ func (a *App) KubeLogs(namespace, pod string) (string, error) {
 	return a.kubectl(ctx, nil, append([]string{"logs", "--all-containers", "--prefix", "--tail=500"}, ref[1:]...)...)
 }
 
+// KubeTermOpen starts a shell in a pod on a terminal of the given size and
+// returns the session's ID, as TermOpen does for a container.
+func (a *App) KubeTermOpen(namespace, pod string, cols, rows int) (string, error) {
+	ref, err := kubeRef("pod", namespace, pod)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	cmd := append([]string{"kubectl", "exec", "-it"}, ref[1:]...)
+	cmd = append(cmd, "--", "sh", "-c", shell[2])
+	s, err := a.eng().Containers().Exec(ctx, kubeContainer, cmd, uint(max(cols, 1)), uint(max(rows, 1)))
+	if err != nil {
+		return "", err
+	}
+	return a.attach(s), nil
+}
+
 // KubeDelete deletes one object.
 func (a *App) KubeDelete(kind, namespace, name string) error {
 	ref, err := kubeRef(kind, namespace, name)

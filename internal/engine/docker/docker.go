@@ -364,6 +364,27 @@ func (c containers) Output(ctx context.Context, id string, cmd []string, stdin [
 	return stdout.String(), stderr.String(), res.ExitCode, nil
 }
 
+func (c containers) Files(ctx context.Context, id, p string) ([]engine.FileEntry, error) {
+	dir := path.Clean("/" + p)
+	// A running container is asked directly; one that is stopped, or has
+	// no shell, is read from the engine's archive of the folder.
+	if stdout, _, code, err := c.Output(ctx, id, []string{"/bin/sh", "-c", listScript, "sh", dir}, nil); err == nil && code == 0 {
+		if entries, ok := parseListing(stdout); ok {
+			return entries, nil
+		}
+	}
+	if dir == "/" {
+		// The archive names its entries after the folder, and "/" has no name.
+		dir = "/."
+	}
+	return listArchive(ctx, c.cli, id, dir)
+}
+
+func (c containers) Archive(ctx context.Context, id, p string) (io.ReadCloser, error) {
+	rc, _, err := c.cli.CopyFromContainer(ctx, id, path.Clean("/"+p))
+	return rc, err
+}
+
 func (c containers) Prune(ctx context.Context) (int64, error) {
 	rep, err := c.cli.ContainersPrune(ctx, filters.Args{})
 	if err != nil {
@@ -933,8 +954,13 @@ func (v volumes) listByScript(ctx context.Context, id string) ([]engine.FileEntr
 	if _, err := stdcopy.StdCopy(&stdout, io.Discard, rc); err != nil {
 		return nil, false
 	}
+	return parseListing(stdout.String())
+}
+
+// parseListing reads what listScript printed.
+func parseListing(text string) ([]engine.FileEntry, bool) {
 	entries := []engine.FileEntry{}
-	for _, rec := range strings.Split(stdout.String(), "\x00") {
+	for _, rec := range strings.Split(text, "\x00") {
 		rec = strings.TrimPrefix(rec, "\n")
 		head, fname, ok := strings.Cut(rec, "\n")
 		if !ok {
@@ -963,7 +989,14 @@ func (v volumes) listByScript(ctx context.Context, id string) ([]engine.FileEntr
 }
 
 func (v volumes) listByArchive(ctx context.Context, id, dir string) ([]engine.FileEntry, error) {
-	rc, _, err := v.cli.CopyFromContainer(ctx, id, dir)
+	return listArchive(ctx, v.cli, id, dir)
+}
+
+// listArchive lists a directory of a container from the engine's archive
+// of it: slower than asking a shell, but needs none in the image and works
+// on a container that is not running.
+func listArchive(ctx context.Context, cli *client.Client, id, dir string) ([]engine.FileEntry, error) {
+	rc, _, err := cli.CopyFromContainer(ctx, id, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -980,7 +1013,13 @@ func (v volumes) listByArchive(ctx context.Context, id, dir string) ([]engine.Fi
 		}
 		// Names come as "<dir's own name>/child/…": the children are the
 		// ones with exactly one more part.
-		parts := strings.Split(strings.Trim(path.Clean(h.Name), "/"), "/")
+		// The top folder is asked for as "/.", and its children come as
+		// "./child": given a name of its own, they read like any other's.
+		name := path.Clean(h.Name)
+		if strings.HasSuffix(dir, "/.") {
+			name = path.Join("top", name)
+		}
+		parts := strings.Split(strings.Trim(name, "/"), "/")
 		if len(parts) != 2 {
 			continue
 		}

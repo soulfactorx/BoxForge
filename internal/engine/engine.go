@@ -230,6 +230,10 @@ type ContainerService interface {
 	// Output runs cmd in a running container with no terminal, gives it
 	// stdin (nil for none), and returns what it wrote and its exit code.
 	Output(ctx context.Context, id string, cmd []string, stdin []byte) (stdout, stderr string, code int, err error)
+	// Files lists one directory inside the container.
+	Files(ctx context.Context, id, path string) ([]FileEntry, error)
+	// Archive returns the file or directory at path as a tar stream.
+	Archive(ctx context.Context, id, path string) (io.ReadCloser, error)
 	// Prune deletes every stopped container and returns the bytes freed.
 	Prune(ctx context.Context) (int64, error)
 	// Commit makes an image of the container as it is now: its image plus

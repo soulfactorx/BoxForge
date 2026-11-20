@@ -11,7 +11,18 @@ interface TermData {
 }
 
 /** A shell inside a running container. */
-export default function Terminal({ id, name, showCli, run }: { id: string; name: string; showCli: (cmd: string) => void; run: Run }) {
+interface Props {
+  id: string;
+  name: string;
+  showCli: (cmd: string) => void;
+  run: Run;
+  /** Opens the session, for a shell somewhere other than a container: a pod. */
+  open?: (cols: number, rows: number) => Promise<string>;
+  /** The command that does the same in a terminal. */
+  command?: string;
+}
+
+export default function Terminal({ id, name, showCli, run, open, command }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const [note, setNote] = useState("");
 
@@ -28,7 +39,7 @@ export default function Terminal({ id, name, showCli, run }: { id: string; name:
     term.open(box.current);
     fit.fit();
     setNote("");
-    showCli(`docker exec -it ${name} sh`);
+    showCli(command ?? `docker exec -it ${name} sh`);
 
     let session = "";
     let closed = false;
@@ -42,7 +53,7 @@ export default function Terminal({ id, name, showCli, run }: { id: string; name:
       if (!session) early.push(d);
       else if (d.session === session) show(d);
     });
-    call<string>("TermOpen", id, term.cols, term.rows).then(
+    (open ? open(term.cols, term.rows) : call<string>("TermOpen", id, term.cols, term.rows)).then(
       (s) => {
         if (closed) return void call("TermClose", s).catch(() => {});
         session = s;
@@ -69,11 +80,13 @@ export default function Terminal({ id, name, showCli, run }: { id: string; name:
 
   return (
     <div className="term">
-      <div className="logs-bar">
-        <span className="muted">컨테이너 안의 셸입니다.</span>
-        <span className="spacer" />
-        <button onClick={() => run(`docker exec -it ${name} sh`, () => call("OpenTerminal", name))}>외부 터미널로 열기</button>
-      </div>
+      {!open && (
+        <div className="logs-bar">
+          <span className="muted">컨테이너 안의 셸입니다.</span>
+          <span className="spacer" />
+          <button onClick={() => run(`docker exec -it ${name} sh`, () => call("OpenTerminal", name))}>외부 터미널로 열기</button>
+        </div>
+      )}
       <div className="term-box" ref={box} data-testid="terminal" />
       {note && <p className="muted">{note}</p>}
     </div>

@@ -231,6 +231,32 @@ export default function Home({ engine, containers, images, volumes, run, go, onR
         </>
       )}
 
+      {engine.connected && (
+        <details className="panel glossary">
+          <summary>
+            <h2>처음이라면: 용어 한눈에</h2>
+          </summary>
+          <dl>
+            <dt>이미지</dt>
+            <dd>프로그램과 그 프로그램이 돌아가는 데 필요한 것을 한데 담은 꾸러미입니다. 설치 파일과 비슷하고, 그 자체로는 실행 중이 아닙니다.</dd>
+            <dt>컨테이너</dt>
+            <dd>이미지를 실행한 것입니다. 한 이미지로 컨테이너를 여러 개 만들 수 있고, 컨테이너를 지워도 이미지는 남습니다.</dd>
+            <dt>포트</dt>
+            <dd>컨테이너 안의 프로그램에 내 PC에서 접속하는 문입니다. "8080 → 80"은 브라우저의 localhost:8080이 컨테이너의 80번으로 이어진다는 뜻입니다.</dd>
+            <dt>볼륨</dt>
+            <dd>컨테이너를 지워도 남는 데이터 보관함입니다. 데이터베이스의 내용처럼 잃으면 안 되는 것을 둡니다.</dd>
+            <dt>네트워크</dt>
+            <dd>컨테이너끼리 서로 이름으로 찾아 통신하게 해 주는 묶음입니다.</dd>
+            <dt>Compose</dt>
+            <dd>여러 컨테이너(예: 웹 서버 + 데이터베이스)를 파일 하나에 적어 두고 한 번에 올리고 내리는 방법입니다.</dd>
+            <dt>레지스트리</dt>
+            <dd>이미지를 올려 두고 내려받는 저장소입니다. Docker Hub가 가장 큰 공개 레지스트리입니다.</dd>
+            <dt>엔진</dt>
+            <dd>컨테이너를 실제로 돌리는 프로그램입니다(Docker Engine 등). BoxForge는 엔진에 일을 시키는 화면입니다.</dd>
+          </dl>
+        </details>
+      )}
+
       {sweep && (
         <Dialog title={sweeps[sweep].title} onClose={() => setSweep(null)}>
           <p>{sweeps[sweep].what}</p>
