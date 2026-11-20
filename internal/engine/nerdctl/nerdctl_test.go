@@ -114,10 +114,14 @@ func TestLive(t *testing.T) {
 	got := make(chan string, 1)
 	go func() { b, _ := io.ReadAll(sess); got <- string(b) }()
 	time.Sleep(time.Second)
+	if err := sess.Resize(ctx, 120, 40); err != nil {
+		t.Errorf("resize: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
 	_, _ = sess.Write([]byte("echo t-$((20+1)); stty size; exit\n"))
 	select {
 	case text := <-got:
-		if !strings.Contains(text, "t-21") || !strings.Contains(text, "30 100") {
+		if !strings.Contains(text, "t-21") || !strings.Contains(text, "40 120") || strings.Contains(text, "BOXFORGE") {
 			t.Errorf("terminal: %q", text)
 		}
 	case <-time.After(15 * time.Second):
@@ -207,6 +211,26 @@ func TestLive(t *testing.T) {
 			}
 		}
 	}
+	// stopped: files and archives come from the export
+	sfiles, err := cs.Files(ctx, id, "/etc")
+	ok := false
+	for _, f := range sfiles {
+		ok = ok || (f.Name == "hostname" && f.Kind == "file")
+	}
+	if err != nil || !ok {
+		t.Errorf("files of a stopped container: %d entries, %v", len(sfiles), err)
+	}
+	if top, err := cs.Files(ctx, id, "/"); err != nil || len(top) < 5 {
+		t.Errorf("top folder of a stopped container: %+v %v", top, err)
+	}
+	src, err := cs.Archive(ctx, id, "/etc/hostname")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, err := tar.NewReader(src).Next(); err != nil || h.Name != "hostname" || h.Size == 0 {
+		t.Errorf("archive of a stopped container: %+v %v", h, err)
+	}
+	src.Close()
 	if err := cs.Remove(ctx, id, true, false); err != nil {
 		t.Error(err)
 	}

@@ -440,6 +440,9 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 		return "", nil, errors.New("the container's description is incomplete")
 	}
 	cfg, host := in.Config, in.HostConfig
+	if _, ok := cfg.Labels["nerdctl/name"]; ok {
+		cfg, host = fromNerdctl(inspect, in)
+	}
 	var notes []string
 	cfg.Image = img
 	// A hostname the engine made from the old ID would be a stale one.
@@ -1132,6 +1135,47 @@ func (v volumes) Restore(ctx context.Context, name string, tar io.Reader) error 
 	// The archive's top entry is the helper's mount point itself, so it
 	// unpacks from the root into the volume.
 	return v.cli.CopyToContainer(ctx, id, "/", tar, container.CopyToContainerOptions{})
+}
+
+// fromNerdctl reads a description written by containerd's nerdctl, which
+// keeps Docker's shape but fills it its own way: the command is in Path
+// and Args, folders of the PC only among the mounts, and the rest holds
+// settings of that engine that mean nothing to this one.
+func fromNerdctl(inspect []byte, in container.InspectResponse) (*container.Config, *container.HostConfig) {
+	var more struct {
+		Path       string
+		Args       []string
+		HostConfig struct{ PortBindings nat.PortMap }
+	}
+	_ = json.Unmarshal(inspect, &more)
+	cfg := &container.Config{Labels: map[string]string{}, ExposedPorts: nat.PortSet{}}
+	for _, e := range in.Config.Env {
+		if !strings.HasPrefix(e, "HOSTNAME=") {
+			cfg.Env = append(cfg.Env, e)
+		}
+	}
+	for k, v := range in.Config.Labels {
+		if !strings.HasPrefix(k, "nerdctl/") && !strings.HasPrefix(k, "io.containerd.") && !strings.HasPrefix(k, "containerd.io/") {
+			cfg.Labels[k] = v
+		}
+	}
+	if more.Path != "" {
+		cfg.Entrypoint, cfg.Cmd = []string{more.Path}, more.Args
+	}
+	host := &container.HostConfig{PortBindings: more.HostConfig.PortBindings, Privileged: in.HostConfig.Privileged}
+	for port := range host.PortBindings {
+		cfg.ExposedPorts[port] = struct{}{}
+	}
+	for _, m := range in.Mounts {
+		if m.Type == "bind" {
+			bind := m.Source + ":" + m.Destination
+			if !m.RW {
+				bind += ":ro"
+			}
+			host.Binds = append(host.Binds, bind)
+		}
+	}
+	return cfg, host
 }
 
 // ListScript and ParseListing are how a directory is listed with a shell

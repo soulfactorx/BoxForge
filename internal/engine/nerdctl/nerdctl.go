@@ -425,8 +425,21 @@ func (s images) Tag(ctx context.Context, source, target string) error {
 	return s.r.do(ctx, "image", "tag", source, target)
 }
 
+// total adds up what the images take.
+func (s images) total(ctx context.Context) int64 {
+	var n int64
+	list, _ := s.List(ctx)
+	for _, im := range list {
+		n += im.Size
+	}
+	return n
+}
+
+// Prune: nerdctl does not say how much it freed; the difference does.
 func (s images) Prune(ctx context.Context) (int64, error) {
-	return 0, s.r.do(ctx, "image", "image", "prune", "-f")
+	before := s.total(ctx)
+	err := s.r.do(ctx, "image", "image", "prune", "-f")
+	return max(before-s.total(ctx), 0), err
 }
 
 func (s images) Defaults(ctx context.Context, ref string) (engine.ImageDefaults, error) {
@@ -508,8 +521,47 @@ func (s images) Save(ctx context.Context, ref string) (io.ReadCloser, error) {
 	return s.r.reading(ctx, "save", ref)
 }
 
+// stray reports whether a tag is one containerd's importer makes up for
+// an archive's unnamed entry: "import-2026-11-21", listed as "import".
+func stray(tag string) bool {
+	return tag == "import" || tag == "import:latest" || strings.HasPrefix(tag, "import-")
+}
+
 func (s images) Load(ctx context.Context, in io.Reader) error {
+	before, _ := s.List(ctx)
 	err := s.r.writing(ctx, in, "load")
+	// An archive from Docker can hold the same image twice, once with its
+	// name and once without; the nameless one arrives as "import". When
+	// the load brought a named image too, that extra is taken away again.
+	if after, lerr := s.List(ctx); err == nil && lerr == nil {
+		had := map[string]bool{}
+		for _, im := range before {
+			had[im.ID] = true
+		}
+		named := false
+		var extra []engine.Image
+		for _, im := range after {
+			if had[im.ID] {
+				continue
+			}
+			all := len(im.Tags) > 0
+			for _, tag := range im.Tags {
+				all = all && stray(tag)
+			}
+			if all {
+				extra = append(extra, im)
+			} else {
+				named = true
+			}
+		}
+		if named {
+			for _, im := range extra {
+				for _, tag := range im.Tags {
+					_, _ = s.r.out(ctx, "rmi", tag)
+				}
+			}
+		}
+	}
 	s.r.changed("image")
 	return err
 }

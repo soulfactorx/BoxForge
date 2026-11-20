@@ -48,8 +48,20 @@ func (s volumes) Remove(ctx context.Context, name string) error {
 	return s.r.do(ctx, "volume", "volume", "rm", name)
 }
 
+func (s volumes) total(ctx context.Context) int64 {
+	var n int64
+	sizes, _ := s.Sizes(ctx)
+	for _, v := range sizes {
+		n += v
+	}
+	return n
+}
+
+// Prune: nerdctl does not say how much it freed; the difference does.
 func (s volumes) Prune(ctx context.Context) (int64, error) {
-	return 0, s.r.do(ctx, "volume", "volume", "prune", "-f", "--all")
+	before := s.total(ctx)
+	err := s.r.do(ctx, "volume", "volume", "prune", "-f", "--all")
+	return max(before-s.total(ctx), 0), err
 }
 
 func (s volumes) Sizes(ctx context.Context) (map[string]int64, error) {

@@ -66,6 +66,7 @@ sudo apt install libwebkit2gtk-4.1-0
 - **다른 PC의 엔진 · Podman**: 엔진 선택 창에서 SSH 주소(user@host)를 추가하면 다른 PC나 서버의 Docker Engine을 다룰 수 있습니다(키로 로그인되어 있어야 함). Linux의 Podman 소켓은 자동으로 목록에 나옵니다. Docker 없이 containerd만 있는 환경은 `nerdctl`이 설치되어 있으면 엔진 목록에 "containerd"로 나옵니다(실험적, 일부 기능 제한).
 - **개인 정보**: 사용 정보를 어디에도 보내지 않습니다. 업데이트 확인 때만 GitHub에 접속합니다.
 - **macOS**: `BoxForge-macos.zip`을 받아 풀고 응용 프로그램 폴더로 옮깁니다. Apple에 등록된 서명이 없어 처음에는 열리지 않습니다: 앱을 우클릭 → "열기"를 누르거나, 터미널에서 `xattr -dr com.apple.quarantine /Applications/BoxForge.app`을 한 번 실행하세요. 엔진은 자동 설치되지 않으므로 [Colima](https://github.com/abiosoft/colima)를 씁니다(`brew install colima docker && colima start`). macOS 판은 아직 실제 Mac에서 충분히 써 보지 못했습니다.
+- **내보내기 · 가져오기**: 컨테이너 화면에서 컨테이너를 이미지 · 데이터와 함께 `.boxforge` 파일로 내보내 동료에게 주거나 다른 PC로 옮길 수 있습니다. 파일에는 환경변수(비밀번호 포함)와 볼륨 데이터가 그대로 들어가니 건넬 때 주의하세요.
 - **트레이**: 창을 닫아도 트레이 아이콘으로 남아 계속 실행됩니다(설정 → 화면에서 끌 수 있음). GNOME은 "AppIndicator" 확장이 있어야 트레이가 보이며, 없으면 닫을 때 그냥 꺼집니다.
 - **Linux의 아이콘**: 처음 실행할 때 앱 메뉴에 BoxForge를 등록합니다(`~/.local/share/applications/boxforge.desktop`). 창과 작업 표시줄의 아이콘이 여기서 나옵니다. 실행 파일을 다른 곳으로 옮겼다면 한 번 다시 실행하면 됩니다.
 

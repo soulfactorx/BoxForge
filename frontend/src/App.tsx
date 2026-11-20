@@ -72,6 +72,10 @@ export default function App() {
   const [history, setHistory] = useState<{ cmd: string; at: number }[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [choosing, setChoosing] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => {
+    call<string>("Version").then(setAppVersion, () => {});
+  }, []);
   // The first time the window is closed with a tray to go to: ask.
   const [closing, setClosing] = useState(false);
   useEffect(() => on("closing", () => setClosing(true)), []);
@@ -255,6 +259,11 @@ export default function App() {
         <div className="brand">
           <img src="./icon.svg" alt="" />
           <span>BoxForge</span>
+          {appVersion && (
+            <span className="brand-version" data-testid="app-version" title="설정에서 업데이트를 확인할 수 있습니다">
+              {/^\d/.test(appVersion) ? "v" + appVersion : appVersion}
+            </span>
+          )}
         </div>
         <button className="search-button" onClick={() => setPalette(true)} data-testid="palette-open">
           <Icon name="search" />

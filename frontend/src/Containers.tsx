@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Avatar } from "./brand";
 import { call, openURL, type Container, type Image, type Run, type Size } from "./bridge";
 import { ago, bytes, isUp, stateLabel, statusText } from "./format";
+import { ExportDialog, ImportDialog } from "./Bundle";
 import EngineCopy, { explain } from "./EngineCopy";
 import { Dialog, IconButton, Menu, type MenuItem } from "./ui";
 
@@ -47,6 +48,8 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
   const [removing, setRemoving] = useState<{ c: Container; volumes: boolean } | null>(null);
   const [copying, setCopying] = useState<Container | null>(null);
+  const [exporting, setExporting] = useState<string[] | null>(null);
+  const [importing, setImporting] = useState(false);
   const [copied, setCopied] = useState<{ text: string; notes: string[] } | null>(null);
   // What is being done to each container right now, by ID: shown in its
   // row until the engine has answered.
@@ -151,6 +154,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
       items.push({ label: "외부 터미널 열기", onClick: () => run(`docker exec -it ${c.name} sh`, () => call("OpenTerminal", c.name)) });
     }
     items.push({ label: "다른 엔진으로 복사", onClick: () => setCopying(c) });
+    items.push({ label: "파일로 내보내기", onClick: () => setExporting([c.id]) });
     if (isUp(c)) items.push({ label: "강제 종료", onClick: () => act(c, "kill"), danger: true });
     return items;
   };
@@ -296,6 +300,10 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        <button onClick={() => setImporting(true)}>가져오기</button>
+        <button disabled={containers.length === 0} onClick={() => setExporting([])}>
+          내보내기
+        </button>
         <button className="primary" onClick={onNew}>
           새 컨테이너 실행
         </button>
@@ -368,6 +376,29 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
             닫기
           </button>
         </div>
+      )}
+
+      {exporting && (
+        <ExportDialog
+          containers={containers}
+          picked={exporting}
+          run={run}
+          onClose={() => setExporting(null)}
+          onDone={(file) => {
+            setCopied({ text: `파일로 내보냈습니다: ${file} — 이 파일을 다른 PC의 BoxForge에서 "가져오기"로 열면 됩니다.`, notes: [] });
+            setExporting(null);
+          }}
+        />
+      )}
+      {importing && (
+        <ImportDialog
+          run={run}
+          onClose={() => setImporting(false)}
+          onDone={(names, notes) => {
+            setCopied({ text: `가져왔습니다: ${names.join(", ")}. 멈춘 상태로 만들어졌으니 확인한 뒤 시작하세요.`, notes });
+            setImporting(false);
+          }}
+        />
       )}
 
       {copying && (

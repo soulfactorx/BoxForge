@@ -971,3 +971,12 @@ button.link.add-remote { padding: 0; }
 
 .grid .state, .grid td .sub { white-space: nowrap; }
 .grid th { white-space: nowrap; }
+
+.brand-version { font-size: 11.5px; font-weight: 500; letter-spacing: 0; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; margin-left: -2px; }
+.pick-list { display: grid; gap: 4px; max-height: 190px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.file-line { display: grid; gap: 6px; margin-top: 12px; font-weight: 600; }
+.file-line .pair { font-weight: 400; }
+.bundle-info { display: grid; gap: 6px; margin-top: 12px; }
+.bundle-info ul { margin: 0; padding-left: 18px; }
+fieldset.plain { border: none; padding: 0; margin: 12px 0 10px; min-width: 0; }
+fieldset.plain legend { font-weight: 600; padding: 0; margin-bottom: 6px; }

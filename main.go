@@ -91,6 +91,15 @@ func main() {
 					Filters: []runtime.FileFilter{{DisplayName: "인증서 (*.crt, *.pem, *.cer)", Pattern: "*.crt;*.pem;*.cer"}},
 				})
 			})
+			bundles := []runtime.FileFilter{{DisplayName: "BoxForge 묶음 (*.boxforge)", Pattern: "*.boxforge"}}
+			app.SetBundlePickers(
+				func(name string) (string, error) {
+					return runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{Title: "내보낼 파일", DefaultFilename: name, Filters: bundles})
+				},
+				func() (string, error) {
+					return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{Title: "가져올 파일", Filters: bundles})
+				},
+			)
 			app.SetFolderPicker(func() (string, error) {
 				return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{Title: "빌드할 폴더 선택"})
 			})

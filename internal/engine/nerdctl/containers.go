@@ -1,6 +1,8 @@
 package nerdctl
 
 import (
+	"archive/tar"
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -76,9 +78,35 @@ func (s containers) List(ctx context.Context) ([]engine.Container, error) {
 	if err := json.Unmarshal(b, &in); err != nil {
 		return nil, errors.New("nerdctl's description of the containers could not be read")
 	}
+	// A container may name its image by ID (one made from a loaded
+	// image): the list says the image's name, and its ID apart.
+	nameOf, idOf := map[string]string{}, map[string]string{}
+	if ims, err := (images{s.r}).List(ctx); err == nil {
+		for _, im := range ims {
+			for _, tag := range im.Tags {
+				idOf[tag] = im.ID
+				idOf["docker.io/"+tag] = im.ID
+				idOf["docker.io/library/"+tag] = im.ID
+				if nameOf[im.ID] == "" || strings.HasPrefix(nameOf[im.ID], "import") {
+					nameOf[im.ID] = tag
+				}
+			}
+		}
+	}
 	for _, c := range in {
+		if name := nameOf[c.Image]; name != "" {
+			c.Image = name
+		}
+		imageID := idOf[c.Image]
+		if imageID == "" {
+			imageID = c.Image
+		}
+		c.Image = strings.TrimPrefix(c.Image, "docker.io/")
+		if c.State.Status == "" {
+			c.State.Status = "created" // made, never started: nerdctl leaves it blank
+		}
 		out := engine.Container{
-			ID: c.Id, Name: c.Name, Image: c.Image, ImageID: c.Image, State: c.State.Status,
+			ID: c.Id, Name: c.Name, Image: c.Image, ImageID: imageID, State: c.State.Status,
 			ExitCode: c.State.ExitCode, Created: stamp(c.Created), Labels: c.Config.Labels,
 			Project: c.Config.Labels[engine.LabelComposeProject], Service: c.Config.Labels[engine.LabelComposeService],
 			Ports: []engine.Port{}, Volumes: []string{}, Networks: []engine.Attachment{},
@@ -292,6 +320,8 @@ type session struct {
 	in     io.WriteCloser
 	cmd    *exec.Cmd
 	cancel context.CancelFunc
+	r      *runtime
+	tty    string // the terminal `script` lent, as its machine names it
 }
 
 func (s *session) Write(b []byte) (int, error) { return s.in.Write(b) }
@@ -302,31 +332,40 @@ func (s *session) Close() error {
 	return nil
 }
 
-// Resize does nothing: the terminal is `script`'s, on the far side of a
-// pipe, and keeps the size it was opened with.
-func (s *session) Resize(context.Context, uint, uint) error { return nil }
+// Resize sets the size of the terminal `script` lent, from outside it;
+// the system then tells nerdctl, which tells the container.
+func (s *session) Resize(ctx context.Context, cols, rows uint) error {
+	if s.tty == "" {
+		return nil
+	}
+	return s.r.beside(ctx, "stty", "-F", s.tty, "rows", strconv.Itoa(int(rows)), "cols", strconv.Itoa(int(cols))).Run()
+}
+
+// beside is a command other than nerdctl on the machine nerdctl runs on:
+// the launcher that leads to nerdctl leads to it as well.
+func (r *runtime) beside(ctx context.Context, tool string, args ...string) *exec.Cmd {
+	name, full := r.command()
+	if len(full) == 0 {
+		name = tool
+	} else {
+		full = append(full[:len(full)-1:len(full)-1], tool)
+	}
+	c := exec.CommandContext(ctx, name, append(full, args...)...)
+	hide(c)
+	return c
+}
+
+// ttyMark begins the line in which a session says which terminal it has.
+const ttyMark = "BOXFORGE-TTY:"
 
 func (s containers) Exec(_ context.Context, id string, cmd []string, cols, rows uint) (engine.Session, error) {
-	line := fmt.Sprintf("stty rows %d cols %d 2>/dev/null; exec nerdctl exec -it %s", rows, cols, shq(id))
+	line := fmt.Sprintf(`printf '%s%%s\n' "$(tty)"; stty rows %d cols %d 2>/dev/null; exec nerdctl exec -it %s`, ttyMark, rows, cols, shq(id))
 	for _, w := range cmd {
 		line += " " + shq(w)
 	}
 	// The session outlives the call that opens it.
 	ctx, cancel := context.WithCancel(context.Background())
-	name, full := s.r.command()
-	// The launcher that leads to nerdctl leads to `script` as well: its
-	// last word, "nerdctl", is swapped for the command.
-	if len(full) == 0 {
-		name, full = "script", nil
-	} else {
-		full = full[:len(full)-1]
-		full = append(full, "script")
-	}
-	if name == "nerdctl" {
-		name = "script"
-	}
-	c := exec.CommandContext(ctx, name, append(full, "-qfc", line, "/dev/null")...)
-	hide(c)
+	c := s.r.beside(ctx, "script", "-qfc", line, "/dev/null")
 	in, err := c.StdinPipe()
 	if err != nil {
 		cancel()
@@ -339,7 +378,20 @@ func (s containers) Exec(_ context.Context, id string, cmd []string, cols, rows 
 		return nil, fmt.Errorf("a terminal needs the `script` command beside nerdctl: %w", err)
 	}
 	go func() { w.CloseWithError(c.Wait()) }()
-	return &session{Reader: r, in: in, cmd: c, cancel: cancel}, nil
+	// Its first line names the terminal; the rest is the session.
+	out := bufio.NewReader(r)
+	sess := &session{Reader: out, in: in, cmd: c, cancel: cancel, r: s.r}
+	for i := 0; i < 5; i++ {
+		text, err := out.ReadString('\n')
+		if at := strings.Index(text, ttyMark); at >= 0 {
+			sess.tty = strings.TrimSpace(text[at+len(ttyMark):])
+			break
+		}
+		if err != nil {
+			break
+		}
+	}
+	return sess, nil
 }
 
 // percent and pair read "0.50%" and "828KiB / 8EiB".
@@ -446,7 +498,82 @@ func (s containers) Pipe(ctx context.Context, id string, cmd []string) (io.ReadW
 	return duplex{out, in, cancel}, nil
 }
 
-var errStopped = errors.New("with containerd, files can be looked at only while the container is running (and has a shell)")
+// exported reads the container's whole file system, which is what
+// nerdctl gives of a container that is not running, and calls each with
+// the entries under dir (all of them for "/"), names made relative to it.
+func (s containers) exported(ctx context.Context, id, dir string, each func(h *tar.Header, rel string, body io.Reader) error) error {
+	rc, err := s.r.reading(ctx, "export", id)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	prefix := strings.Trim(dir, "/")
+	tr := tar.NewReader(rc)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		name := strings.Trim(path.Clean("/"+h.Name), "/")
+		rel := name
+		if prefix != "" {
+			if name != prefix && !strings.HasPrefix(name, prefix+"/") {
+				continue
+			}
+			rel = strings.TrimPrefix(strings.TrimPrefix(name, prefix), "/")
+		}
+		if err := each(h, rel, tr); err != nil {
+			return err
+		}
+	}
+}
+
+func (s containers) filesExported(ctx context.Context, id, dir string) ([]engine.FileEntry, error) {
+	entries := []engine.FileEntry{}
+	found := dir == "/"
+	err := s.exported(ctx, id, dir, func(h *tar.Header, rel string, _ io.Reader) error {
+		if rel == "" {
+			found = true
+			return nil
+		}
+		if strings.Contains(rel, "/") {
+			return nil
+		}
+		kind := "other"
+		switch h.Typeflag {
+		case tar.TypeDir:
+			kind = "dir"
+		case tar.TypeReg:
+			kind = "file"
+		case tar.TypeSymlink:
+			kind = "link"
+		}
+		entries = append(entries, engine.FileEntry{Name: rel, Kind: kind, Size: h.Size, Modified: h.ModTime.Unix()})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !found && len(entries) == 0 {
+		return nil, fmt.Errorf("no such folder: %s", dir)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if (entries[i].Kind == "dir") != (entries[j].Kind == "dir") {
+			return entries[i].Kind == "dir"
+		}
+		return entries[i].Name < entries[j].Name
+	})
+	return entries, nil
+}
+
+// running reports whether the container can be asked directly.
+func (s containers) running(ctx context.Context, id string) bool {
+	b, err := s.r.out(ctx, "inspect", "--format", "{{.State.Status}}", id)
+	return err == nil && strings.TrimSpace(string(b)) == "running"
+}
 
 func (s containers) Files(ctx context.Context, id, p string) ([]engine.FileEntry, error) {
 	stdout, _, code, err := s.Output(ctx, id, []string{"/bin/sh", "-c", docker.ListScript, "sh", path.Clean("/" + p)}, nil)
@@ -455,7 +582,8 @@ func (s containers) Files(ctx context.Context, id, p string) ([]engine.FileEntry
 			return entries, nil
 		}
 	}
-	return nil, errStopped
+	// Stopped, or with no shell: read from the export of its files.
+	return s.filesExported(ctx, id, path.Clean("/"+p))
 }
 
 // Archive asks the container's own tar: nerdctl's copy command writes to
@@ -466,11 +594,49 @@ func (s containers) Archive(ctx context.Context, id, p string) (io.ReadCloser, e
 	if p == "/" {
 		dir, base = "/", "."
 	}
-	return s.r.reading(ctx, "exec", id, "tar", "-cf", "-", "-C", dir, base)
+	if s.running(ctx, id) {
+		if _, _, code, err := s.Output(ctx, id, []string{"tar", "--version"}, nil); err == nil && code == 0 {
+			return s.r.reading(ctx, "exec", id, "tar", "-cf", "-", "-C", dir, base)
+		}
+	}
+	// Not running, or no tar inside: the same archive, cut from the export.
+	pr, pw := io.Pipe()
+	go func() {
+		tw := tar.NewWriter(pw)
+		err := s.exported(ctx, id, p, func(h *tar.Header, rel string, body io.Reader) error {
+			out := *h
+			out.Name = path.Join(base, rel)
+			if h.Typeflag == tar.TypeDir {
+				out.Name += "/"
+			}
+			if err := tw.WriteHeader(&out); err != nil {
+				return err
+			}
+			_, err := io.Copy(tw, body)
+			return err
+		})
+		if err == nil {
+			err = tw.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	return pr, nil
 }
 
+// Prune: nerdctl does not say how much it freed, so what the stopped
+// containers held is measured first.
 func (s containers) Prune(ctx context.Context) (int64, error) {
-	return 0, s.r.do(ctx, "container", "container", "prune", "-f")
+	var freed int64
+	if list, err := s.List(ctx); err == nil {
+		if sizes, err := s.Sizes(ctx); err == nil {
+			for _, c := range list {
+				if c.State != "running" && c.State != "paused" {
+					freed += sizes[c.ID].RW
+				}
+			}
+		}
+	}
+	return freed, s.r.do(ctx, "container", "container", "prune", "-f")
 }
 
 func (s containers) Commit(ctx context.Context, id, ref string) error {
@@ -482,6 +648,8 @@ func (s containers) Commit(ctx context.Context, id, ref string) error {
 func (s containers) CreateFrom(ctx context.Context, raw []byte, img string) (string, []string, error) {
 	var in struct {
 		Name   string
+		Path   string
+		Args   []string
 		Config *struct {
 			Env        []string
 			Cmd        []string
@@ -530,7 +698,13 @@ func (s containers) CreateFrom(ctx context.Context, raw []byte, img string) (str
 	if len(in.Config.Entrypoint) > 0 {
 		notes = append(notes, "이미지의 시작 명령(entrypoint)을 바꾼 설정은 옮기지 않았습니다.")
 	}
-	b, err := s.r.out(ctx, append([]string{"create", "--pull", "never"}, runArgs(spec)...)...)
+	args := []string{"create", "--pull", "never"}
+	if len(in.Config.Cmd) == 0 && len(in.Config.Entrypoint) == 0 && in.Path != "" {
+		// nerdctl's own description: the whole command is in Path and Args.
+		args = append(args, "--entrypoint", in.Path)
+		spec.Command = in.Args
+	}
+	b, err := s.r.out(ctx, append(args, runArgs(spec)...)...)
 	s.r.changed("container")
 	if err != nil {
 		return "", nil, err

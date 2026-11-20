@@ -1212,6 +1212,15 @@ func (a *App) CopyContainer(key, id, targetID string, o CopyOptions) ([]string, 
 			_ = src.Images().Remove(ctx, ref, false)
 		}()
 	}
+	// What a copy that fails brought along is taken away again.
+	had := dst.Images().Exists(ctx, ref)
+	undo := func() {
+		if !had {
+			ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+			defer cancel()
+			_ = dst.Images().Remove(ctx, ref, false)
+		}
+	}
 	say("이미지를 보내는 중")
 	var last time.Time
 	err = sendImage(ctx, src, dst, ref, func(n int64) {
@@ -1221,12 +1230,14 @@ func (a *App) CopyContainer(key, id, targetID string, o CopyOptions) ([]string, 
 		}
 	})
 	if err != nil {
+		undo()
 		return nil, err
 	}
 	if o.Volumes {
 		for _, m := range info.Mounts {
 			if m.Type == "volume" && m.Name != "" {
 				if err := sendVolume(ctx, src, dst, m.Name, say); err != nil {
+					undo()
 					return nil, fmt.Errorf("volume %s: %w", m.Name, err)
 				}
 			}
@@ -1237,7 +1248,21 @@ func (a *App) CopyContainer(key, id, targetID string, o CopyOptions) ([]string, 
 	if notes == nil {
 		notes = []string{}
 	}
+	if err != nil {
+		undo()
+		err = portHint(err)
+	}
 	return notes, err
+}
+
+// portHint adds, to an engine's complaint that a port is taken, what
+// usually took it: the very container being copied, still running.
+func portHint(err error) error {
+	low := strings.ToLower(err.Error())
+	if strings.Contains(low, "port") && (strings.Contains(low, "already") || strings.Contains(low, "in use") || strings.Contains(low, "conflict")) {
+		return fmt.Errorf("%w\n\n같은 PC의 다른 엔진으로 복사할 때는 원본 컨테이너가 그 포트를 쓰고 있기 때문인 경우가 많습니다. 원본을 중지한 뒤 다시 복사하세요", err)
+	}
+	return err
 }
 
 // ---- engines on other machines
