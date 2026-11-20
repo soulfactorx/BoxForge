@@ -1,0 +1,94 @@
+// The one place that knows how the page reaches the Go side: Wails' bindings
+// inside the desktop app, or the dev server's HTTP API in a browser.
+
+export interface Port {
+  ip: string;
+  private: number;
+  public: number;
+  proto: string;
+}
+
+export interface Container {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  failed: boolean;
+  created: number;
+  ports: Port[];
+  project: string;
+  service: string;
+}
+
+export interface EngineInfo {
+  runtime: string;
+  name: string;
+  version: string;
+  os: string;
+  arch: string;
+  cpus: number;
+  memTotal: number;
+  containers: number;
+  running: number;
+  images: number;
+}
+
+export interface EngineStatus {
+  connected: boolean;
+  error: string;
+  info: EngineInfo | null;
+}
+
+type Listener = (data: any) => void;
+
+const w = window as any;
+const bound = () => w.go?.app?.App;
+
+/** Calls a method of the Go App. Rejects with an Error carrying the engine's message. */
+export async function call<T>(method: string, ...args: unknown[]): Promise<T> {
+  const b = bound();
+  if (b) {
+    try {
+      return await b[method](...args);
+    } catch (e: any) {
+      throw new Error(e?.message ?? String(e));
+    }
+  }
+  const res = await fetch(`/api/call/${method}`, { method: "POST", body: JSON.stringify(args) });
+  const body = await res.json();
+  if (body.error) throw new Error(body.error);
+  return body.result as T;
+}
+
+const listeners = new Map<string, Set<Listener>>();
+let source: EventSource | null = null;
+
+/** Event sent to listeners whenever the browser's event stream (re)opens: reload then. */
+export const STREAM_OPEN = "stream-open";
+
+function dispatch(event: string, data: unknown) {
+  listeners.get(event)?.forEach((l) => l(data));
+}
+
+/** Subscribes to an event from the Go side. Returns the unsubscribe function. */
+export function on(event: string, cb: Listener): () => void {
+  if (w.runtime?.EventsOn) return w.runtime.EventsOn(event, cb);
+  if (!listeners.has(event)) listeners.set(event, new Set());
+  listeners.get(event)!.add(cb);
+  if (!source) {
+    source = new EventSource("/api/events");
+    source.onopen = () => dispatch(STREAM_OPEN, null);
+    source.onmessage = (m) => {
+      const { event, data } = JSON.parse(m.data);
+      dispatch(event, data);
+    };
+  }
+  return () => listeners.get(event)?.delete(cb);
+}
+
+/** Opens a URL in the user's browser. */
+export function openURL(url: string) {
+  if (w.runtime?.BrowserOpenURL) w.runtime.BrowserOpenURL(url);
+  else window.open(url, "_blank", "noopener");
+}

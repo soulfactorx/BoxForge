@@ -317,27 +317,26 @@ Docker 호환 API가 있어 Docker 어댑터 구현을 대부분 공유한다. P
 
 ```
 BoxForge/
-├─ main.go  wails.json
+├─ main.go  wails.json     # 데스크톱 앱 진입점
+├─ cmd/devserver/          # 화면을 일반 브라우저로 띄우는 개발용 HTTP 서버
 ├─ internal/
 │  ├─ app/                 # 화면에 노출되는 바인딩 (얇게)
-│  ├─ runtime/             # Runtime 인터페이스, 공통 모델, Capability
+│  ├─ engine/              # Runtime 인터페이스, 공통 모델, Capability
 │  │  ├─ docker/           # (나중) podman/ containerd/
 │  │  └─ fake/             # 인메모리 가짜 엔진: 테스트·화면 개발용
+│  ├─ hub/                 # 이벤트 허브: 엔진 상태를 따라가며 화면에 푸시
 │  ├─ cluster/             # (나중) Kubernetes
-│  ├─ provision/           # 엔진 설치·관리: 환경 점검, 단계 실행기(재개 가능)
+│  ├─ provision/           # (M0.5) 엔진 설치·관리: 환경 점검, 단계 실행기(재개 가능)
 │  │  ├─ windows/          #   WSL2 준비, 전용 배포판, 지킴이, 경로 변환
 │  │  ├─ linux/            #   배포판별 패키지 설치
 │  │  └─ darwin/           #   Lima VM
-│  ├─ discovery/           # 엔진 자동 탐지 (Docker Desktop 제외)
-│  ├─ clirunner/           # compose·buildx 호출, 명령 파싱/생성
-│  ├─ events/  jobs/       # 이벤트 허브, 작업
-│  ├─ diagnose/            # 오류·상태 해석 규칙
-│  ├─ recipes/             # 실행 레시피 (YAML)
-│  └─ store/               # 설정·프리셋 (JSON 파일)
-├─ frontend/src/
-│  ├─ features/{onboarding,home,topology,containers,images,compose,volumes,networks,builds,disk}/
-│  ├─ components/{graph,table,terminal,logs,wizard,detail}/
-│  └─ i18n/
+│  ├─ discovery/           # (나중) 엔진 자동 탐지 (Docker Desktop 제외)
+│  ├─ clirunner/           # (나중) compose·buildx 호출, 명령 파싱/생성
+│  ├─ jobs/                # (나중) 긴 작업
+│  ├─ diagnose/            # (나중) 오류·상태 해석 규칙
+│  ├─ recipes/             # (나중) 실행 레시피 (YAML)
+│  └─ store/               # (나중) 설정·프리셋 (JSON 파일)
+├─ frontend/src/           # React 화면. bridge.ts가 Go 쪽과의 유일한 접점
 └─ docs/
 ```
 
