@@ -29,6 +29,7 @@ import (
 	"github.com/soulfactorx/boxforge/internal/extterm"
 	"github.com/soulfactorx/boxforge/internal/hub"
 	"github.com/soulfactorx/boxforge/internal/provision"
+	"github.com/soulfactorx/boxforge/internal/update"
 )
 
 // How long one action (stop waits for the container's own shutdown) may take.
@@ -72,6 +73,7 @@ func connect(t engines.Target) (engine.Runtime, error) {
 // New opens the engine chosen last time, else the one the docker command
 // uses. BOXFORGE_ENGINE=fake gives the in-memory one.
 func New() (*App, error) {
+	update.Cleanup()
 	t := engines.Find(engines.Saved())
 	rt, err := connect(t)
 	if err != nil {
@@ -395,6 +397,13 @@ func (a *App) pull(ctx context.Context, ref string) error {
 		}
 		a.emit("pull", PullState{Ref: ref, Status: p.Status, Percent: percent})
 	})
+	if err != nil && needsLogin(err) {
+		// The engine was asked without a sign-in. The docker command knows
+		// the ones made with "docker login": let it try.
+		if cliErr := a.pullWithCLI(ctx, ref); cliErr == nil {
+			err = nil
+		}
+	}
 	end := PullState{Ref: ref, Percent: 100, Done: true}
 	if err != nil {
 		end.Error = err.Error()

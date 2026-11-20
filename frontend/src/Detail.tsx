@@ -72,7 +72,34 @@ function Logs({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) 
   );
 }
 
-function Overview({ c, raw }: { c: Container; raw: string }) {
+// What an exit code says about how a container ended.
+function reason(code: number, oom: boolean, message: string): { title: string; text: string; logs: boolean } {
+  if (oom) return { title: "메모리가 부족해 강제로 종료됐습니다", text: "프로그램이 엔진이 허용한 것보다 많은 메모리를 썼습니다. 메모리 한도를 늘리거나 프로그램의 사용량을 줄여야 합니다.", logs: true };
+  if (message) return { title: "시작하지 못했습니다", text: message, logs: false };
+  switch (code) {
+    case 0:
+      return { title: "할 일을 마치고 정상적으로 끝났습니다", text: "오류가 아닙니다. 계속 떠 있어야 하는 프로그램이라면 실행 명령을 확인하세요.", logs: true };
+    case 125:
+      return { title: "엔진이 컨테이너를 실행하지 못했습니다", text: "실행 설정(포트, 마운트 등)에 문제가 있을 수 있습니다.", logs: false };
+    case 126:
+      return { title: "실행 명령을 실행할 수 없습니다", text: "명령으로 지정한 파일에 실행 권한이 없거나 실행 파일이 아닙니다.", logs: true };
+    case 127:
+      return { title: "실행 명령을 찾지 못했습니다", text: "이미지 안에 그 이름의 프로그램이 없습니다. 실행 명령의 철자와 경로를 확인하세요.", logs: true };
+    case 130:
+      return { title: "사용자가 중단했습니다 (Ctrl+C)", text: "오류가 아닙니다.", logs: false };
+    case 137:
+      return { title: "강제로 종료됐습니다", text: "중지 요청 뒤 10초 안에 끝나지 않았거나, 강제 종료를 눌렀거나, 메모리가 부족했을 수 있습니다.", logs: true };
+    case 139:
+      return { title: "프로그램이 비정상 종료됐습니다 (메모리 접근 오류)", text: "프로그램 자체의 결함이거나, 이미지가 이 PC의 프로세서 종류와 맞지 않을 수 있습니다.", logs: true };
+    case 143:
+      return { title: "중지 요청을 받고 끝났습니다", text: "오류가 아닙니다.", logs: false };
+    case 255:
+      return { title: "엔진이나 PC가 꺼지면서 함께 멈췄습니다", text: "프로그램의 오류라기보다 바깥 사정일 가능성이 큽니다. 다시 시작하면 됩니다.", logs: true };
+  }
+  return { title: `프로그램이 오류를 내고 끝났습니다 (종료 코드 ${code})`, text: "무엇이 잘못됐는지는 프로그램이 남긴 마지막 로그에 있습니다. 필수 환경변수(비밀번호 등)가 빠졌을 때 흔히 이렇게 됩니다.", logs: true };
+}
+
+function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () => void }) {
   const [reveal, setReveal] = useState(false);
   const info = useMemo(() => {
     try {
@@ -86,9 +113,22 @@ function Overview({ c, raw }: { c: Container; raw: string }) {
   const networks = Object.entries<any>(info?.NetworkSettings?.Networks ?? {});
   const command = [info?.Path, ...(info?.Args ?? [])].filter(Boolean).join(" ");
   const restart = info?.HostConfig?.RestartPolicy?.Name;
+  const st = info?.State;
+  const why = st && (st.Status === "exited" || st.Status === "dead" || (st.Status === "created" && st.Error)) ? reason(st.ExitCode ?? 0, !!st.OOMKilled, st.Error ?? "") : null;
   return (
     <div className="overview">
       {c.state === "running" && <Charts id={c.id} />}
+      {why && (
+        <div className={"note-box why" + (c.failed || info?.State?.OOMKilled ? " bad" : "")} data-testid="why">
+          <strong>{why.title}</strong>
+          <span>{why.text}</span>
+          {why.logs && (
+            <button className="link" onClick={onLogs}>
+              마지막 로그 보기
+            </button>
+          )}
+        </div>
+      )}
       <dl className="facts">
         <dt>상태</dt>
         <dd>
@@ -245,7 +285,7 @@ export default function Detail({ c, tab, onTab, onClose, showCli, run }: Props) 
       </div>
       <div className="drawer-body">
         {error && <p className="warn">{error}</p>}
-        {tab === "overview" && <Overview c={c} raw={raw} />}
+        {tab === "overview" && <Overview c={c} raw={raw} onLogs={() => onTab("logs")} />}
         {tab === "logs" && <Logs c={c} showCli={showCli} />}
         {tab === "terminal" &&
           (c.state === "running" ? (

@@ -116,6 +116,10 @@ func (r *Runtime) Events(ctx context.Context) (<-chan engine.Event, <-chan error
 	return ch, errc
 }
 
+func (r *Runtime) Usage(context.Context) (engine.Usage, error) {
+	return engine.Usage{Images: 2 << 30, ImagesFree: 500 << 20, Containers: 30 << 20, ContainersFree: 10 << 20, Volumes: 1 << 30, VolumesFree: 100 << 20, BuildCache: 200 << 20, BuildCacheFree: 200 << 20, StoppedCount: 2, UnusedVolumes: 1, UnusedImages: 2}, nil
+}
+
 func (r *Runtime) Containers() engine.ContainerService { return containers{r} }
 func (r *Runtime) Images() engine.ImageService         { return images{r} }
 func (r *Runtime) Volumes() engine.VolumeService       { return volumes{r} }
@@ -317,6 +321,8 @@ func (c containers) Output(context.Context, string, []string, []byte) (string, s
 	return "", "the fake engine runs nothing", 1, nil
 }
 
+func (c containers) Prune(context.Context) (int64, error) { return 0, nil }
+
 func (c containers) Commit(context.Context, string, string) error { return nil }
 
 func (c containers) CreateFrom(ctx context.Context, _ []byte, img string) (string, []string, error) {
@@ -424,6 +430,10 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func (i images) Defaults(context.Context, string) (engine.ImageDefaults, error) {
+	return engine.ImageDefaults{Ports: []engine.PortSpec{{Host: 80, Container: 80, Proto: "tcp"}}, Volumes: []string{"/data"}}, nil
 }
 
 func (i images) Save(_ context.Context, ref string) (io.ReadCloser, error) {

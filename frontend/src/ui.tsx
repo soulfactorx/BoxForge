@@ -23,6 +23,9 @@ const paths: Record<string, ReactNode> = {
   map: <path d="M5.500 6.500h3v3h-3zM11.500 4h3v3h-3zM11.500 13h3v3h-3zM8.500 8h1.500v-2.500h1.500M8.500 8h1.500v6.500h1.500" />,
   minus: <path d="M4.500 10h11" />,
   kube: <path d="M10 3l6 2.800 1.300 6.300-4.100 5H6.800l-4.100-5L4 5.800zM10 7.500v5M7.800 8.800l4.400 2.400M12.200 8.800l-4.400 2.400" />,
+  home: <path d="M3.500 9.500L10 4l6.500 5.500M5.500 8.500V16h9V8.500M8.500 16v-4h3v4" />,
+  gear: <path d="M10 12.500a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5zM10 3v2M10 15v2M3 10h2M15 10h2M5.050 5.050l1.400 1.400M13.550 13.550l1.400 1.400M5.050 14.950l1.400-1.400M13.550 6.450l1.400-1.400" />,
+  search: <path d="M9 14.500a5.500 5.500 0 1 0 0-11 5.500 5.500 0 0 0 0 11zM13 13l3.500 3.500" />,
   sort: <path d="M6 8l4-4 4 4M6 12l4 4 4-4" />,
 };
 
@@ -38,6 +41,7 @@ export function Icon({ name }: { name: keyof typeof paths | string }) {
 export function IconButton(props: { icon: string; label: string; onClick: () => void; tone?: "danger" | "go"; disabled?: boolean }) {
   return (
     <button
+      type="button"
       className={"icon-btn " + (props.tone ?? "")}
       title={props.label}
       aria-label={props.label}
@@ -80,6 +84,7 @@ export function Menu({ items, label = "더보기" }: { items: MenuItem[]; label?
         <div className="menu" role="menu">
           {items.map((it) => (
             <button
+              type="button"
               key={it.label}
               role="menuitem"
               className={it.danger ? "danger" : ""}

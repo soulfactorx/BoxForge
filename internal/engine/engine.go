@@ -146,6 +146,28 @@ type Session interface {
 	Resize(ctx context.Context, cols, rows uint) error
 }
 
+// Usage is disk space by kind of thing: what each takes, and how much of
+// that nothing is using (so could be freed).
+type Usage struct {
+	Images         int64 `json:"images"`
+	ImagesFree     int64 `json:"imagesFree"`
+	Containers     int64 `json:"containers"`
+	ContainersFree int64 `json:"containersFree"`
+	Volumes        int64 `json:"volumes"`
+	VolumesFree    int64 `json:"volumesFree"`
+	BuildCache     int64 `json:"buildCache"`
+	BuildCacheFree int64 `json:"buildCacheFree"`
+	StoppedCount   int   `json:"stoppedCount"`
+	UnusedVolumes  int   `json:"unusedVolumes"`
+	UnusedImages   int   `json:"unusedImages"`
+}
+
+// ImageDefaults is what an image says it expects of a container.
+type ImageDefaults struct {
+	Ports   []PortSpec `json:"ports"`   // the ports its program listens on
+	Volumes []string   `json:"volumes"` // the folders it keeps data in
+}
+
 // Event is a change notification from the engine.
 type Event struct {
 	Type   string `json:"type"`   // container, image, volume, network
@@ -169,6 +191,8 @@ type Runtime interface {
 	// error channel then yields one value and both channels close.
 	Events(ctx context.Context) (<-chan Event, <-chan error)
 	Containers() ContainerService
+	// Usage measures the disk the engine's things take. Slow.
+	Usage(ctx context.Context) (Usage, error)
 	Images() ImageService
 	Volumes() VolumeService
 	Networks() NetworkService
@@ -206,6 +230,8 @@ type ContainerService interface {
 	// Output runs cmd in a running container with no terminal, gives it
 	// stdin (nil for none), and returns what it wrote and its exit code.
 	Output(ctx context.Context, id string, cmd []string, stdin []byte) (stdout, stderr string, code int, err error)
+	// Prune deletes every stopped container and returns the bytes freed.
+	Prune(ctx context.Context) (int64, error)
 	// Commit makes an image of the container as it is now: its image plus
 	// everything written in it since.
 	Commit(ctx context.Context, id, ref string) error
@@ -272,6 +298,8 @@ type ImageService interface {
 	Tag(ctx context.Context, source, target string) error
 	// Prune deletes untagged images no container uses, and returns the bytes freed.
 	Prune(ctx context.Context) (int64, error)
+	// Defaults returns the ports and data folders the image declares.
+	Defaults(ctx context.Context, ref string) (ImageDefaults, error)
 	// Save returns the image as a tar stream, as `docker save` writes it.
 	Save(ctx context.Context, ref string) (io.ReadCloser, error)
 	// Load takes in such a stream, as `docker load` does.

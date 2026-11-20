@@ -1,0 +1,85 @@
+# Builds the programs and publishes a release when a version tag (v1.2.3) is
+# pushed. The app updates itself from these releases, so the file names
+# (BoxForge-<os>-<arch>[.exe], checksums.txt) are part of its contract:
+# see internal/update.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write
+
+env:
+  WAILS_VERSION: v2.17.1
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: BoxForge-windows-amd64.exe
+            output: BoxForge-windows-amd64.exe
+            tags: ""
+          - os: ubuntu-24.04
+            asset: BoxForge-linux-amd64
+            output: BoxForge-linux-amd64
+            tags: webkit2_41
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+      - name: Build
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tags=()
+          if [ -n "${{ matrix.tags }}" ]; then tags=(-tags "${{ matrix.tags }}"); fi
+          wails build -clean "${tags[@]}" -o "${{ matrix.output }}" \
+            -ldflags "-X github.com/soulfactorx/boxforge/internal/version.Version=${version}"
+          ls -l build/bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: build/bin/${{ matrix.output }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          cd dist
+          sha256sum BoxForge-* > checksums.txt
+          cat checksums.txt
+          cd ..
+          # This version's section of the changelog is the release's text.
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## " v "( |$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          test -s notes.md || echo "BoxForge ${version}" > notes.md
+          cat notes.md
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/BoxForge-* dist/checksums.txt --title "BoxForge ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag

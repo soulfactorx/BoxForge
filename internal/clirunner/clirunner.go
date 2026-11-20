@@ -80,6 +80,26 @@ func Output(ctx context.Context, env []string, name string, args ...string) (str
 	return strings.TrimSpace(string(out)), err
 }
 
+// OutputIn is Output with stdin given to the tool: for a secret, which
+// must not be on a command line where other programs can read it.
+func OutputIn(ctx context.Context, env []string, stdin []byte, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	HideWindow(cmd)
+	cmd.Stdin = strings.NewReader(string(stdin))
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if lines := strings.Split(strings.TrimSpace(stderr.String()), "\n"); lines[len(lines)-1] != "" {
+			err = fmt.Errorf("%s", strings.TrimSpace(lines[len(lines)-1]))
+		}
+	}
+	return strings.TrimSpace(string(out)), err
+}
+
 // scanLines splits at \n and at \r: progress output redraws a line with \r.
 func scanLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	for i, b := range data {

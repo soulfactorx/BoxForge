@@ -32,6 +32,7 @@ func main() {
 		AssetServer: &assetserver.Options{Assets: assets},
 		OnStartup: func(ctx context.Context) {
 			app.Start(a, func(event string, data any) { runtime.EventsEmit(ctx, event, data) })
+			app.SetQuit(func() { runtime.Quit(ctx) })
 			app.SetFolderPicker(func() (string, error) {
 				return runtime.OpenDirectoryDialog(ctx, runtime.OpenDialogOptions{Title: "빌드할 폴더 선택"})
 			})

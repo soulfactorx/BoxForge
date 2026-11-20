@@ -118,6 +118,50 @@ func (r *Runtime) Events(ctx context.Context) (<-chan engine.Event, <-chan error
 	return out, errc
 }
 
+func (r *Runtime) Usage(ctx context.Context) (engine.Usage, error) {
+	du, err := r.cli.DiskUsage(ctx, types.DiskUsageOptions{})
+	if err != nil {
+		return engine.Usage{}, err
+	}
+	u := engine.Usage{Images: du.LayersSize}
+	for _, im := range du.Images {
+		if im != nil && im.Containers == 0 {
+			u.ImagesFree += im.Size - max(im.SharedSize, 0)
+			u.UnusedImages++
+		}
+	}
+	for _, c := range du.Containers {
+		if c == nil {
+			continue
+		}
+		u.Containers += c.SizeRw
+		if c.State != "running" && c.State != "paused" && c.State != "restarting" {
+			u.ContainersFree += c.SizeRw
+			u.StoppedCount++
+		}
+	}
+	for _, v := range du.Volumes {
+		if v == nil || v.UsageData == nil || v.UsageData.Size < 0 {
+			continue
+		}
+		u.Volumes += v.UsageData.Size
+		if v.UsageData.RefCount == 0 {
+			u.VolumesFree += v.UsageData.Size
+			u.UnusedVolumes++
+		}
+	}
+	for _, b := range du.BuildCache {
+		if b == nil {
+			continue
+		}
+		u.BuildCache += b.Size
+		if !b.InUse {
+			u.BuildCacheFree += b.Size
+		}
+	}
+	return u, nil
+}
+
 func (r *Runtime) Containers() engine.ContainerService { return containers{r.cli} }
 func (r *Runtime) Images() engine.ImageService         { return images{r.cli} }
 func (r *Runtime) Volumes() engine.VolumeService       { return volumes{r.cli} }
@@ -318,6 +362,14 @@ func (c containers) Output(ctx context.Context, id string, cmd []string, stdin [
 		return "", "", 0, err
 	}
 	return stdout.String(), stderr.String(), res.ExitCode, nil
+}
+
+func (c containers) Prune(ctx context.Context) (int64, error) {
+	rep, err := c.cli.ContainersPrune(ctx, filters.Args{})
+	if err != nil {
+		return 0, err
+	}
+	return int64(rep.SpaceReclaimed), nil
 }
 
 func (c containers) Commit(ctx context.Context, id, ref string) error {
@@ -605,6 +657,30 @@ func (i images) Prune(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("prune images: %w", err)
 	}
 	return int64(rep.SpaceReclaimed), nil
+}
+
+func (i images) Defaults(ctx context.Context, ref string) (engine.ImageDefaults, error) {
+	d := engine.ImageDefaults{Ports: []engine.PortSpec{}, Volumes: []string{}}
+	in, err := i.cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return d, err
+	}
+	if in.Config == nil {
+		return d, nil
+	}
+	for port := range in.Config.ExposedPorts {
+		// "5432/tcp"
+		num, proto, _ := strings.Cut(string(port), "/")
+		if n, err := strconv.Atoi(num); err == nil && n > 0 && n < 65536 {
+			d.Ports = append(d.Ports, engine.PortSpec{Host: uint16(n), Container: uint16(n), Proto: proto})
+		}
+	}
+	sort.Slice(d.Ports, func(a, b int) bool { return d.Ports[a].Container < d.Ports[b].Container })
+	for dir := range in.Config.Volumes {
+		d.Volumes = append(d.Volumes, dir)
+	}
+	sort.Strings(d.Volumes)
+	return d, nil
 }
 
 func (i images) Save(ctx context.Context, ref string) (io.ReadCloser, error) {

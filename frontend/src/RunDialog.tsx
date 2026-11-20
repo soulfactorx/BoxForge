@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { call, on, type Image, type PullState, type Run, type RunSpec } from "./bridge";
 import { shq, words } from "./format";
+import { recipes, type Pair, type RunInit } from "./recipes";
 import { Dialog, IconButton, Progress } from "./ui";
 
-type Pair = { a: string; b: string };
+interface Defaults {
+  ports: { host: number; container: number }[];
+  volumes: string[];
+}
 
 const restarts: [string, string][] = [
   ["", "다시 시작하지 않음"],
@@ -37,21 +41,53 @@ function Pairs(props: { label: string; help: string; rows: Pair[]; onChange: (ro
 const filled = (rows: Pair[]) => rows.filter((r) => r.a.trim() && r.b.trim());
 
 interface Props {
-  image: string;
+  init: RunInit;
   images: Image[];
   run: Run;
   onClose: () => void;
   onStarted: (id: string) => void;
 }
 
-export default function RunDialog({ image: initial, images, run, onClose, onStarted }: Props) {
-  const [image, setImage] = useState(initial);
-  const [name, setName] = useState("");
-  const [ports, setPorts] = useState<Pair[]>([]);
-  const [mounts, setMounts] = useState<Pair[]>([]);
-  const [env, setEnv] = useState<Pair[]>([]);
-  const [restart, setRestart] = useState("");
-  const [command, setCommand] = useState("");
+export default function RunDialog({ init, images, run, onClose, onStarted }: Props) {
+  const [image, setImage] = useState(init.image);
+  const [name, setName] = useState(init.name ?? "");
+  const [ports, setPorts] = useState<Pair[]>(init.ports ?? []);
+  const [mounts, setMounts] = useState<Pair[]>(init.mounts ?? []);
+  const [env, setEnv] = useState<Pair[]>(init.env ?? []);
+  const [restart, setRestart] = useState(init.restart ?? "");
+  const [command, setCommand] = useState(init.command ?? "");
+  const [declared, setDeclared] = useState<Defaults | null>(null);
+
+  const fill = (r: RunInit) => {
+    setImage(r.image);
+    setName(r.name ?? "");
+    setPorts(r.ports ?? []);
+    setMounts(r.mounts ?? []);
+    setEnv(r.env ?? []);
+    setRestart(r.restart ?? "");
+    setCommand(r.command ?? "");
+  };
+
+  // An image already on this PC says which ports its program listens on
+  // and where it keeps data: offered, not imposed.
+  const have = images.some((im) => im.tags.includes(image.trim()) || im.tags.includes(image.trim() + ":latest"));
+  useEffect(() => {
+    setDeclared(null);
+    if (!have) return;
+    let stale = false;
+    call<Defaults>("ImageDefaults", image.trim()).then((d) => !stale && setDeclared(d), () => {});
+    return () => {
+      stale = true;
+    };
+  }, [image, have]);
+  const offer = declared && (declared.ports.length > 0 || declared.volumes.length > 0) && ports.length === 0 && mounts.length === 0;
+  const useDeclared = () => {
+    if (!declared) return;
+    setPorts(declared.ports.map((p) => ({ a: String(p.host), b: String(p.container) })));
+    const base = (name.trim() || image.trim().split("/").pop()!.split(":")[0]).replace(/[^a-zA-Z0-9_.-]/g, "");
+    setMounts(declared.volumes.map((dir, i) => ({ a: `${base}-data${declared.volumes.length > 1 ? i + 1 : ""}`, b: dir })));
+  };
+  const blank = env.filter((e) => e.a.trim() && !e.b);
   const [busy, setBusy] = useState(false);
   const [pull, setPull] = useState<PullState | null>(null);
   const [error, setError] = useState("");
@@ -110,6 +146,16 @@ export default function RunDialog({ image: initial, images, run, onClose, onStar
           submit();
         }}
       >
+        {!init.image && (
+          <div className="recipe-chips" aria-label="자주 쓰는 프로그램">
+            <span className="muted">빠른 시작</span>
+            {recipes.map((r) => (
+              <button key={r.title} type="button" className={"chip" + (image === r.image ? " on" : "")} onClick={() => fill(r)}>
+                {r.title}
+              </button>
+            ))}
+          </div>
+        )}
         <label>
           이미지
           <input autoFocus list="local-images" placeholder="예: nginx, postgres:17" value={image} onChange={(e) => setImage(e.target.value)} />
@@ -129,11 +175,27 @@ export default function RunDialog({ image: initial, images, run, onClose, onStar
           <input placeholder="비워 두면 Docker가 지어 줍니다" value={name} onChange={(e) => setName(e.target.value)} />
         </label>
 
+        {offer && (
+          <div className="note-box suggestion" data-testid="suggestion">
+            <span>
+              이 이미지는 포트 {declared!.ports.map((p) => p.container).join(", ") || "없음"}
+              {declared!.volumes.length > 0 && `, 데이터 폴더 ${declared!.volumes.join(", ")}`}을(를) 쓴다고 알려 줍니다.
+            </span>
+            <button type="button" onClick={useDeclared}>
+              그대로 채우기
+            </button>
+          </div>
+        )}
         <Pairs label="포트" help="내 PC의 포트로 들어온 접속을 컨테이너의 포트로 보냅니다. 예: 8080 → 80 이면 브라우저에서 localhost:8080 으로 엽니다." rows={ports} onChange={setPorts} a="내 PC 포트" b="컨테이너 포트" sep="→" numeric />
         {badPort && <p className="warn">포트는 1부터 65535 사이의 숫자여야 합니다.</p>}
         <Pairs label="저장 공간" help="컨테이너를 지워도 남길 데이터의 자리입니다. 왼쪽에 볼륨 이름(예: pgdata)이나 내 PC의 폴더 경로를 적습니다." rows={mounts} onChange={setMounts} a="볼륨 이름 또는 폴더" b="컨테이너 안 경로" sep="→" />
         <Pairs label="환경변수" help="프로그램에 넘기는 설정값입니다. 예: POSTGRES_PASSWORD = 비밀번호" rows={env} onChange={setEnv} a="이름" b="값" sep="=" />
 
+        {blank.length > 0 && (
+          <p className="warn">
+            {blank.map((e) => e.a).join(", ")}의 값이 비어 있습니다. 비밀번호처럼 꼭 정해야 하는 값이면 채워 주세요.
+          </p>
+        )}
         <label>
           꺼졌을 때
           <select value={restart} onChange={(e) => setRestart(e.target.value)}>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Network, type Size, type Volume } from "./bridge";
 import Networks from "./Networks";
 import Volumes from "./Volumes";
@@ -7,6 +7,10 @@ import Compose from "./Compose";
 import Containers from "./Containers";
 import Detail, { type Tab } from "./Detail";
 import EngineDialog from "./EngineDialog";
+import Home from "./Home";
+import Palette from "./Palette";
+import type { RunInit } from "./recipes";
+import Settings, { type Theme, type UpdateInfo } from "./Settings";
 import Images from "./Images";
 import Kubernetes from "./Kubernetes";
 import RunDialog from "./RunDialog";
@@ -14,9 +18,27 @@ import Topology from "./Topology";
 import { bytes } from "./format";
 import { Icon } from "./ui";
 
-type Page = "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds" | "kube";
+type Page = "home" | "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds" | "kube" | "settings";
+
+// The sidebar, in the order shown; a null starts a new group.
+const menu: ({ id: Page; label: string; icon: string } | null)[] = [
+  { id: "home", label: "홈", icon: "home" },
+  null,
+  { id: "containers", label: "컨테이너", icon: "box" },
+  { id: "compose", label: "Compose", icon: "compose" },
+  { id: "map", label: "관계도", icon: "map" },
+  null,
+  { id: "images", label: "이미지", icon: "layers" },
+  { id: "volumes", label: "볼륨", icon: "volume" },
+  { id: "networks", label: "네트워크", icon: "network" },
+  null,
+  { id: "builds", label: "빌드", icon: "build" },
+  { id: "kube", label: "Kubernetes", icon: "kube" },
+];
 
 const pageCommand: Record<Page, string> = {
+  home: "docker info",
+  settings: "docker version",
   containers: "docker ps -a --size",
   map: "docker ps -a && docker network ls && docker volume ls",
   compose: "docker compose ls -a",
@@ -38,9 +60,15 @@ export default function App() {
   const [sizes, setSizes] = useState<Record<string, Size> | null>(null);
   const [volumes, setVolumes] = useState<Volume[]>([]);
   const [networks, setNetworks] = useState<Network[]>([]);
-  const [page, setPage] = useState<Page>("containers");
+  const [page, setPage] = useState<Page>("home");
+  const [palette, setPalette] = useState(false);
+  const [theme, setTheme] = useState<Theme>("system");
+  const [autoUpdate, setAutoUpdate] = useState(true);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updating, setUpdating] = useState("");
+  const settled = useRef(false);
   const [detail, setDetail] = useState<{ id: string; tab: Tab } | null>(null);
-  const [running, setRunning] = useState<string | null>(null); // the run dialog's starting image
+  const [running, setRunning] = useState<RunInit | null>(null); // what the run dialog starts filled with
   const [history, setHistory] = useState<{ cmd: string; at: number }[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [choosing, setChoosing] = useState(false);
@@ -104,6 +132,76 @@ export default function App() {
     };
   }, [engine.connected, engineLabel, runningCount]);
 
+  // The look, remembered across restarts.
+  useEffect(() => {
+    if (theme === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  const chooseTheme = (t: Theme) => {
+    setTheme(t);
+    call("SetSetting", "theme", t).catch(() => {});
+  };
+  const chooseAuto = (on: boolean) => {
+    setAutoUpdate(on);
+    call("SetSetting", "update.auto", on ? "on" : "off").catch(() => {});
+  };
+
+  const checkUpdate = useCallback(async () => {
+    try {
+      const info = await call<UpdateInfo>("CheckUpdate");
+      setUpdate(info);
+      return info;
+    } catch {
+      return null; // offline, or nothing released yet: ask again later
+    }
+  }, []);
+
+  const installUpdate = useCallback(async () => {
+    setUpdating("내려받는 중…");
+    try {
+      await call("ApplyUpdate");
+      await checkUpdate();
+    } catch (e: any) {
+      setError(`업데이트하지 못했습니다: ${e.message}`);
+    }
+    setUpdating("");
+  }, [checkUpdate]);
+
+  // At start, and a few times a day: is there a newer version? With
+  // automatic updates on it is fetched at once, to run at the next start.
+  useEffect(() => {
+    let auto = true;
+    const round = async () => {
+      const info = await checkUpdate();
+      if (info?.available && !info.installed && auto) installUpdate();
+    };
+    Promise.all([
+      call<string>("Setting", "theme").then((t) => (t === "light" || t === "dark") && setTheme(t), () => {}),
+      call<string>("Setting", "update.auto").then((v) => {
+        auto = v !== "off";
+        setAutoUpdate(auto);
+      }, () => {}),
+    ]).then(() => {
+      settled.current = true;
+      round();
+    });
+    const timer = setInterval(round, 6 * 3600 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Ctrl+K (⌘K) opens the palette from anywhere.
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPalette((p) => !p);
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
+
   const showCli = useCallback((command: string) => {
     setCopied("");
     setHistory((h) => (h.length && h[h.length - 1].cmd === command ? h : h.concat({ cmd: command, at: Date.now() }).slice(-200)));
@@ -134,37 +232,45 @@ export default function App() {
   const info = engine.info;
   const shownCount = containers.filter((c) => !c.system).length;
   const open = detail && containers.find((c) => c.id === detail.id);
-  const nav = (id: Page, icon: string, label: string, count: number) => (
-    <button className={"nav-item" + (page === id ? " active" : "")} onClick={() => setPage(id)} data-testid={`nav-${id}`}>
-      <Icon name={icon} />
-      <span>{label}</span>
-      <span className="count">{count}</span>
-    </button>
-  );
+  const counts: Partial<Record<Page, number>> = {
+    containers: shownCount,
+    compose: new Set(containers.filter((c) => c.project && !c.system).map((c) => c.project)).size,
+    images: images.length,
+    volumes: volumes.length,
+    networks: networks.length,
+  };
+  const openDetail = (id: string) => setDetail({ id, tab: "overview" });
 
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="brand">BoxForge</div>
+        <div className="brand">
+          <img src="./icon.svg" alt="" />
+          <span>BoxForge</span>
+        </div>
+        <button className="search-button" onClick={() => setPalette(true)} data-testid="palette-open">
+          <Icon name="search" />
+          <span>찾기 · 명령 붙여넣기</span>
+          <kbd>Ctrl K</kbd>
+        </button>
         <nav>
-          {nav("containers", "box", "컨테이너", shownCount)}
-          <button className={"nav-item" + (page === "map" ? " active" : "")} onClick={() => setPage("map")} data-testid="nav-map">
-            <Icon name="map" />
-            <span>관계도</span>
-          </button>
-          {nav("compose", "compose", "Compose", new Set(containers.filter((c) => c.project).map((c) => c.project)).size)}
-          {nav("images", "layers", "이미지", images.length)}
-          {nav("volumes", "volume", "볼륨", volumes.length)}
-          {nav("networks", "network", "네트워크", networks.length)}
-          <button className={"nav-item" + (page === "builds" ? " active" : "")} onClick={() => setPage("builds")} data-testid="nav-builds">
-            <Icon name="build" />
-            <span>빌드</span>
-          </button>
-          <button className={"nav-item" + (page === "kube" ? " active" : "")} onClick={() => setPage("kube")} data-testid="nav-kube">
-            <Icon name="kube" />
-            <span>Kubernetes</span>
-          </button>
+          {menu.map((m, i) =>
+            m === null ? (
+              <hr key={i} />
+            ) : (
+              <button key={m.id} className={"nav-item" + (page === m.id ? " active" : "")} onClick={() => setPage(m.id)} data-testid={`nav-${m.id}`}>
+                <Icon name={m.icon} />
+                <span>{m.label}</span>
+                {counts[m.id] !== undefined && <span className="count">{counts[m.id]}</span>}
+              </button>
+            ),
+          )}
         </nav>
+        <button className={"nav-item settings-link" + (page === "settings" ? " active" : "")} onClick={() => setPage("settings")} data-testid="nav-settings">
+          <Icon name="gear" />
+          <span>설정</span>
+          {update?.available && <span className="badge">새 버전</span>}
+        </button>
         <button className="engine-card" data-testid="engine-card" title="엔진 바꾸기" onClick={() => setChoosing(true)}>
           <div className="engine-head">
             <span className={"dot " + (engine.connected ? "ok" : "bad")} />
@@ -200,11 +306,51 @@ export default function App() {
       </aside>
 
       <main className="main">
-        {!engine.connected && (
-          <div className="banner" role="alert">
-            <strong>Docker 엔진에 연결할 수 없습니다.</strong> 다시 연결을 시도하고 있습니다.
-            {engine.error && <div className="banner-detail">{engine.error}</div>}
+        {update?.installed && (
+          <div className="banner good" role="status" data-testid="update-ready">
+            <span>
+              <strong>새 버전 {update.latest}을 받아 두었습니다.</strong> 다시 시작하면 적용됩니다.
+            </span>
+            <button className="primary" onClick={() => call("Restart")}>
+              지금 다시 시작
+            </button>
           </div>
+        )}
+        {!engine.connected && page !== "home" && page !== "settings" && (
+          <div className="banner" role="alert">
+            <span>
+              <strong>엔진에 연결할 수 없습니다.</strong> 다시 연결을 시도하고 있습니다.
+              {engine.error && <span className="banner-detail">{engine.error}</span>}
+            </span>
+            <button onClick={() => setChoosing(true)}>엔진 설치 · 선택</button>
+          </div>
+        )}
+        {page === "home" && (
+          <Home
+            engine={engine}
+            containers={containers}
+            images={images}
+            volumes={volumes}
+            run={run}
+            go={(to) => setPage(to)}
+            onRun={(init) => setRunning(init)}
+            onOpen={openDetail}
+            onEngine={() => setChoosing(true)}
+          />
+        )}
+        {page === "settings" && (
+          <Settings
+            run={run}
+            theme={theme}
+            onTheme={chooseTheme}
+            autoUpdate={autoUpdate}
+            onAutoUpdate={chooseAuto}
+            update={update}
+            updating={updating}
+            onCheck={async () => void (await checkUpdate())}
+            onInstall={installUpdate}
+            onEngine={() => setChoosing(true)}
+          />
         )}
         {page === "containers" && (
           <Containers
@@ -213,14 +359,14 @@ export default function App() {
             images={images}
             run={run}
             onOpen={(id, tab = "overview") => setDetail({ id, tab })}
-            onNew={() => setRunning("")}
+            onNew={() => setRunning({ image: "" })}
           />
         )}
         {page === "images" && <Images
             images={images}
             containers={containers}
             run={run}
-            onRun={(image) => setRunning(image)}
+            onRun={(image) => setRunning({ image })}
             onOpen={(id) => setDetail({ id, tab: "overview" })}
           />}
         <div hidden={page !== "compose"}>
@@ -239,7 +385,7 @@ export default function App() {
           />
         )}
         <div hidden={page !== "builds"}>
-          <Builds run={run} onRun={(image) => setRunning(image)} />
+          <Builds run={run} onRun={(image) => setRunning({ image })} />
         </div>
         {page === "volumes" && (
           <Volumes volumes={volumes} containers={containers} run={run} showCli={showCli} onOpen={(id) => setDetail({ id, tab: "overview" })} />
@@ -298,9 +444,22 @@ export default function App() {
         </aside>
       )}
 
+      {palette && (
+        <Palette
+          pages={[...menu.filter((m) => m !== null), { id: "settings", label: "설정", icon: "gear" }] as { id: string; label: string; icon: string }[]}
+          containers={containers}
+          images={images}
+          onPage={(id) => setPage(id as Page)}
+          onContainer={openDetail}
+          onRun={(init) => setRunning(init)}
+          onClose={() => setPalette(false)}
+        />
+      )}
+
       {running !== null && (
         <RunDialog
-          image={running}
+          key={JSON.stringify(running)}
+          init={running}
           images={images}
           run={run}
           onClose={() => setRunning(null)}
