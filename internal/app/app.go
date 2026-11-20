@@ -455,3 +455,80 @@ func (a *App) TermClose(session string) {
 		_ = s.Close()
 	}
 }
+
+// Volumes returns the current volume list. Later changes arrive as "volumes" events.
+func (a *App) Volumes() []engine.Volume { return a.hub.Volumes() }
+
+// CreateVolume makes an empty volume.
+func (a *App) CreateVolume(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("the volume name is empty")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	return a.rt.Volumes().Create(ctx, name)
+}
+
+// RemoveVolume deletes a volume and the data in it.
+func (a *App) RemoveVolume(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	return a.rt.Volumes().Remove(ctx, name)
+}
+
+// PruneVolumes deletes every volume no container uses and returns the bytes freed.
+func (a *App) PruneVolumes() (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+	defer cancel()
+	return a.rt.Volumes().Prune(ctx)
+}
+
+// VolumeSizes measures each volume's data, by volume name.
+func (a *App) VolumeSizes() (map[string]int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
+	defer cancel()
+	return a.rt.Volumes().Sizes(ctx)
+}
+
+// Networks returns the current network list. Later changes arrive as "networks" events.
+func (a *App) Networks() []engine.Network { return a.hub.Networks() }
+
+// CreateNetwork makes a network; subnet may be empty.
+func (a *App) CreateNetwork(name, subnet string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("the network name is empty")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	return a.rt.Networks().Create(ctx, name, strings.TrimSpace(subnet))
+}
+
+// RemoveNetwork deletes a network no container is on.
+func (a *App) RemoveNetwork(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	return a.rt.Networks().Remove(ctx, id)
+}
+
+// ConnectNetwork puts a container on a network.
+func (a *App) ConnectNetwork(network, container string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	return a.rt.Networks().Connect(ctx, network, container)
+}
+
+// DisconnectNetwork takes a container off a network.
+func (a *App) DisconnectNetwork(network, container string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	return a.rt.Networks().Disconnect(ctx, network, container)
+}
+
+// PruneNetworks deletes every network no container is on.
+func (a *App) PruneNetworks() error {
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	return a.rt.Networks().Prune(ctx)
+}

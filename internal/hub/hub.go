@@ -16,6 +16,8 @@ const (
 	EventEngine     = "engine"     // payload: Status
 	EventContainers = "containers" // payload: []engine.Container
 	EventImages     = "images"     // payload: []engine.Image
+	EventVolumes    = "volumes"    // payload: []engine.Volume
+	EventNetworks   = "networks"   // payload: []engine.Network
 )
 
 // Status is whether the engine is reachable, and what it is.
@@ -42,11 +44,14 @@ type Hub struct {
 	status     Status
 	containers []engine.Container
 	images     []engine.Image
+	volumes    []engine.Volume
+	networks   []engine.Network
 }
 
 func New(rt engine.Runtime, emit Emit) *Hub {
 	return &Hub{
 		rt: rt, emit: emit, containers: []engine.Container{}, images: []engine.Image{},
+		volumes: []engine.Volume{}, networks: []engine.Network{},
 		Debounce: 150 * time.Millisecond, RetryMin: time.Second, RetryMax: 10 * time.Second,
 	}
 }
@@ -71,6 +76,23 @@ func (h *Hub) Images() []engine.Image {
 	defer h.mu.Unlock()
 	return h.images
 }
+
+// Volumes returns the last known volume list.
+func (h *Hub) Volumes() []engine.Volume {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.volumes
+}
+
+// Networks returns the last known network list.
+func (h *Hub) Networks() []engine.Network {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.networks
+}
+
+// mirrored are the kinds of engine event that mean a list changed.
+var mirrored = map[string]bool{"container": true, "image": true, "volume": true, "network": true}
 
 // Run connects, mirrors, and reconnects after a lost connection, until ctx ends.
 func (h *Hub) Run(ctx context.Context) {
@@ -118,7 +140,7 @@ func (h *Hub) session(ctx context.Context) error {
 			if !ok {
 				return <-errs
 			}
-			if (ev.Type != "container" && ev.Type != "image") || due != nil {
+			if !mirrored[ev.Type] || due != nil {
 				continue
 			}
 			timer = time.NewTimer(h.Debounce)
@@ -163,13 +185,27 @@ func (h *Hub) reload(ctx context.Context) error {
 	for i := range images {
 		images[i].InUse = uses[images[i].ID]
 	}
+	// Volumes and networks are extras: an engine that can't list them still
+	// gets its containers and images shown.
+	volumes, err := h.rt.Volumes().List(ctx)
+	if err != nil || volumes == nil {
+		volumes = []engine.Volume{}
+	}
+	networks, err := h.rt.Networks().List(ctx)
+	if err != nil || networks == nil {
+		networks = []engine.Network{}
+	}
 	h.mu.Lock()
 	h.containers = list
 	h.images = images
+	h.volumes = volumes
+	h.networks = networks
 	h.mu.Unlock()
 	h.setStatus(Status{Connected: true, Info: &info})
 	h.emit(EventContainers, list)
 	h.emit(EventImages, images)
+	h.emit(EventVolumes, volumes)
+	h.emit(EventNetworks, networks)
 	return nil
 }
 

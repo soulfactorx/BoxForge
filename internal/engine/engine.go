@@ -23,9 +23,38 @@ type Container struct {
 	System   bool              `json:"system"`   // a tool's own helper (a build worker), hidden by default
 	Created  int64             `json:"created"`
 	Ports    []Port            `json:"ports"`
-	Project  string            `json:"project"` // Compose project, "" when none
-	Service  string            `json:"service"` // Compose service, "" when none
+	Project  string            `json:"project"`  // Compose project, "" when none
+	Service  string            `json:"service"`  // Compose service, "" when none
+	Volumes  []string          `json:"volumes"`  // names of the volumes it mounts
+	Networks []Attachment      `json:"networks"` // the networks it is on
 	Labels   map[string]string `json:"labels"`
+}
+
+// Attachment is a container's place on one network.
+type Attachment struct {
+	Network string `json:"network"`
+	IP      string `json:"ip"`
+}
+
+// Volume is a named place for data that outlives containers.
+type Volume struct {
+	Name    string `json:"name"`
+	Driver  string `json:"driver"`
+	Created int64  `json:"created"` // 0 when the engine doesn't say
+	Project string `json:"project"` // Compose project, "" when none
+}
+
+// Network is a private network containers can join.
+type Network struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Driver   string `json:"driver"`
+	Subnet   string `json:"subnet"`
+	Gateway  string `json:"gateway"`
+	Internal bool   `json:"internal"` // no way out to the internet
+	Builtin  bool   `json:"builtin"`  // the engine's own: bridge, host, none
+	Created  int64  `json:"created"`
+	Project  string `json:"project"`
 }
 
 // Port is one port mapping. Public is 0 when the port is not published.
@@ -137,6 +166,8 @@ type Runtime interface {
 	Events(ctx context.Context) (<-chan Event, <-chan error)
 	Containers() ContainerService
 	Images() ImageService
+	Volumes() VolumeService
+	Networks() NetworkService
 	Close() error
 }
 
@@ -168,6 +199,36 @@ type ContainerService interface {
 	// Stats calls each with a new sample about once a second until ctx
 	// ends or the container stops.
 	Stats(ctx context.Context, id string, each func(Stats)) error
+}
+
+// VolumeService is the volume part of a Runtime.
+type VolumeService interface {
+	List(ctx context.Context) ([]Volume, error)
+	Create(ctx context.Context, name string) error
+	Remove(ctx context.Context, name string) error
+	// Prune deletes every volume no container uses, and returns the bytes freed.
+	Prune(ctx context.Context) (int64, error)
+	// Sizes measures each volume's data, by name. Slow, like container sizes.
+	Sizes(ctx context.Context) (map[string]int64, error)
+}
+
+// NetworkService is the network part of a Runtime.
+type NetworkService interface {
+	List(ctx context.Context) ([]Network, error)
+	// Create makes a bridge network; subnet ("172.30.0.0/16") may be empty
+	// for the engine to choose.
+	Create(ctx context.Context, name, subnet string) error
+	Remove(ctx context.Context, id string) error
+	Connect(ctx context.Context, network, container string) error
+	Disconnect(ctx context.Context, network, container string) error
+	// Prune deletes every network no container is on.
+	Prune(ctx context.Context) error
+}
+
+// BuiltinNetwork reports whether the engine made the network itself; those
+// can't be removed.
+func BuiltinNetwork(name string) bool {
+	return name == "bridge" || name == "host" || name == "none"
 }
 
 // ImageService is the image half of a Runtime.

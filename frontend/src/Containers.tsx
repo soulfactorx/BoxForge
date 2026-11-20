@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Avatar } from "./brand";
-import { call, openURL, type Container, type Run, type Size } from "./bridge";
+import { call, openURL, type Container, type Image, type Run, type Size } from "./bridge";
 import { ago, bytes, isUp, stateLabel, statusText } from "./format";
 import { Dialog, IconButton, Menu, type MenuItem } from "./ui";
 
@@ -21,13 +21,14 @@ type Item = { key: string; project: string; members: Container[] };
 
 interface Props {
   containers: Container[];
-  sizes: Record<string, Size>;
+  sizes: Record<string, Size> | null; // null until the engine has measured
+  images: Image[];
   run: Run;
   onOpen: (id: string, tab?: "overview" | "logs") => void;
   onNew: () => void;
 }
 
-export default function Containers({ containers, sizes, run, onOpen, onNew }: Props) {
+export default function Containers({ containers, sizes, images, run, onOpen, onNew }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [showSystem, setShowSystem] = useState(false);
@@ -173,16 +174,7 @@ export default function Containers({ containers, sizes, run, onOpen, onNew }: Pr
               </button>
             ))}
       </td>
-      <td className="num nowrap" title="컨테이너가 보는 전체 파일 크기입니다. 이미지와 겹치는 부분이 포함됩니다.">
-        {sizes[c.id] ? (
-          <>
-            {bytes(sizes[c.id].rootFs)}
-            {sizes[c.id].rw > 0 && <span className="sub">직접 쓴 것 {bytes(sizes[c.id].rw)}</span>}
-          </>
-        ) : (
-          <span className="muted">…</span>
-        )}
-      </td>
+      {sizeCell(c)}
       <td className="muted nowrap">{ago(c.created)}</td>
       <td className="actions">
         {isUp(c) && <IconButton icon="restart" label="재시작" onClick={() => act(c, "restart")} />}
@@ -196,6 +188,40 @@ export default function Containers({ containers, sizes, run, onOpen, onNew }: Pr
       </td>
     </tr>
   );
+
+  // The engine's own measure when it gives one. Some engines answer 0 for
+  // every container; the image's size then stands in, which is the bulk of it.
+  const sizeCell = (c: Container) => {
+    const s = sizes?.[c.id];
+    if (s && s.rootFs > 0) {
+      return (
+        <td className="num nowrap" title="컨테이너가 보는 전체 파일 크기입니다. 이미지와 겹치는 부분이 포함됩니다.">
+          {bytes(s.rootFs)}
+          {s.rw > 0 && <span className="sub">직접 쓴 것 {bytes(s.rw)}</span>}
+        </td>
+      );
+    }
+    if (sizes === null) {
+      return (
+        <td className="num">
+          <span className="muted">…</span>
+        </td>
+      );
+    }
+    const im = images.find((i) => i.id === c.imageId) ?? images.find((i) => i.tags.includes(c.image));
+    return (
+      <td className="num nowrap" title="이 엔진은 컨테이너별 크기를 알려주지 않아, 컨테이너가 쓰는 이미지의 크기를 대신 보여줍니다.">
+        {im ? (
+          <>
+            {bytes(im.size)}
+            <span className="sub">이미지 크기</span>
+          </>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+    );
+  };
 
   const chip = (f: Filter, label: string) => (
     <button className={"chip " + f + (filter === f ? " on" : "")} onClick={() => setFilter(f)} data-testid={`chip-${f}`}>

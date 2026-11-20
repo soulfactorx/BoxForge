@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Size } from "./bridge";
+import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Network, type Size, type Volume } from "./bridge";
+import Networks from "./Networks";
+import Volumes from "./Volumes";
 import Containers from "./Containers";
 import Detail, { type Tab } from "./Detail";
 import Images from "./Images";
 import RunDialog from "./RunDialog";
 import { Icon } from "./ui";
 
-type Page = "containers" | "images";
+type Page = "containers" | "images" | "volumes" | "networks";
 const upcoming: [string, string][] = [
-  ["볼륨", "volume"],
-  ["네트워크", "network"],
   ["Compose", "compose"],
   ["빌드", "build"],
 ];
@@ -22,7 +22,9 @@ export default function App() {
   const [engine, setEngine] = useState<EngineStatus>({ connected: false, error: "", info: null });
   const [containers, setContainers] = useState<Container[]>([]);
   const [images, setImages] = useState<Image[]>([]);
-  const [sizes, setSizes] = useState<Record<string, Size>>({});
+  const [sizes, setSizes] = useState<Record<string, Size> | null>(null);
+  const [volumes, setVolumes] = useState<Volume[]>([]);
+  const [networks, setNetworks] = useState<Network[]>([]);
   const [page, setPage] = useState<Page>("containers");
   const [detail, setDetail] = useState<{ id: string; tab: Tab } | null>(null);
   const [running, setRunning] = useState<string | null>(null); // the run dialog's starting image
@@ -35,11 +37,15 @@ export default function App() {
       call<EngineStatus>("Engine").then(setEngine).catch(() => {});
       call<Container[]>("Containers").then((l) => setContainers(l ?? [])).catch(() => {});
       call<Image[]>("Images").then((l) => setImages(l ?? [])).catch(() => {});
+      call<Volume[]>("Volumes").then((l) => setVolumes(l ?? [])).catch(() => {});
+      call<Network[]>("Networks").then((l) => setNetworks(l ?? [])).catch(() => {});
     };
     const off = [
       on("engine", setEngine),
       on("containers", (l) => setContainers(l ?? [])),
       on("images", (l) => setImages(l ?? [])),
+      on("volumes", (l) => setVolumes(l ?? [])),
+      on("networks", (l) => setNetworks(l ?? [])),
       on(STREAM_OPEN, load),
     ];
     load();
@@ -52,7 +58,7 @@ export default function App() {
   useEffect(() => {
     if (!ids) return;
     const timer = setTimeout(() => {
-      call<Record<string, Size>>("ContainerSizes").then((s) => setSizes(s ?? {})).catch(() => {});
+      call<Record<string, Size>>("ContainerSizes").then((s) => setSizes(s ?? {}), () => setSizes({}));
     }, 400);
     return () => clearTimeout(timer);
   }, [ids]);
@@ -97,6 +103,8 @@ export default function App() {
         <nav>
           {nav("containers", "box", "컨테이너", shownCount)}
           {nav("images", "layers", "이미지", images.length)}
+          {nav("volumes", "volume", "볼륨", volumes.length)}
+          {nav("networks", "network", "네트워크", networks.length)}
           {upcoming.map(([name, icon]) => (
             <div key={name} className="nav-item disabled" title="아직 만들지 않은 화면입니다">
               <Icon name={icon} />
@@ -137,6 +145,7 @@ export default function App() {
           <Containers
             containers={containers}
             sizes={sizes}
+            images={images}
             run={run}
             onOpen={(id, tab = "overview") => setDetail({ id, tab })}
             onNew={() => setRunning("")}
@@ -149,6 +158,12 @@ export default function App() {
             onRun={(image) => setRunning(image)}
             onOpen={(id) => setDetail({ id, tab: "overview" })}
           />}
+        {page === "volumes" && (
+          <Volumes volumes={volumes} containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />
+        )}
+        {page === "networks" && (
+          <Networks networks={networks} containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />
+        )}
       </main>
 
       {open && detail && (

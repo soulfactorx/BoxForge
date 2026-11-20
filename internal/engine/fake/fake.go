@@ -20,6 +20,8 @@ type Runtime struct {
 	mu   sync.Mutex
 	list []engine.Container
 	imgs []engine.Image
+	vols []engine.Volume
+	nets []engine.Network
 	next int
 	subs map[chan engine.Event]struct{}
 }
@@ -39,6 +41,7 @@ func New() *Runtime {
 		return engine.Container{
 			ID: id, Name: name, Image: image, ImageID: "sha256:" + image, State: state, Status: status,
 			Failed: engine.FailedStatus(state, status), Created: now - 3600,
+			Volumes: []string{}, Networks: []engine.Attachment{{Network: "bridge", IP: "172.17.0.2"}},
 			Ports: ports, Project: project, Service: service, Labels: labels,
 		}
 	}
@@ -55,6 +58,12 @@ func New() *Runtime {
 			{ID: "sha256:dangling", Tags: []string{}, Size: 64 << 20, Created: now - 172800},
 		},
 		subs: map[chan engine.Event]struct{}{},
+		vols: []engine.Volume{{Name: "pgdata", Driver: "local", Created: now - 86400}, {Name: "unused", Driver: "local", Created: now - 3600}},
+		nets: []engine.Network{
+			{ID: "nb", Name: "bridge", Driver: "bridge", Subnet: "172.17.0.0/16", Gateway: "172.17.0.1", Builtin: true},
+			{ID: "nh", Name: "host", Driver: "host", Builtin: true},
+			{ID: "nn", Name: "none", Driver: "null", Builtin: true},
+		},
 		list: []engine.Container{
 			c("a1", "web", "nginx:1.27", "running", "Up 1 hour", "", "", tcp(8080, 80)),
 			c("a2", "shop-db-1", "postgres:17", "running", "Up 1 hour", "shop", "db", tcp(5432, 5432)),
@@ -107,6 +116,8 @@ func (r *Runtime) Events(ctx context.Context) (<-chan engine.Event, <-chan error
 
 func (r *Runtime) Containers() engine.ContainerService { return containers{r} }
 func (r *Runtime) Images() engine.ImageService         { return images{r} }
+func (r *Runtime) Volumes() engine.VolumeService       { return volumes{r} }
+func (r *Runtime) Networks() engine.NetworkService     { return networks{r} }
 
 // announce tells every subscriber. Callers hold r.mu.
 func (r *Runtime) announce(ev engine.Event) {
@@ -254,6 +265,7 @@ func (c containers) Run(_ context.Context, spec engine.RunSpec) (string, error) 
 	c.r.list = append(c.r.list, engine.Container{
 		ID: id, Name: name, Image: spec.Image, ImageID: "sha256:" + spec.Image, State: "running",
 		Status: "Up 1 second", Created: time.Now().Unix(), Ports: ports, Labels: map[string]string{},
+		Volumes: []string{}, Networks: []engine.Attachment{{Network: "bridge", IP: "172.17.0.9"}},
 	})
 	c.r.announce(engine.Event{Type: "container", Action: "start", ID: id})
 	return id, nil
@@ -396,3 +408,173 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+type volumes struct{ r *Runtime }
+
+func (v volumes) List(context.Context) ([]engine.Volume, error) {
+	v.r.mu.Lock()
+	defer v.r.mu.Unlock()
+	return append([]engine.Volume{}, v.r.vols...), nil
+}
+
+func (v volumes) Create(_ context.Context, name string) error {
+	v.r.mu.Lock()
+	defer v.r.mu.Unlock()
+	for _, it := range v.r.vols {
+		if it.Name == name {
+			return nil // as Docker: creating a volume that exists succeeds
+		}
+	}
+	v.r.vols = append(v.r.vols, engine.Volume{Name: name, Driver: "local", Created: time.Now().Unix()})
+	v.r.announce(engine.Event{Type: "volume", Action: "create", ID: name})
+	return nil
+}
+
+// used reports whether a container mounts the volume. Callers hold r.mu.
+func (v volumes) used(name string) bool {
+	for _, c := range v.r.list {
+		if contains(c.Volumes, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func (v volumes) Remove(_ context.Context, name string) error {
+	v.r.mu.Lock()
+	defer v.r.mu.Unlock()
+	for i, it := range v.r.vols {
+		if it.Name != name {
+			continue
+		}
+		if v.used(name) {
+			return fmt.Errorf("remove %s: volume is in use", name)
+		}
+		v.r.vols = append(v.r.vols[:i], v.r.vols[i+1:]...)
+		v.r.announce(engine.Event{Type: "volume", Action: "destroy", ID: name})
+		return nil
+	}
+	return fmt.Errorf("get %s: no such volume", name)
+}
+
+func (v volumes) Prune(context.Context) (int64, error) {
+	v.r.mu.Lock()
+	defer v.r.mu.Unlock()
+	kept := v.r.vols[:0]
+	var freed int64
+	for _, it := range v.r.vols {
+		if v.used(it.Name) {
+			kept = append(kept, it)
+		} else {
+			freed += 1 << 20
+		}
+	}
+	v.r.vols = kept
+	v.r.announce(engine.Event{Type: "volume", Action: "prune"})
+	return freed, nil
+}
+
+func (v volumes) Sizes(context.Context) (map[string]int64, error) {
+	v.r.mu.Lock()
+	defer v.r.mu.Unlock()
+	out := map[string]int64{}
+	for i, it := range v.r.vols {
+		out[it.Name] = int64(i+1) << 20
+	}
+	return out, nil
+}
+
+type networks struct{ r *Runtime }
+
+func (n networks) List(context.Context) ([]engine.Network, error) {
+	n.r.mu.Lock()
+	defer n.r.mu.Unlock()
+	return append([]engine.Network{}, n.r.nets...), nil
+}
+
+func (n networks) Create(_ context.Context, name, subnet string) error {
+	n.r.mu.Lock()
+	defer n.r.mu.Unlock()
+	for _, it := range n.r.nets {
+		if it.Name == name {
+			return fmt.Errorf("network with name %s already exists", name)
+		}
+	}
+	n.r.next++
+	n.r.nets = append(n.r.nets, engine.Network{ID: fmt.Sprintf("net%d", n.r.next), Name: name, Driver: "bridge", Subnet: subnet, Created: time.Now().Unix()})
+	n.r.announce(engine.Event{Type: "network", Action: "create", ID: name})
+	return nil
+}
+
+// find returns the network and container named by ID or name. Callers hold r.mu.
+func (n networks) find(net, ctr string) (*engine.Network, *engine.Container) {
+	var fn *engine.Network
+	var fc *engine.Container
+	for i := range n.r.nets {
+		if n.r.nets[i].ID == net || n.r.nets[i].Name == net {
+			fn = &n.r.nets[i]
+		}
+	}
+	for i := range n.r.list {
+		if n.r.list[i].ID == ctr || n.r.list[i].Name == ctr {
+			fc = &n.r.list[i]
+		}
+	}
+	return fn, fc
+}
+
+func (n networks) Remove(_ context.Context, id string) error {
+	n.r.mu.Lock()
+	defer n.r.mu.Unlock()
+	for i, it := range n.r.nets {
+		if it.ID != id && it.Name != id {
+			continue
+		}
+		if it.Builtin {
+			return fmt.Errorf("%s is a pre-defined network and cannot be removed", it.Name)
+		}
+		for _, c := range n.r.list {
+			for _, a := range c.Networks {
+				if a.Network == it.Name {
+					return fmt.Errorf("network %s has active endpoints", it.Name)
+				}
+			}
+		}
+		n.r.nets = append(n.r.nets[:i], n.r.nets[i+1:]...)
+		n.r.announce(engine.Event{Type: "network", Action: "destroy", ID: it.ID})
+		return nil
+	}
+	return fmt.Errorf("network %s not found", id)
+}
+
+func (n networks) Connect(_ context.Context, net, ctr string) error {
+	n.r.mu.Lock()
+	defer n.r.mu.Unlock()
+	fn, fc := n.find(net, ctr)
+	if fn == nil || fc == nil {
+		return fmt.Errorf("network or container not found")
+	}
+	fc.Networks = append(fc.Networks, engine.Attachment{Network: fn.Name, IP: "10.0.0.2"})
+	n.r.announce(engine.Event{Type: "network", Action: "connect", ID: fn.ID})
+	return nil
+}
+
+func (n networks) Disconnect(_ context.Context, net, ctr string) error {
+	n.r.mu.Lock()
+	defer n.r.mu.Unlock()
+	fn, fc := n.find(net, ctr)
+	if fn == nil || fc == nil {
+		return fmt.Errorf("network or container not found")
+	}
+	kept := []engine.Attachment{}
+	for _, a := range fc.Networks {
+		if a.Network != fn.Name {
+			kept = append(kept, a)
+		}
+	}
+	fc.Networks = kept
+	n.r.announce(engine.Event{Type: "network", Action: "disconnect", ID: fn.ID})
+	return nil
+}
+
+func (n networks) Prune(context.Context) error { return nil }

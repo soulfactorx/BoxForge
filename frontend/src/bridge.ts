@@ -22,6 +22,27 @@ export interface Container {
   ports: Port[];
   project: string;
   service: string;
+  volumes: string[];
+  networks: { network: string; ip: string }[];
+}
+
+export interface Volume {
+  name: string;
+  driver: string;
+  created: number;
+  project: string;
+}
+
+export interface Network {
+  id: string;
+  name: string;
+  driver: string;
+  subnet: string;
+  gateway: string;
+  internal: boolean;
+  builtin: boolean;
+  created: number;
+  project: string;
 }
 
 export interface Size {

@@ -8,13 +8,18 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
@@ -95,6 +100,8 @@ func (r *Runtime) Events(ctx context.Context) (<-chan engine.Event, <-chan error
 
 func (r *Runtime) Containers() engine.ContainerService { return containers{r.cli} }
 func (r *Runtime) Images() engine.ImageService         { return images{r.cli} }
+func (r *Runtime) Volumes() engine.VolumeService       { return volumes{r.cli} }
+func (r *Runtime) Networks() engine.NetworkService     { return networks{r.cli} }
 
 type containers struct{ cli *client.Client }
 
@@ -113,6 +120,21 @@ func (c containers) List(ctx context.Context) ([]engine.Container, error) {
 		for _, p := range s.Ports {
 			ports = append(ports, engine.Port{IP: p.IP, Private: p.PrivatePort, Public: p.PublicPort, Proto: p.Type})
 		}
+		vols := []string{}
+		for _, m := range s.Mounts {
+			if m.Type == "volume" && m.Name != "" {
+				vols = append(vols, m.Name)
+			}
+		}
+		nets := []engine.Attachment{}
+		if s.NetworkSettings != nil {
+			for name, n := range s.NetworkSettings.Networks {
+				if n != nil {
+					nets = append(nets, engine.Attachment{Network: name, IP: n.IPAddress})
+				}
+			}
+		}
+		sort.Slice(nets, func(i, j int) bool { return nets[i].Network < nets[j].Network })
 		state := string(s.State)
 		code, _ := engine.ExitCode(s.Status)
 		out = append(out, engine.Container{
@@ -129,6 +151,8 @@ func (c containers) List(ctx context.Context) ([]engine.Container, error) {
 			Ports:    ports,
 			Project:  s.Labels[engine.LabelComposeProject],
 			Service:  s.Labels[engine.LabelComposeService],
+			Volumes:  vols,
+			Networks: nets,
 			Labels:   s.Labels,
 		})
 	}
@@ -442,4 +466,109 @@ func (i images) Prune(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("prune images: %w", err)
 	}
 	return int64(rep.SpaceReclaimed), nil
+}
+
+type volumes struct{ cli *client.Client }
+
+func (v volumes) List(ctx context.Context) ([]engine.Volume, error) {
+	res, err := v.cli.VolumeList(ctx, volume.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]engine.Volume, 0, len(res.Volumes))
+	for _, it := range res.Volumes {
+		if it == nil {
+			continue
+		}
+		var created int64
+		if t, err := time.Parse(time.RFC3339, it.CreatedAt); err == nil {
+			created = t.Unix()
+		}
+		out = append(out, engine.Volume{
+			Name: it.Name, Driver: it.Driver, Created: created, Project: it.Labels[engine.LabelComposeProject],
+		})
+	}
+	return out, nil
+}
+
+func (v volumes) Create(ctx context.Context, name string) error {
+	_, err := v.cli.VolumeCreate(ctx, volume.CreateOptions{Name: name})
+	return err
+}
+
+func (v volumes) Remove(ctx context.Context, name string) error {
+	return v.cli.VolumeRemove(ctx, name, false)
+}
+
+func (v volumes) Prune(ctx context.Context) (int64, error) {
+	// "all": named volumes too, not only the anonymous ones.
+	rep, err := v.cli.VolumesPrune(ctx, filters.NewArgs(filters.Arg("all", "true")))
+	if err != nil {
+		return 0, err
+	}
+	return int64(rep.SpaceReclaimed), nil
+}
+
+func (v volumes) Sizes(ctx context.Context) (map[string]int64, error) {
+	du, err := v.cli.DiskUsage(ctx, types.DiskUsageOptions{Types: []types.DiskUsageObject{types.VolumeObject}})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int64{}
+	for _, it := range du.Volumes {
+		if it != nil && it.UsageData != nil && it.UsageData.Size >= 0 {
+			out[it.Name] = it.UsageData.Size
+		}
+	}
+	return out, nil
+}
+
+type networks struct{ cli *client.Client }
+
+func (n networks) List(ctx context.Context) ([]engine.Network, error) {
+	list, err := n.cli.NetworkList(ctx, network.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]engine.Network, 0, len(list))
+	for _, it := range list {
+		net := engine.Network{
+			ID: it.ID, Name: it.Name, Driver: it.Driver, Internal: it.Internal,
+			Builtin: engine.BuiltinNetwork(it.Name), Project: it.Labels[engine.LabelComposeProject],
+		}
+		if !it.Created.IsZero() {
+			net.Created = it.Created.Unix()
+		}
+		if len(it.IPAM.Config) > 0 {
+			net.Subnet, net.Gateway = it.IPAM.Config[0].Subnet, it.IPAM.Config[0].Gateway
+		}
+		out = append(out, net)
+	}
+	return out, nil
+}
+
+func (n networks) Create(ctx context.Context, name, subnet string) error {
+	opts := network.CreateOptions{Driver: "bridge"}
+	if subnet != "" {
+		opts.IPAM = &network.IPAM{Config: []network.IPAMConfig{{Subnet: subnet}}}
+	}
+	_, err := n.cli.NetworkCreate(ctx, name, opts)
+	return err
+}
+
+func (n networks) Remove(ctx context.Context, id string) error {
+	return n.cli.NetworkRemove(ctx, id)
+}
+
+func (n networks) Connect(ctx context.Context, net, ctr string) error {
+	return n.cli.NetworkConnect(ctx, net, ctr, nil)
+}
+
+func (n networks) Disconnect(ctx context.Context, net, ctr string) error {
+	return n.cli.NetworkDisconnect(ctx, net, ctr, false)
+}
+
+func (n networks) Prune(ctx context.Context) error {
+	_, err := n.cli.NetworksPrune(ctx, filters.Args{})
+	return err
 }

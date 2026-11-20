@@ -337,3 +337,12 @@ ul.plain li { word-break: break-all; }
 
 .term { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .term-box { flex: 1; min-height: 240px; background: #0f1218; border-radius: 8px; padding: 8px; overflow: hidden; }
+
+.lead { color: var(--muted); margin: -4px 0 14px; max-width: 760px; }
+.tag-inline { margin-left: 6px; color: var(--muted); }
+.member { display: inline-flex; align-items: baseline; gap: 8px; }
+.member .unlink { color: var(--muted); font-size: 12px; visibility: hidden; }
+tr:hover .member .unlink, .member .unlink:focus { visibility: visible; }
+.member .unlink:hover { color: var(--bad); }
+ul.doomed { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+select.field { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
