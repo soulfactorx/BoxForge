@@ -344,9 +344,13 @@ echo "[5/5] 설치 완료"
 const startScript = `mkdir -p /usr/local/bin /var/log
 cat > /usr/local/bin/boxforge-start <<'EOS'
 #!/bin/sh
-# Starts the Docker engine where there is no systemd to do it.
+# Starts the Docker engine where there is no systemd to do it: when WSL
+# boots the distribution (wsl.conf) and when BoxForge asks.
+# Exit 0: it runs and answers; 1: it runs but its socket did not come in
+# time; 2: it exited as it started. /var/log/dockerd.log says why.
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-pgrep -x dockerd >/dev/null 2>&1 && exit 0
+sock=/var/run/docker.sock
+pgrep -x dockerd >/dev/null 2>&1 && [ -S "$sock" ] && exit 0
 # dockerd wants the cgroup controllers mounted; systemd or OpenRC would have.
 if ! mountpoint -q /sys/fs/cgroup; then mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || mount -t tmpfs -o mode=0755 cgroup /sys/fs/cgroup; fi
 if [ ! -e /sys/fs/cgroup/cgroup.controllers ]; then
@@ -355,9 +359,29 @@ if [ ! -e /sys/fs/cgroup/cgroup.controllers ]; then
     mountpoint -q "/sys/fs/cgroup/$sys" || mount -n -t cgroup -o "$sys" cgroup "/sys/fs/cgroup/$sys" 2>/dev/null || true
   done
 fi
-rm -f /var/run/docker.pid
-# In a session of its own, so that it outlives the command that started it.
-setsid nohup /usr/bin/dockerd >/var/log/dockerd.log 2>&1 </dev/null &
+start() {
+  rm -f /var/run/docker.pid "$sock"
+  echo "--- $(date) starting dockerd" >>/var/log/dockerd.log
+  nohup /usr/bin/dockerd >>/var/log/dockerd.log 2>&1 </dev/null &
+  pid=$!
+}
+pid=
+pgrep -x dockerd >/dev/null 2>&1 || start
+i=0
+while [ "$i" -lt 600 ]; do
+  [ -S "$sock" ] && docker info >/dev/null 2>&1 && exit 0
+  if [ -n "$pid" ]; then
+    # Its own process is asked, not a search by name: a moment after the
+    # start the name is not there to find yet.
+    kill -0 "$pid" 2>/dev/null || exit 2
+  elif ! pgrep -x dockerd >/dev/null 2>&1; then
+    # The one that was running was on its way out: start a new one.
+    start
+  fi
+  sleep 0.1
+  i=$((i + 1))
+done
+exit 1
 EOS
 chmod 755 /usr/local/bin/boxforge-start
 if [ -d /run/systemd/system ]; then
@@ -365,17 +389,13 @@ if [ -d /run/systemd/system ]; then
   journalctl -u docker -n 25 --no-pager 2>/dev/null >&2
   exit 1
 fi
-if ! grep -q 'boxforge-start' /etc/wsl.conf 2>/dev/null; then printf '\n[boot]\ncommand = /usr/local/bin/boxforge-start\n' >> /etc/wsl.conf; fi
+# No systemd: WSL runs this each time it starts the distribution.
+if ! grep -q 'boxforge-start' /etc/wsl.conf 2>/dev/null; then printf '\n[boot]\ncommand = /usr/local/bin/boxforge-start >/dev/null 2>&1 &\n' >> /etc/wsl.conf; fi
 /usr/local/bin/boxforge-start
-i=0
-while [ $i -lt 40 ]; do
-  [ -S /var/run/docker.sock ] && docker info >/dev/null 2>&1 && exit 0
-  pgrep -x dockerd >/dev/null 2>&1 || break
-  sleep 1
-  i=$((i + 1))
-done
-echo "--- 엔진이 시작되지 않았습니다. 엔진의 로그 끝부분:" >&2
-tail -n 25 /var/log/dockerd.log >&2
+code=$?
+[ "$code" = 0 ] && exit 0
+if [ "$code" = 2 ]; then echo "--- 엔진이 시작하자마자 끝났습니다. 엔진의 로그:" >&2; else echo "--- 엔진이 60초 안에 준비되지 않았습니다. 엔진의 로그:" >&2; fi
+if [ -s /var/log/dockerd.log ]; then tail -n 25 /var/log/dockerd.log >&2; else echo "(엔진이 로그를 한 줄도 남기지 않았습니다)" >&2; fi
 exit 1
 `
 
@@ -704,9 +724,13 @@ func (in *Installer) run(ctx context.Context, o Options) (string, error) {
 			return "start", ctx.Err()
 		}
 		why := "엔진을 설치했지만 시작되지 않았습니다."
-		if n := len(said); n > 0 {
-			// The engine's own last words are the reason.
-			why += " 엔진이 남긴 말: " + said[n-1]
+		// The engine's own last words are the reason: the last line that
+		// is not one of this script's own headings.
+		for n := len(said) - 1; n >= 0; n-- {
+			if !strings.HasPrefix(said[n], "---") && !strings.HasPrefix(said[n], "(") {
+				why += " 엔진이 남긴 말: " + said[n]
+				break
+			}
 		}
 		return "start", errors.New(why + " 아래 \"자세한 진행 내용\"에 엔진의 로그가 있습니다.")
 	}
