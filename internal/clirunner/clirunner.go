@@ -7,17 +7,22 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 )
 
 // Run runs name with args in dir ("" for the app's own), calling line with
 // each line the tool prints on stdout or stderr, in the order it came. The
-// arguments go to the tool as they are: no shell reads them.
-func Run(ctx context.Context, dir, name string, args []string, line func(string)) error {
+// arguments go to the tool as they are: no shell reads them. env adds to
+// the app's own environment ("KEY=value").
+func Run(ctx context.Context, dir string, env []string, name string, args []string, line func(string)) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	hideWindow(cmd)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	HideWindow(cmd)
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw
@@ -57,9 +62,12 @@ func Run(ctx context.Context, dir, name string, args []string, line func(string)
 }
 
 // Output runs name with args and returns what it printed on stdout, trimmed.
-func Output(ctx context.Context, name string, args ...string) (string, error) {
+func Output(ctx context.Context, env []string, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	hideWindow(cmd)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	HideWindow(cmd)
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { call, type Run } from "./bridge";
-import { ago, bytes } from "./format";
+import { ago, bytes, shq } from "./format";
 import { Icon, IconButton } from "./ui";
 
 interface Entry {
@@ -21,7 +21,18 @@ const join = (dir: string, name: string) => (dir === "/" ? "/" + name : dir + "/
 const kindLabel: Record<string, string> = { dir: "폴더", file: "파일", link: "바로가기", other: "특수 파일" };
 
 /** Looks inside a volume: folders to walk, files to read or save. Read-only. */
-export default function VolumeBrowser({ name, label, run, onClose }: { name: string; label: string; run: Run; onClose: () => void }) {
+interface Props {
+  name: string;
+  label: string;
+  run: Run;
+  showCli: (cmd: string) => void;
+  onClose: () => void;
+}
+
+export default function VolumeBrowser({ name, label, run, showCli, onClose }: Props) {
+  // What BoxForge does to look inside: a throwaway container with the
+  // volume attached read-only. Any small image does; alpine stands for it.
+  const inside = (tail: string) => `docker run --rm -v ${name}:/v:ro alpine ${tail}`;
   const [dir, setDir] = useState("/");
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState("");
@@ -32,6 +43,7 @@ export default function VolumeBrowser({ name, label, run, onClose }: { name: str
     let stale = false;
     setEntries(null);
     setError("");
+    showCli(inside(`ls -la ${shq("/v" + (dir === "/" ? "" : dir))}`));
     call<Entry[]>("VolumeFiles", name, dir).then(
       (l) => !stale && setEntries(l ?? []),
       (e) => !stale && setError(e.message),
@@ -44,6 +56,7 @@ export default function VolumeBrowser({ name, label, run, onClose }: { name: str
   const show = async (path: string) => {
     setOpen({ path, preview: null });
     setSaved("");
+    showCli(inside(`cat ${shq("/v" + path)}`));
     try {
       const preview = await call<Preview>("VolumePreview", name, path);
       setOpen((cur) => (cur?.path === path ? { path, preview } : cur));
@@ -56,7 +69,10 @@ export default function VolumeBrowser({ name, label, run, onClose }: { name: str
   const save = async (path: string) => {
     let where = "";
     setSaved("");
-    if (await run(`docker cp <${label} 볼륨을 쓰는 컨테이너>:${path} ~/Downloads/`, async () => (where = await call<string>("VolumeSave", name, path)))) {
+    const leaf = path.split("/").pop() ?? "";
+    const dir_ = "/v" + path.slice(0, path.length - leaf.length - 1);
+    const command = inside(`tar -cf - -C ${shq(dir_ || "/v")} ${shq(leaf)}`) + ` | tar -xf - -C ~/Downloads`;
+    if (await run(command, async () => (where = await call<string>("VolumeSave", name, path)))) {
       setSaved(where);
     }
   };

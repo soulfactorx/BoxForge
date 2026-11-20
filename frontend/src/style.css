@@ -399,3 +399,34 @@ ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .step .log-box { margin: 2px 0 6px 23px; max-height: 200px; min-height: 0; }
 h2.section { font-size: 14px; color: var(--muted); margin: 18px 0 8px; }
 .console-head button.link { margin-left: 10px; }
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.state.busy { color: var(--accent); }
+button.engine-card { display: block; width: 100%; text-align: left; background: var(--panel); white-space: normal; }
+button.engine-card:hover { border-color: var(--accent); background: var(--panel); }
+.engine-change { display: block; margin-top: 8px; font-size: 12px; color: var(--accent); }
+.engine-list { display: grid; gap: 8px; margin: 12px 0; }
+.engine-option { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; cursor: pointer; }
+.engine-option.on { border-color: var(--accent); }
+.engine-option input { margin-top: 4px; }
+.engine-option .sub { word-break: break-all; }
+.engine-help { margin-top: 6px; }
+.engine-help summary { cursor: pointer; color: var(--accent); }
+.engine-help .log-box { min-height: 0; flex: none; user-select: all; }
+.drawer.history { width: min(560px, 92vw); z-index: 12; }
+.history-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.history-list li { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: baseline; font-size: 13px; }
+.history-list code { word-break: break-all; }
+.cli code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cli { min-width: 0; }
+.cli > * { flex: none; }
+.cli > code { flex: 1; }

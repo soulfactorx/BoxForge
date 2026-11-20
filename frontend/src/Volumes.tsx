@@ -8,6 +8,7 @@ interface Props {
   volumes: Volume[];
   containers: Container[];
   run: Run;
+  showCli: (cmd: string) => void;
   onOpen: (containerId: string) => void;
 }
 
@@ -16,7 +17,7 @@ type Filter = "all" | "used" | "unused";
 // Docker names a volume nobody named with 64 hex digits.
 const anonymous = (name: string) => /^[0-9a-f]{64}$/.test(name);
 
-export default function Volumes({ volumes, containers, run, onOpen }: Props) {
+export default function Volumes({ volumes, containers, run, showCli, onOpen }: Props) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sizes, setSizes] = useState<Record<string, number> | null>(null);
@@ -162,6 +163,7 @@ export default function Volumes({ volumes, containers, run, onOpen }: Props) {
           name={browsing}
           label={anonymous(browsing) ? browsing.slice(0, 12) : browsing}
           run={run}
+          showCli={showCli}
           onClose={() => setBrowsing(null)}
         />
       )}

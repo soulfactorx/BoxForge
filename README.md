@@ -5,7 +5,10 @@ Docker를 쉽게, 눈으로 보면서 다루기 위한 데스크톱 앱 (Windows
 
 ## 지금 되는 것
 
-- **엔진**: Docker 엔진 연결과 상태 표시, 끊기면 자동 재연결
+- **엔진**: 연결과 상태 표시, 끊기면 자동 재연결. 엔진 고르기(사이드바 아래 엔진 카드): `docker` 명령과 같은 엔진, Docker context, WSL 배포판 안의 Docker Engine. WSL 안의 엔진은 네트워크 포트 없이 `wsl.exe`를 통해 연결
+- **진행 표시**: 시작 · 중지처럼 시간이 걸리는 작업은 끝날 때까지 그 행에 "중지하는 중…"으로 표시
+- **외부 터미널**: 컨테이너의 셸을 PC의 터미널 창으로 열기
+- **명령 기록**: 화면에서 한 모든 일(목록 보기, 볼륨 안 보기 포함)을 같은 일을 하는 명령으로 기록
 - **컨테이너**: Compose 프로젝트별 묶음, 상태 필터, 검색, 디스크 크기(엔진이 알려주지 않으면 이미지 크기). 시작 · 중지 · 재시작 · 일시정지 · 재개 · 강제 종료 · 이름 변경 · 삭제
 - **새 컨테이너 실행**: 이미지, 이름, 포트, 저장 공간, 환경변수, 재시작 정책, 실행 명령을 채우는 창. 없는 이미지는 먼저 내려받음
 - **컨테이너 상세**: 개요(실시간 CPU · 메모리 그래프, 포트 · 저장 공간 · 네트워크 · 환경변수, 비밀값은 가림), 실시간 로그(검색), 터미널(컨테이너 안의 셸), 원본(inspect)
@@ -19,6 +22,24 @@ Docker를 쉽게, 눈으로 보면서 다루기 위한 데스크톱 앱 (Windows
 - 모든 작업에 같은 일을 하는 `docker` 명령 표시
 
 아직 앱이 Docker를 설치해 주지는 않습니다. Docker Engine(또는 Docker API를 제공하는 엔진)이 실행 중이어야 합니다.
+
+### Windows에서 Docker Engine 쓰기 (Docker Desktop 없이)
+
+Docker Engine은 무료이고 WSL의 Linux 배포판 안에 설치합니다.
+
+1. WSL 배포판(예: Microsoft Store의 Ubuntu) 터미널에서 Docker Engine을 설치합니다.
+
+   ```bash
+   curl -fsSL https://get.docker.com | sudo sh
+   ```
+
+   ```bash
+   sudo systemctl enable --now docker
+   ```
+
+2. BoxForge 사이드바 아래의 엔진 카드를 눌러 "WSL: (배포판) 안의 Docker"를 고릅니다.
+
+이후 Compose와 빌드도 그 배포판 안의 `docker` 명령으로 실행됩니다.
 비공개 레지스트리 로그인은 아직 없어서 공개 이미지만 받을 수 있습니다.
 
 제품 아이콘은 [Simple Icons](https://simpleicons.org)(CC0)의 것이며, 각 상표는 해당 소유자의 것입니다.

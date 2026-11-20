@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { call, on } from "./bridge";
+import { call, on, type Run } from "./bridge";
 
 interface TermData {
   session: string;
@@ -11,7 +11,7 @@ interface TermData {
 }
 
 /** A shell inside a running container. */
-export default function Terminal({ id, name, showCli }: { id: string; name: string; showCli: (cmd: string) => void }) {
+export default function Terminal({ id, name, showCli, run }: { id: string; name: string; showCli: (cmd: string) => void; run: Run }) {
   const box = useRef<HTMLDivElement>(null);
   const [note, setNote] = useState("");
 
@@ -69,6 +69,11 @@ export default function Terminal({ id, name, showCli }: { id: string; name: stri
 
   return (
     <div className="term">
+      <div className="logs-bar">
+        <span className="muted">컨테이너 안의 셸입니다.</span>
+        <span className="spacer" />
+        <button onClick={() => run(`docker exec -it ${name} sh`, () => call("OpenTerminal", name))}>외부 터미널로 열기</button>
+      </div>
       <div className="term-box" ref={box} data-testid="terminal" />
       {note && <p className="muted">{note}</p>}
     </div>

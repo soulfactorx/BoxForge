@@ -4,4 +4,4 @@ package clirunner
 
 import "os/exec"
 
-func hideWindow(*exec.Cmd) {}
+func HideWindow(*exec.Cmd) {}

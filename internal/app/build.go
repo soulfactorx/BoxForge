@@ -33,7 +33,8 @@ type BuildRequest struct {
 func (a *App) DockerCLI() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	v, err := clirunner.Output(ctx, "docker", "version", "--format", "{{.Client.Version}}")
+	name, args, env := a.docker("version", "--format", "{{.Client.Version}}")
+	v, err := clirunner.Output(ctx, env, name, args...)
 	if err != nil && v == "" {
 		return "", fmt.Errorf("the docker command was not found on this PC")
 	}
@@ -69,7 +70,7 @@ func (a *App) Build(req BuildRequest) error {
 		args = append(args, "-t", req.Tag)
 	}
 	if req.Dockerfile != "" {
-		args = append(args, "-f", file)
+		args = append(args, "-f", a.hostPath(file))
 	}
 	for _, kv := range req.Args {
 		args = append(args, "--build-arg", kv)
@@ -80,7 +81,8 @@ func (a *App) Build(req BuildRequest) error {
 	if req.Pull {
 		args = append(args, "--pull")
 	}
-	args = append(args, req.Context)
+	args = append(args, a.hostPath(req.Context))
+	name, full, env := a.docker(args...)
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
 	a.builds[req.Key] = cancel
@@ -91,7 +93,7 @@ func (a *App) Build(req BuildRequest) error {
 		a.mu.Unlock()
 		cancel()
 	}()
-	err := clirunner.Run(ctx, "", "docker", args, func(line string) {
+	err := clirunner.Run(ctx, "", env, name, full, func(line string) {
 		a.emit("build", BuildLine{Key: req.Key, Line: line})
 	})
 	if ctx.Err() != nil {
@@ -115,7 +117,8 @@ func (a *App) PruneBuildCache() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
 	last := ""
-	err := clirunner.Run(ctx, "", "docker", []string{"builder", "prune", "-f"}, func(line string) { last = line })
+	name, full, env := a.docker("builder", "prune", "-f")
+	err := clirunner.Run(ctx, "", env, name, full, func(line string) { last = line })
 	return last, err
 }
 

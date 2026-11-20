@@ -22,7 +22,8 @@ type ComposeLine struct {
 func (a *App) ComposeVersion() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	v, err := clirunner.Output(ctx, "docker", "compose", "version", "--short")
+	name, args, env := a.docker("compose", "version", "--short")
+	v, err := clirunner.Output(ctx, env, name, args...)
 	if err != nil {
 		return "", fmt.Errorf("the docker compose command was not found on this PC")
 	}
@@ -60,6 +61,9 @@ func (a *App) ComposeAction(req ComposeRequest) error {
 		return fmt.Errorf("unknown compose action %q", req.Action)
 	}
 	args := []string{"compose", "--ansi", "never", "--progress", "plain"}
+	if req.Project == "" && len(req.Files) == 0 {
+		return fmt.Errorf("name a project or a compose file")
+	}
 	if req.Project != "" {
 		args = append(args, "-p", req.Project)
 	}
@@ -68,7 +72,7 @@ func (a *App) ComposeAction(req ComposeRequest) error {
 	found := 0
 	for _, f := range req.Files {
 		if _, err := os.Stat(f); err == nil {
-			args = append(args, "-f", f)
+			args = append(args, "-f", a.hostPath(f))
 			found++
 		}
 	}
@@ -79,9 +83,15 @@ func (a *App) ComposeAction(req ComposeRequest) error {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		dir = ""
 	}
+	name, full, env := a.docker(append(args, tail...)...)
+	if name != "docker" {
+		// Run inside WSL: this PC's folder means nothing there, and the
+		// files were named in full.
+		dir = ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
-	return clirunner.Run(ctx, dir, "docker", append(args, tail...), func(line string) {
+	return clirunner.Run(ctx, dir, env, name, full, func(line string) {
 		a.emit("compose", ComposeLine{Key: req.Key, Line: line})
 	})
 }

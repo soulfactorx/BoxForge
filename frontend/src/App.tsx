@@ -6,11 +6,21 @@ import Builds from "./Builds";
 import Compose from "./Compose";
 import Containers from "./Containers";
 import Detail, { type Tab } from "./Detail";
+import EngineDialog from "./EngineDialog";
 import Images from "./Images";
 import RunDialog from "./RunDialog";
 import { Icon } from "./ui";
 
 type Page = "containers" | "images" | "volumes" | "networks" | "compose" | "builds";
+
+const pageCommand: Record<Page, string> = {
+  containers: "docker ps -a --size",
+  compose: "docker compose ls -a",
+  images: "docker images",
+  volumes: "docker volume ls",
+  networks: "docker network ls",
+  builds: "docker buildx version",
+};
 
 function gib(bytes: number) {
   return (bytes / 2 ** 30).toFixed(1) + " GB";
@@ -26,9 +36,14 @@ export default function App() {
   const [page, setPage] = useState<Page>("containers");
   const [detail, setDetail] = useState<{ id: string; tab: Tab } | null>(null);
   const [running, setRunning] = useState<string | null>(null); // the run dialog's starting image
-  const [cli, setCli] = useState("");
+  const [history, setHistory] = useState<{ cmd: string; at: number }[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [choosing, setChoosing] = useState(false);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState("");
+  const cli = history.length ? history[history.length - 1].cmd : "";
+
+  const copy = (cmd: string) => navigator.clipboard?.writeText(cmd).then(() => setCopied(cmd), () => {});
 
   useEffect(() => {
     const load = () => {
@@ -61,10 +76,17 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [ids]);
 
+  // Every command BoxForge's work stands for goes through here: the newest
+  // shows in the status bar, all of them in the history panel.
   const showCli = useCallback((command: string) => {
-    setCli(command);
-    setCopied(false);
+    setCopied("");
+    setHistory((h) => (h.length && h[h.length - 1].cmd === command ? h : h.concat({ cmd: command, at: Date.now() }).slice(-200)));
   }, []);
+
+  // Opening a page reads a list: that has a command too.
+  useEffect(() => {
+    showCli(pageCommand[page]);
+  }, [page, showCli]);
 
   // Runs one engine call, showing the docker command it stands for, and the
   // engine's own message if it fails.
@@ -109,7 +131,7 @@ export default function App() {
             <span>빌드</span>
           </button>
         </nav>
-        <div className="engine-card" data-testid="engine-card">
+        <button className="engine-card" data-testid="engine-card" title="엔진 바꾸기" onClick={() => setChoosing(true)}>
           <div className="engine-head">
             <span className={"dot " + (engine.connected ? "ok" : "bad")} />
             <strong>{info ? `${info.runtime} ${info.version}` : "엔진"}</strong>
@@ -127,7 +149,8 @@ export default function App() {
               <dd>{gib(info.memTotal)}</dd>
             </dl>
           )}
-        </div>
+          <span className="engine-change">엔진 바꾸기</span>
+        </button>
       </aside>
 
       <main className="main">
@@ -163,7 +186,7 @@ export default function App() {
           <Builds run={run} onRun={(image) => setRunning(image)} />
         </div>
         {page === "volumes" && (
-          <Volumes volumes={volumes} containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />
+          <Volumes volumes={volumes} containers={containers} run={run} showCli={showCli} onOpen={(id) => setDetail({ id, tab: "overview" })} />
         )}
         {page === "networks" && (
           <Networks networks={networks} containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />
@@ -177,7 +200,45 @@ export default function App() {
           onTab={(tab) => setDetail({ id: detail.id, tab })}
           onClose={() => setDetail(null)}
           showCli={showCli}
+          run={run}
         />
+      )}
+
+      {choosing && (
+        <EngineDialog
+          onClose={() => setChoosing(false)}
+          onSwitched={(command) => {
+            setDetail(null);
+            setSizes(null);
+            showCli(command);
+          }}
+        />
+      )}
+
+      {showHistory && (
+        <aside className="drawer history" data-testid="history">
+          <header>
+            <h2>명령 기록</h2>
+            <button onClick={() => setShowHistory(false)}>닫기</button>
+          </header>
+          <div className="drawer-body">
+            <p className="muted">BoxForge에서 한 일을 터미널에서 하려면 치는 명령입니다. 최근 것이 위에 있습니다.</p>
+            <ol className="history-list">
+              {history
+                .slice()
+                .reverse()
+                .map((h) => (
+                  <li key={h.at + h.cmd}>
+                    <span className="muted nowrap">{new Date(h.at).toLocaleTimeString()}</span>
+                    <code>{h.cmd}</code>
+                    <button className="link" onClick={() => copy(h.cmd)}>
+                      {copied === h.cmd ? "복사됨" : "복사"}
+                    </button>
+                  </li>
+                ))}
+            </ol>
+          </div>
+        </aside>
       )}
 
       {running !== null && (
@@ -206,11 +267,11 @@ export default function App() {
           <span className="cli" data-testid="cli">
             <span className="muted">같은 일을 하는 명령</span>
             <code>{cli}</code>
-            <button
-              className="link"
-              onClick={() => navigator.clipboard?.writeText(cli).then(() => setCopied(true), () => {})}
-            >
-              {copied ? "복사됨" : "복사"}
+            <button className="link" onClick={() => copy(cli)}>
+              {copied === cli ? "복사됨" : "복사"}
+            </button>
+            <button className="link" onClick={() => setShowHistory(!showHistory)} data-testid="history-toggle">
+              기록 {history.length}
             </button>
           </span>
         ) : (

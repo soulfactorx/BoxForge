@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { call, on, openURL, type Container, type LogChunk } from "./bridge";
+import { call, on, openURL, type Container, type LogChunk, type Run } from "./bridge";
 import Charts from "./Charts";
 import { published } from "./Containers";
 import Terminal from "./Terminal";
@@ -203,9 +203,10 @@ interface Props {
   onTab: (t: Tab) => void;
   onClose: () => void;
   showCli: (cmd: string) => void;
+  run: Run;
 }
 
-export default function Detail({ c, tab, onTab, onClose, showCli }: Props) {
+export default function Detail({ c, tab, onTab, onClose, showCli, run }: Props) {
   const [raw, setRaw] = useState("");
   const [error, setError] = useState("");
 
@@ -217,6 +218,10 @@ export default function Detail({ c, tab, onTab, onClose, showCli }: Props) {
 
   useEffect(() => {
     if (tab === "inspect") showCli(`docker inspect ${c.name}`);
+    if (tab === "overview") {
+      showCli(`docker inspect ${c.name}`);
+      if (c.state === "running") showCli(`docker stats ${c.name}`);
+    }
   }, [tab, c.name]);
 
   const tabs: [Tab, string][] = [
@@ -244,7 +249,7 @@ export default function Detail({ c, tab, onTab, onClose, showCli }: Props) {
         {tab === "logs" && <Logs c={c} showCli={showCli} />}
         {tab === "terminal" &&
           (c.state === "running" ? (
-            <Terminal id={c.id} name={c.name} showCli={showCli} />
+            <Terminal id={c.id} name={c.name} showCli={showCli} run={run} />
           ) : (
             <p className="muted">터미널은 실행 중인 컨테이너에서만 열 수 있습니다. 먼저 컨테이너를 시작하세요.</p>
           ))}

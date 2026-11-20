@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"github.com/soulfactorx/boxforge/internal/engine"
 	"github.com/soulfactorx/boxforge/internal/engine/docker"
 	"github.com/soulfactorx/boxforge/internal/engine/fake"
+	"github.com/soulfactorx/boxforge/internal/engines"
+	"github.com/soulfactorx/boxforge/internal/extterm"
 	"github.com/soulfactorx/boxforge/internal/hub"
 )
 
@@ -32,9 +35,13 @@ const actionTimeout = 60 * time.Second
 
 // App is the bound object.
 type App struct {
+	emit hub.Emit
+
+	// The engine in use, and what follows from it. UseEngine replaces them.
+	emu    sync.RWMutex
+	target engines.Target
 	rt     engine.Runtime
 	hub    *hub.Hub
-	emit   hub.Emit
 	cancel context.CancelFunc
 
 	mu     sync.Mutex
@@ -45,64 +52,180 @@ type App struct {
 	seq    int
 }
 
-// New picks the engine: BOXFORGE_ENGINE=fake for the in-memory one, else
-// Docker at DOCKER_HOST or the platform's default socket.
-func New() (*App, error) {
+// connect opens the engine a target names. Nothing is sent to it yet.
+func connect(t engines.Target) (engine.Runtime, error) {
 	if os.Getenv("BOXFORGE_ENGINE") == "fake" {
-		return &App{rt: fake.New()}, nil
+		return fake.New(), nil
 	}
-	rt, err := docker.Connect("")
+	switch t.Kind {
+	case "wsl":
+		return docker.ConnectDialer(t.Dialer())
+	case "context":
+		return docker.Connect(t.Host)
+	}
+	return docker.Connect(engines.DefaultHost())
+}
+
+// New opens the engine chosen last time, else the one the docker command
+// uses. BOXFORGE_ENGINE=fake gives the in-memory one.
+func New() (*App, error) {
+	t := engines.Find(engines.Saved())
+	rt, err := connect(t)
 	if err != nil {
-		return nil, err
+		// What was saved no longer works (a distribution removed, say).
+		t = engines.Default
+		if rt, err = connect(t); err != nil {
+			return nil, err
+		}
 	}
-	return &App{rt: rt}, nil
+	return &App{rt: rt, target: t}, nil
 }
 
 // Start begins mirroring the engine, sending changes through emit. It is a
 // function, not a method, so that it is not bound.
 func Start(a *App, emit hub.Emit) {
-	ctx, cancel := context.WithCancel(context.Background())
-	a.cancel = cancel
 	a.emit = emit
 	a.logs = map[string]context.CancelFunc{}
 	a.stats = map[string]context.CancelFunc{}
 	a.terms = map[string]engine.Session{}
 	a.builds = map[string]context.CancelFunc{}
-	a.hub = hub.New(a.rt, emit)
+	a.emu.Lock()
+	a.follow()
+	a.emu.Unlock()
+}
+
+// follow starts a hub on a.rt. Callers hold emu for writing.
+func (a *App) follow() {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	a.hub = hub.New(a.rt, a.emit)
 	go a.hub.Run(ctx)
+}
+
+// hangUp ends everything that streams from the engine in use.
+func (a *App) hangUp() {
+	a.mu.Lock()
+	for id, cancel := range a.logs {
+		cancel()
+		delete(a.logs, id)
+	}
+	for id, cancel := range a.stats {
+		cancel()
+		delete(a.stats, id)
+	}
+	for id, s := range a.terms {
+		_ = s.Close()
+		delete(a.terms, id)
+	}
+	a.mu.Unlock()
 }
 
 // Stop ends the mirroring and closes the engine connection.
 func Stop(a *App) {
+	a.hangUp()
+	a.emu.Lock()
+	defer a.emu.Unlock()
 	if a.cancel != nil {
 		a.cancel()
 	}
-	a.mu.Lock()
-	for _, cancel := range a.logs {
-		cancel()
-	}
-	for _, cancel := range a.stats {
-		cancel()
-	}
-	for _, s := range a.terms {
-		_ = s.Close()
-	}
-	a.mu.Unlock()
 	_ = a.rt.Close()
 }
 
+func (a *App) eng() engine.Runtime {
+	a.emu.RLock()
+	defer a.emu.RUnlock()
+	return a.rt
+}
+
+func (a *App) mirror() *hub.Hub {
+	a.emu.RLock()
+	defer a.emu.RUnlock()
+	return a.hub
+}
+
+// EngineChoice is the engines to choose from and the one in use.
+type EngineChoice struct {
+	Current string           `json:"current"`
+	Targets []engines.Target `json:"targets"`
+}
+
+// Engines lists the engines this PC can reach.
+func (a *App) Engines() EngineChoice {
+	a.emu.RLock()
+	defer a.emu.RUnlock()
+	return EngineChoice{Current: a.target.ID, Targets: engines.Discover()}
+}
+
+// How long a newly chosen engine has to answer before the choice is refused.
+const probeTimeout = 30 * time.Second
+
+// UseEngine switches to another engine and remembers the choice. The engine
+// must answer first; when it doesn't, nothing changes and the error says why.
+func (a *App) UseEngine(id string) error {
+	t := engines.Find(id)
+	if t.ID != id {
+		return fmt.Errorf("that engine is no longer in the list")
+	}
+	rt, err := connect(t)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	_, err = rt.Info(ctx)
+	cancel()
+	if err != nil {
+		_ = rt.Close()
+		return err
+	}
+	a.hangUp()
+	a.emu.Lock()
+	a.cancel()
+	_ = a.rt.Close()
+	a.rt, a.target = rt, t
+	a.follow()
+	a.emu.Unlock()
+	return engines.Save(id)
+}
+
+// docker is the docker command aimed at the engine in use: its name, its
+// arguments, and what to add to its environment.
+func (a *App) docker(args ...string) (name string, full []string, env []string) {
+	a.emu.RLock()
+	t := a.target
+	a.emu.RUnlock()
+	switch t.Kind {
+	case "wsl":
+		// The docker command inside the distribution, beside its engine.
+		name, full = engines.InWSL(t.Distro, append([]string{"docker"}, args...)...)
+		return name, full, nil
+	case "context":
+		return "docker", args, []string{"DOCKER_HOST=" + t.Host}
+	}
+	return "docker", args, nil
+}
+
+// hostPath is a path on this PC as the docker command in use sees it.
+func (a *App) hostPath(p string) string {
+	a.emu.RLock()
+	defer a.emu.RUnlock()
+	if a.target.Kind == "wsl" {
+		return engines.WSLPath(p)
+	}
+	return p
+}
+
 // Engine returns the engine's connection status.
-func (a *App) Engine() hub.Status { return a.hub.Status() }
+func (a *App) Engine() hub.Status { return a.mirror().Status() }
 
 // Containers returns the current container list. Later changes arrive as
 // "containers" events.
-func (a *App) Containers() []engine.Container { return a.hub.Containers() }
+func (a *App) Containers() []engine.Container { return a.mirror().Containers() }
 
 // ContainerAction runs start, stop, restart, pause, unpause or kill.
 func (a *App) ContainerAction(id, action string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	c := a.rt.Containers()
+	c := a.eng().Containers()
 	switch action {
 	case "start":
 		return c.Start(ctx, id)
@@ -128,7 +251,7 @@ func (a *App) RenameContainer(id, name string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Containers().Rename(ctx, id, name)
+	return a.eng().Containers().Rename(ctx, id, name)
 }
 
 // RemoveContainer deletes the container; force removes a running one, and
@@ -136,7 +259,7 @@ func (a *App) RenameContainer(id, name string) error {
 func (a *App) RemoveContainer(id string, force, volumes bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Containers().Remove(ctx, id, force, volumes)
+	return a.eng().Containers().Remove(ctx, id, force, volumes)
 }
 
 // InspectContainer returns the engine's own description of the container,
@@ -144,7 +267,7 @@ func (a *App) RemoveContainer(id string, force, volumes bool) error {
 func (a *App) InspectContainer(id string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	raw, err := a.rt.Containers().Inspect(ctx, id)
+	raw, err := a.eng().Containers().Inspect(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -184,7 +307,7 @@ func (a *App) StartLogs(id string) {
 
 	w := &batcher{}
 	done := make(chan error, 1)
-	go func() { done <- a.rt.Containers().Logs(ctx, id, logTail, w) }()
+	go func() { done <- a.eng().Containers().Logs(ctx, id, logTail, w) }()
 	go func() {
 		tick := time.NewTicker(logFlush)
 		defer tick.Stop()
@@ -240,7 +363,7 @@ func (b *batcher) take() string {
 }
 
 // Images returns the current image list. Later changes arrive as "images" events.
-func (a *App) Images() []engine.Image { return a.hub.Images() }
+func (a *App) Images() []engine.Image { return a.mirror().Images() }
 
 // PullState is the payload of a "pull" event.
 type PullState struct {
@@ -257,7 +380,7 @@ const pullTimeout = 30 * time.Minute
 // pull downloads ref, reporting as "pull" events, at most a few a second.
 func (a *App) pull(ctx context.Context, ref string) error {
 	var last time.Time
-	err := a.rt.Images().Pull(ctx, ref, func(p engine.PullProgress) {
+	err := a.eng().Images().Pull(ctx, ref, func(p engine.PullProgress) {
 		if time.Since(last) < 150*time.Millisecond {
 			return
 		}
@@ -292,7 +415,7 @@ func (a *App) PullImage(ref string) error {
 func (a *App) RemoveImage(id string, force bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Images().Remove(ctx, id, force)
+	return a.eng().Images().Remove(ctx, id, force)
 }
 
 // TagImage gives an image one more name.
@@ -303,14 +426,14 @@ func (a *App) TagImage(source, target string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Images().Tag(ctx, source, target)
+	return a.eng().Images().Tag(ctx, source, target)
 }
 
 // PruneImages deletes untagged images nothing uses and returns the bytes freed.
 func (a *App) PruneImages() (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Images().Prune(ctx)
+	return a.eng().Images().Prune(ctx)
 }
 
 // RunContainer creates and starts a container, downloading its image first
@@ -323,12 +446,12 @@ func (a *App) RunContainer(spec engine.RunSpec) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
-	if !a.rt.Images().Exists(ctx, spec.Image) {
+	if !a.eng().Images().Exists(ctx, spec.Image) {
 		if err := a.pull(ctx, spec.Image); err != nil {
 			return "", err
 		}
 	}
-	return a.rt.Containers().Run(ctx, spec)
+	return a.eng().Containers().Run(ctx, spec)
 }
 
 // Measuring disk use walks every container's files.
@@ -338,7 +461,7 @@ const sizeTimeout = 2 * time.Minute
 func (a *App) ContainerSizes() (map[string]engine.Size, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
-	return a.rt.Containers().Sizes(ctx)
+	return a.eng().Containers().Sizes(ctx)
 }
 
 // StatsSample is the payload of a "stats" event.
@@ -358,7 +481,7 @@ func (a *App) StartStats(id string) {
 	a.stats[id] = cancel
 	a.mu.Unlock()
 	go func() {
-		_ = a.rt.Containers().Stats(ctx, id, func(s engine.Stats) {
+		_ = a.eng().Containers().Stats(ctx, id, func(s engine.Stats) {
 			a.emit("stats", StatsSample{ID: id, Stats: s})
 		})
 	}()
@@ -390,7 +513,7 @@ var shell = []string{"/bin/sh", "-c", "command -v bash >/dev/null 2>&1 && exec b
 func (a *App) TermOpen(id string, cols, rows int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	s, err := a.rt.Containers().Exec(ctx, id, shell, uint(max(cols, 1)), uint(max(rows, 1)))
+	s, err := a.eng().Containers().Exec(ctx, id, shell, uint(max(cols, 1)), uint(max(rows, 1)))
 	if err != nil {
 		return "", err
 	}
@@ -465,7 +588,7 @@ func (a *App) TermClose(session string) {
 }
 
 // Volumes returns the current volume list. Later changes arrive as "volumes" events.
-func (a *App) Volumes() []engine.Volume { return a.hub.Volumes() }
+func (a *App) Volumes() []engine.Volume { return a.mirror().Volumes() }
 
 // CreateVolume makes an empty volume.
 func (a *App) CreateVolume(name string) error {
@@ -475,32 +598,32 @@ func (a *App) CreateVolume(name string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Volumes().Create(ctx, name)
+	return a.eng().Volumes().Create(ctx, name)
 }
 
 // RemoveVolume deletes a volume and the data in it.
 func (a *App) RemoveVolume(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Volumes().Remove(ctx, name)
+	return a.eng().Volumes().Remove(ctx, name)
 }
 
 // PruneVolumes deletes every volume no container uses and returns the bytes freed.
 func (a *App) PruneVolumes() (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
-	return a.rt.Volumes().Prune(ctx)
+	return a.eng().Volumes().Prune(ctx)
 }
 
 // VolumeSizes measures each volume's data, by volume name.
 func (a *App) VolumeSizes() (map[string]int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
-	return a.rt.Volumes().Sizes(ctx)
+	return a.eng().Volumes().Sizes(ctx)
 }
 
 // Networks returns the current network list. Later changes arrive as "networks" events.
-func (a *App) Networks() []engine.Network { return a.hub.Networks() }
+func (a *App) Networks() []engine.Network { return a.mirror().Networks() }
 
 // CreateNetwork makes a network; subnet may be empty.
 func (a *App) CreateNetwork(name, subnet string) error {
@@ -510,42 +633,42 @@ func (a *App) CreateNetwork(name, subnet string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Networks().Create(ctx, name, strings.TrimSpace(subnet))
+	return a.eng().Networks().Create(ctx, name, strings.TrimSpace(subnet))
 }
 
 // RemoveNetwork deletes a network no container is on.
 func (a *App) RemoveNetwork(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Networks().Remove(ctx, id)
+	return a.eng().Networks().Remove(ctx, id)
 }
 
 // ConnectNetwork puts a container on a network.
 func (a *App) ConnectNetwork(network, container string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Networks().Connect(ctx, network, container)
+	return a.eng().Networks().Connect(ctx, network, container)
 }
 
 // DisconnectNetwork takes a container off a network.
 func (a *App) DisconnectNetwork(network, container string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Networks().Disconnect(ctx, network, container)
+	return a.eng().Networks().Disconnect(ctx, network, container)
 }
 
 // PruneNetworks deletes every network no container is on.
 func (a *App) PruneNetworks() error {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	return a.rt.Networks().Prune(ctx)
+	return a.eng().Networks().Prune(ctx)
 }
 
 // VolumeFiles lists one directory inside a volume; "/" is its top.
 func (a *App) VolumeFiles(name, dir string) ([]engine.FileEntry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
-	list, err := a.rt.Volumes().Files(ctx, name, dir)
+	list, err := a.eng().Volumes().Files(ctx, name, dir)
 	if list == nil {
 		list = []engine.FileEntry{}
 	}
@@ -584,7 +707,7 @@ func firstFile(r io.Reader) (*tar.Reader, *tar.Header, error) {
 func (a *App) VolumePreview(name, file string) (FilePreview, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
-	rc, err := a.rt.Volumes().Archive(ctx, name, file)
+	rc, err := a.eng().Volumes().Archive(ctx, name, file)
 	if err != nil {
 		return FilePreview{}, err
 	}
@@ -638,7 +761,7 @@ func (a *App) VolumeSave(name, item string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
-	rc, err := a.rt.Volumes().Archive(ctx, name, item)
+	rc, err := a.eng().Volumes().Archive(ctx, name, item)
 	if err != nil {
 		return "", err
 	}
@@ -661,7 +784,7 @@ func (a *App) VolumeSave(name, item string) (string, error) {
 		src = tr
 	} else {
 		rc.Close()
-		again, err := a.rt.Volumes().Archive(ctx, name, item)
+		again, err := a.eng().Volumes().Archive(ctx, name, item)
 		if err != nil {
 			return "", err
 		}
@@ -679,4 +802,41 @@ func (a *App) VolumeSave(name, item string) (string, error) {
 		return "", err
 	}
 	return target, f.Close()
+}
+
+var containerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// OpenTerminal opens the desktop's own terminal window with a shell inside
+// the container: bash where the image has it, else sh.
+func (a *App) OpenTerminal(name string) error {
+	if !containerName.MatchString(name) {
+		return fmt.Errorf("%q is not a container name", name)
+	}
+	sh := "sh"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if s, err := a.eng().Containers().Exec(ctx, name, []string{"sh", "-c", "command -v bash"}, 80, 24); err == nil {
+		found := make(chan bool, 1)
+		go func() {
+			out, _ := io.ReadAll(io.LimitReader(s, 4096))
+			found <- strings.Contains(string(out), "bash")
+		}()
+		select {
+		case ok := <-found:
+			if ok {
+				sh = "bash"
+			}
+		case <-ctx.Done():
+		}
+		_ = s.Close()
+	}
+	cmd, args, env := a.docker("exec", "-it", name, sh)
+	for _, kv := range env {
+		// The terminal's command inherits the app's environment.
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			os.Setenv(k, v)
+			defer os.Unsetenv(k)
+		}
+	}
+	return extterm.Open(append([]string{cmd}, args...))
 }

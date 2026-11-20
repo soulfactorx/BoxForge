@@ -19,6 +19,16 @@ export function published(c: Container) {
 
 type Item = { key: string; project: string; members: Container[] };
 
+const doing: Record<string, string> = {
+  start: "시작하는 중", stop: "중지하는 중", restart: "재시작하는 중", pause: "일시정지하는 중",
+  unpause: "재개하는 중", kill: "강제 종료하는 중", remove: "삭제하는 중",
+};
+// Why some of these take a while.
+const waitHint: Record<string, string> = {
+  stop: "프로그램이 스스로 끝나기를 최대 10초 기다립니다",
+  restart: "프로그램이 스스로 끝나기를 최대 10초 기다린 뒤 다시 시작합니다",
+};
+
 interface Props {
   containers: Container[];
   sizes: Record<string, Size> | null; // null until the engine has measured
@@ -35,6 +45,27 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
   const [removing, setRemoving] = useState<{ c: Container; volumes: boolean } | null>(null);
+  // What is being done to each container right now, by ID: shown in its
+  // row until the engine has answered.
+  const [pending, setPending] = useState<Record<string, string>>({});
+
+  const during = async (ids: string[], action: string, work: () => Promise<unknown>) => {
+    setPending((p) => ({ ...p, ...Object.fromEntries(ids.map((id) => [id, action])) }));
+    try {
+      return await work();
+    } finally {
+      // A moment more: the row's new state comes from the engine just after.
+      setTimeout(
+        () =>
+          setPending((p) => {
+            const next = { ...p };
+            ids.forEach((id) => next[id] === action && delete next[id]);
+            return next;
+          }),
+        400,
+      );
+    }
+  };
 
   const hidden = useMemo(() => containers.filter((c) => c.system).length, [containers]);
   const visible = useMemo(() => (showSystem ? containers : containers.filter((c) => !c.system)), [containers, showSystem]);
@@ -72,14 +103,14 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
   }, [visible, filter, query]);
 
   const act = (c: Container, action: string) =>
-    run(`docker ${action} ${c.name}`, () => call("ContainerAction", c.id, action));
+    during([c.id], action, () => run(`docker ${action} ${c.name}`, () => call("ContainerAction", c.id, action)));
 
-  const actAll = (g: Item, action: "start" | "stop") =>
-    run(`docker compose -p ${g.project} ${action}`, () =>
-      Promise.all(
-        g.members.filter((c) => (action === "start" ? !isUp(c) : isUp(c))).map((c) => call("ContainerAction", c.id, action)),
-      ),
+  const actAll = (g: Item, action: "start" | "stop") => {
+    const todo = g.members.filter((c) => (action === "start" ? !isUp(c) : isUp(c)));
+    return during(todo.map((c) => c.id), action, () =>
+      run(`docker compose -p ${g.project} ${action}`, () => Promise.all(todo.map((c) => call("ContainerAction", c.id, action)))),
     );
+  };
 
   const commitRename = async (c: Container) => {
     const name = renaming?.draft.trim() ?? "";
@@ -93,8 +124,8 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
     const { c, volumes } = removing;
     const force = isUp(c);
     setRemoving(null);
-    await run(`docker rm${force ? " -f" : ""}${volumes ? " -v" : ""} ${c.name}`, () =>
-      call("RemoveContainer", c.id, force, volumes),
+    await during([c.id], "remove", () =>
+      run(`docker rm${force ? " -f" : ""}${volumes ? " -v" : ""} ${c.name}`, () => call("RemoveContainer", c.id, force, volumes)),
     );
   };
 
@@ -113,6 +144,9 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
     ];
     if (c.state === "paused") items.push({ label: "재개", onClick: () => act(c, "unpause") });
     else if (c.state === "running") items.push({ label: "일시정지", onClick: () => act(c, "pause") });
+    if (c.state === "running") {
+      items.push({ label: "외부 터미널 열기", onClick: () => run(`docker exec -it ${c.name} sh`, () => call("OpenTerminal", c.name)) });
+    }
     if (isUp(c)) items.push({ label: "강제 종료", onClick: () => act(c, "kill"), danger: true });
     return items;
   };
@@ -152,13 +186,25 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
         </div>
       </td>
       <td>
-        <span className={"state " + (c.failed ? "failed" : c.state)}>
-          <span className="dot" />
-          {c.failed ? "실패" : stateLabel[c.state] ?? c.state}
-        </span>
-        <span className="sub" title={c.status}>
-          {statusText(c)}
-        </span>
+        {pending[c.id] ? (
+          <>
+            <span className="state busy" role="status">
+              <span className="spinner" />
+              {doing[pending[c.id]] ?? "처리하는 중"}…
+            </span>
+            <span className="sub">{waitHint[pending[c.id]] ?? "엔진의 응답을 기다리고 있습니다"}</span>
+          </>
+        ) : (
+          <>
+            <span className={"state " + (c.failed ? "failed" : c.state)}>
+              <span className="dot" />
+              {c.failed ? "실패" : stateLabel[c.state] ?? c.state}
+            </span>
+            <span className="sub" title={c.status}>
+              {statusText(c)}
+            </span>
+          </>
+        )}
       </td>
       <td className="ports">
         {published(c).length === 0
@@ -177,13 +223,13 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
       {sizeCell(c)}
       <td className="muted nowrap">{ago(c.created)}</td>
       <td className="actions">
-        {isUp(c) && <IconButton icon="restart" label="재시작" onClick={() => act(c, "restart")} />}
+        {isUp(c) && <IconButton icon="restart" label="재시작" disabled={!!pending[c.id]} onClick={() => act(c, "restart")} />}
         {isUp(c) ? (
-          <IconButton icon="stop" label="중지" tone="danger" onClick={() => act(c, "stop")} />
+          <IconButton icon="stop" label="중지" tone="danger" disabled={!!pending[c.id]} onClick={() => act(c, "stop")} />
         ) : (
-          <IconButton icon="play" label="시작" tone="go" onClick={() => act(c, "start")} />
+          <IconButton icon="play" label="시작" tone="go" disabled={!!pending[c.id]} onClick={() => act(c, "start")} />
         )}
-        <IconButton icon="trash" label="삭제" tone="danger" onClick={() => setRemoving({ c, volumes: false })} />
+        <IconButton icon="trash" label="삭제" tone="danger" disabled={!!pending[c.id]} onClick={() => setRemoving({ c, volumes: false })} />
         <Menu items={menu(c)} />
       </td>
     </tr>

@@ -38,7 +38,7 @@ type Runtime struct {
 }
 
 // Connect opens the engine named by host ("unix:///…", "npipe://…",
-// "tcp://…"). An empty host means DOCKER_HOST, else the platform default.
+// "tcp://…"). An empty host means the platform default.
 // It does not talk to the engine yet: the first call does.
 func Connect(host string) (*Runtime, error) {
 	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
@@ -46,6 +46,21 @@ func Connect(host string) (*Runtime, error) {
 		opts = append(opts, client.WithHost(host))
 	}
 	cli, err := client.NewClientWithOpts(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &Runtime{cli: cli}, nil
+}
+
+// ConnectDialer opens an engine reached by a connection of the caller's
+// making, such as a helper process's stdin and stdout.
+func ConnectDialer(dial func(ctx context.Context, network, addr string) (net.Conn, error)) (*Runtime, error) {
+	cli, err := client.NewClientWithOpts(
+		// The address is never dialled: every connection comes from dial.
+		client.WithHost("http://engine.boxforge.invalid"),
+		client.WithDialContext(dial),
+		client.WithAPIVersionNegotiation(),
+	)
 	if err != nil {
 		return nil, err
 	}
