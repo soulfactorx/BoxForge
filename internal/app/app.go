@@ -522,9 +522,30 @@ func (a *App) RecreateContainer(id string, spec engine.RunSpec) (string, error) 
 		}
 	}
 	if old == nil {
+		// The mirror may be a moment behind the engine.
+		for _, c := range a.listNow(ctx) {
+			if c.ID == id {
+				c := c
+				old = &c
+			}
+		}
+	}
+	if old == nil {
 		return "", fmt.Errorf("the container is no longer there")
 	}
 	wasUp := old.State == "running" || old.State == "paused"
+	// Whatever can fail without touching the old one goes first.
+	if img := strings.TrimSpace(spec.Image); img != "" && !a.eng().Images().Exists(ctx, img) {
+		if err := a.pull(ctx, img); err != nil {
+			return "", err
+		}
+	}
+	if strings.TrimSpace(spec.Name) == "" {
+		spec.Name = old.Name
+	}
+	if nerdctl.Is(a.eng()) {
+		return a.recreateByRemoving(ctx, *old, wasUp, spec)
+	}
 	if wasUp {
 		// Its ports are free only once it has stopped.
 		if err := cs.Stop(ctx, id); err != nil {
@@ -543,9 +564,6 @@ func (a *App) RecreateContainer(id string, spec engine.RunSpec) (string, error) 
 			_ = cs.Start(ctx, id)
 		}
 	}
-	if strings.TrimSpace(spec.Name) == "" {
-		spec.Name = old.Name
-	}
 	fresh, err := a.RunContainer(spec)
 	if err != nil {
 		// Made but unable to start (a port taken, say): not left behind.
@@ -561,6 +579,64 @@ func (a *App) RecreateContainer(id string, spec engine.RunSpec) (string, error) 
 		return fresh, fmt.Errorf("the new container is running, but the old one (%s) could not be removed: %w", aside, err)
 	}
 	return fresh, nil
+}
+
+// recreateByRemoving is RecreateContainer where a container can't be set
+// aside under another name: nerdctl keeps a container's first name on
+// its books, so a renamed one can no longer be removed once another has
+// taken that name. Here the old one is kept as an image instead, removed,
+// and made again from that image if the new one can't be.
+func (a *App) recreateByRemoving(ctx context.Context, old engine.Container, wasUp bool, spec engine.RunSpec) (string, error) {
+	cs := a.eng().Containers()
+	raw, err := cs.Inspect(ctx, old.ID)
+	if err != nil {
+		return "", err
+	}
+	if wasUp {
+		if err := cs.Stop(ctx, old.ID); err != nil {
+			return "", err
+		}
+	}
+	keep := "boxforge-undo/" + strings.ToLower(old.Name) + ":" + time.Now().Format("20060102-150405")
+	if err := cs.Commit(ctx, old.ID, keep); err != nil {
+		if wasUp {
+			_ = cs.Start(ctx, old.ID)
+		}
+		return "", err
+	}
+	drop := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+		defer cancel()
+		_ = a.eng().Images().Remove(ctx, keep, false)
+	}
+	if err := cs.Remove(ctx, old.ID, true, false); err != nil {
+		drop()
+		if wasUp {
+			_ = cs.Start(ctx, old.ID)
+		}
+		return "", err
+	}
+	fresh, err := a.RunContainer(spec)
+	if err == nil {
+		drop()
+		return fresh, nil
+	}
+	// Put back: what the new one left, away; the old one, from its image.
+	undo, cancel := context.WithTimeout(context.Background(), pullTimeout)
+	defer cancel()
+	for _, c := range a.listNow(undo) {
+		if c.Name == spec.Name {
+			_ = cs.Remove(undo, c.ID, true, false)
+		}
+	}
+	id, _, rerr := cs.CreateFrom(undo, raw, keep)
+	if rerr != nil {
+		return "", fmt.Errorf("%w\n\n원래 컨테이너를 되돌리지도 못했습니다(%v). 그 상태는 이미지 %s 로 남아 있습니다", err, rerr, keep)
+	}
+	if wasUp {
+		_ = cs.Start(undo, id)
+	}
+	return "", err
 }
 
 // listNow asks the engine itself for the containers, not the mirror,

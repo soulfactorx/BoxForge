@@ -980,3 +980,7 @@ button.link.add-remote { padding: 0; }
 .bundle-info ul { margin: 0; padding-left: 18px; }
 fieldset.plain { border: none; padding: 0; margin: 12px 0 10px; min-width: 0; }
 fieldset.plain legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+
+.run-form label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; }
+.run-form label.check input { width: auto; flex: none; margin: 0; }
+.run-form .note-box { margin: 0; }

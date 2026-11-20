@@ -448,6 +448,11 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 	}
 	var notes []string
 	cfg.Image = img
+	// A bare shell with no terminal ends at once, as it did where it came
+	// from: it is given one.
+	if !cfg.Tty && len(in.Args) == 0 && engine.BareShell(nil, []string{in.Path}) {
+		cfg.Tty, cfg.OpenStdin = true, true
+	}
 	// A hostname the engine made from the old ID would be a stale one.
 	if cfg.Hostname != "" && strings.HasPrefix(in.ID, cfg.Hostname) {
 		cfg.Hostname = ""
@@ -470,6 +475,7 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 	}
 	for _, m := range in.Mounts {
 		switch {
+		case engine.OwnMount(m.Source, m.Destination):
 		case m.Type == "bind":
 			notes = append(notes, "bind:"+m.Source)
 		case m.Type == "volume" && m.Name != "" && !named[m.Name]:
@@ -1152,7 +1158,7 @@ func fromNerdctl(inspect []byte, in container.InspectResponse) (*container.Confi
 		HostConfig struct{ PortBindings nat.PortMap }
 	}
 	_ = json.Unmarshal(inspect, &more)
-	cfg := &container.Config{Labels: map[string]string{}, ExposedPorts: nat.PortSet{}}
+	cfg := &container.Config{Labels: map[string]string{}, ExposedPorts: nat.PortSet{}, Tty: in.Config.Tty, OpenStdin: in.Config.Tty}
 	for _, e := range in.Config.Env {
 		if !strings.HasPrefix(e, "HOSTNAME=") {
 			cfg.Env = append(cfg.Env, e)
@@ -1171,7 +1177,7 @@ func fromNerdctl(inspect []byte, in container.InspectResponse) (*container.Confi
 		cfg.ExposedPorts[port] = struct{}{}
 	}
 	for _, m := range in.Mounts {
-		if m.Type == "bind" {
+		if m.Type == "bind" && !engine.OwnMount(m.Source, m.Destination) {
 			bind := m.Source + ":" + m.Destination
 			if !m.RW {
 				bind += ":ro"

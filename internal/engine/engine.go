@@ -177,6 +177,17 @@ type ImageDefaults struct {
 	Shell bool `json:"shell"`
 }
 
+// OwnMount reports whether a mount in a container's description is one
+// the engine made for itself (nerdctl lists the resolv.conf, hosts and
+// hostname files it puts in every container), not one the user asked for.
+func OwnMount(source, target string) bool {
+	switch target {
+	case "/etc/resolv.conf", "/etc/hosts", "/etc/hostname":
+		return strings.Contains(source, "/nerdctl/")
+	}
+	return false
+}
+
 // BareShell reports whether an image's default command is nothing but a
 // shell: what base images (alpine, ubuntu, debian, busybox) run.
 func BareShell(entrypoint, cmd []string) bool {

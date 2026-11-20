@@ -234,6 +234,38 @@ func (s containers) Inspect(ctx context.Context, id string) ([]byte, error) {
 			list[0]["NetworkSettings"], _ = json.Marshal(settings)
 		}
 	}
+	// The files nerdctl itself mounts in every container are not the
+	// user's mounts, and are left out.
+	var mounts []map[string]json.RawMessage
+	if json.Unmarshal(list[0]["Mounts"], &mounts) == nil {
+		kept := []map[string]json.RawMessage{}
+		for _, m := range mounts {
+			var source, target string
+			_ = json.Unmarshal(m["Source"], &source)
+			_ = json.Unmarshal(m["Destination"], &target)
+			if !engine.OwnMount(source, target) {
+				kept = append(kept, m)
+			}
+		}
+		list[0]["Mounts"], _ = json.Marshal(kept)
+	}
+	// Whether it runs on a terminal is only in containerd's own
+	// description; it is put where Docker's shape has it.
+	if nb, err := s.r.out(ctx, "inspect", "--mode", "native", id); err == nil {
+		var native []struct {
+			Spec struct {
+				Process struct{ Terminal bool } `json:"process"`
+			}
+		}
+		if json.Unmarshal(nb, &native) == nil && len(native) > 0 {
+			var cfg map[string]json.RawMessage
+			if json.Unmarshal(list[0]["Config"], &cfg) == nil {
+				cfg["Tty"], _ = json.Marshal(native[0].Spec.Process.Terminal)
+				cfg["OpenStdin"] = cfg["Tty"]
+				list[0]["Config"], _ = json.Marshal(cfg)
+			}
+		}
+	}
 	return json.MarshalIndent(list[0], "", "    ")
 }
 
@@ -657,6 +689,7 @@ func (s containers) CreateFrom(ctx context.Context, raw []byte, img string) (str
 			Env        []string
 			Cmd        []string
 			Entrypoint []string
+			Tty        bool
 		}
 		HostConfig *struct {
 			Binds         []string
@@ -693,7 +726,7 @@ func (s containers) CreateFrom(ctx context.Context, raw []byte, img string) (str
 		if m.Type == "volume" {
 			source = m.Name
 		}
-		if source != "" && m.Destination != "" {
+		if source != "" && m.Destination != "" && !engine.OwnMount(m.Source, m.Destination) {
 			spec.Mounts = append(spec.Mounts, engine.MountSpec{Source: source, Target: m.Destination})
 		}
 	}
@@ -701,6 +734,9 @@ func (s containers) CreateFrom(ctx context.Context, raw []byte, img string) (str
 	if len(in.Config.Entrypoint) > 0 {
 		notes = append(notes, "이미지의 시작 명령(entrypoint)을 바꾼 설정은 옮기지 않았습니다.")
 	}
+	// On a terminal as it was; and a bare shell that had none (it would
+	// end at once, as it did where it came from) is given one.
+	spec.Interactive = in.Config.Tty || (len(in.Args) == 0 && engine.BareShell(nil, []string{in.Path}))
 	args := []string{"create", "--pull", "never"}
 	if len(in.Config.Cmd) == 0 && len(in.Config.Entrypoint) == 0 && in.Path != "" {
 		// nerdctl's own description: the whole command is in Path and Args.
