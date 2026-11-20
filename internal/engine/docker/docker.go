@@ -778,11 +778,21 @@ func (r removeOnClose) Close() error {
 }
 
 func (v volumes) Archive(ctx context.Context, name, p string) (io.ReadCloser, error) {
-	id, remove, err := v.helper(ctx, name, nil)
+	// The helper is made to do nothing for a while, in case it has to run.
+	id, remove, err := v.helper(ctx, name, []string{"/bin/sh", "-c", "sleep 900"})
 	if err != nil {
 		return nil, err
 	}
+	// Docker mounts a container's volumes to copy out of it even when it
+	// has never run. Other engines (Kiri's) show a container's volumes
+	// only while it runs: there the first try finds no such file, and the
+	// helper is started for a second one.
 	rc, _, err := v.cli.CopyFromContainer(ctx, id, inVolume(p))
+	if err != nil {
+		if v.cli.ContainerStart(ctx, id, container.StartOptions{}) == nil {
+			rc, _, err = v.cli.CopyFromContainer(ctx, id, inVolume(p))
+		}
+	}
 	if err != nil {
 		remove()
 		return nil, err

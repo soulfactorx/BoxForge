@@ -37,11 +37,12 @@ type App struct {
 	emit   hub.Emit
 	cancel context.CancelFunc
 
-	mu    sync.Mutex
-	logs  map[string]context.CancelFunc // open log streams, by container ID
-	stats map[string]context.CancelFunc // open stats streams, by container ID
-	terms map[string]engine.Session     // open terminals, by session ID
-	seq   int
+	mu     sync.Mutex
+	logs   map[string]context.CancelFunc // open log streams, by container ID
+	stats  map[string]context.CancelFunc // open stats streams, by container ID
+	terms  map[string]engine.Session     // open terminals, by session ID
+	builds map[string]context.CancelFunc // running builds, by the page's key
+	seq    int
 }
 
 // New picks the engine: BOXFORGE_ENGINE=fake for the in-memory one, else
@@ -66,6 +67,7 @@ func Start(a *App, emit hub.Emit) {
 	a.logs = map[string]context.CancelFunc{}
 	a.stats = map[string]context.CancelFunc{}
 	a.terms = map[string]engine.Session{}
+	a.builds = map[string]context.CancelFunc{}
 	a.hub = hub.New(a.rt, emit)
 	go a.hub.Run(ctx)
 }

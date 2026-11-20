@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Network, type Size, type Volume } from "./bridge";
 import Networks from "./Networks";
 import Volumes from "./Volumes";
+import Builds from "./Builds";
 import Compose from "./Compose";
 import Containers from "./Containers";
 import Detail, { type Tab } from "./Detail";
@@ -9,10 +10,7 @@ import Images from "./Images";
 import RunDialog from "./RunDialog";
 import { Icon } from "./ui";
 
-type Page = "containers" | "images" | "volumes" | "networks" | "compose";
-const upcoming: [string, string][] = [
-  ["빌드", "build"],
-];
+type Page = "containers" | "images" | "volumes" | "networks" | "compose" | "builds";
 
 function gib(bytes: number) {
   return (bytes / 2 ** 30).toFixed(1) + " GB";
@@ -106,13 +104,10 @@ export default function App() {
           {nav("images", "layers", "이미지", images.length)}
           {nav("volumes", "volume", "볼륨", volumes.length)}
           {nav("networks", "network", "네트워크", networks.length)}
-          {upcoming.map(([name, icon]) => (
-            <div key={name} className="nav-item disabled" title="아직 만들지 않은 화면입니다">
-              <Icon name={icon} />
-              <span>{name}</span>
-              <span className="soon">예정</span>
-            </div>
-          ))}
+          <button className={"nav-item" + (page === "builds" ? " active" : "")} onClick={() => setPage("builds")} data-testid="nav-builds">
+            <Icon name="build" />
+            <span>빌드</span>
+          </button>
         </nav>
         <div className="engine-card" data-testid="engine-card">
           <div className="engine-head">
@@ -159,7 +154,14 @@ export default function App() {
             onRun={(image) => setRunning(image)}
             onOpen={(id) => setDetail({ id, tab: "overview" })}
           />}
-        {page === "compose" && <Compose containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />}
+        <div hidden={page !== "compose"}>
+          <Compose containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />
+        </div>
+        {/* Kept alive while hidden: a build or a compose command goes on,
+            and its form and output are still there on coming back. */}
+        <div hidden={page !== "builds"}>
+          <Builds run={run} onRun={(image) => setRunning(image)} />
+        </div>
         {page === "volumes" && (
           <Volumes volumes={volumes} containers={containers} run={run} onOpen={(id) => setDetail({ id, tab: "overview" })} />
         )}
