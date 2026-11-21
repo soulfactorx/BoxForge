@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -219,13 +220,13 @@ func (a *App) KubeRemove() error {
 var kubeKinds = map[string]string{
 	"pods": "pods", "services": "services", "events": "events", "namespaces": "namespaces", "nodes": "nodes",
 	"workloads": "deployments,statefulsets,daemonsets", "ingresses": "ingresses",
-	"configmaps": "configmaps", "persistentvolumeclaims": "persistentvolumeclaims",
+	"configmaps": "configmaps", "persistentvolumeclaims": "persistentvolumeclaims", "secrets": "secrets",
 }
 
 // The kinds an action (describe, delete, scale, restart) may name.
 var kubeTargets = map[string]bool{
 	"pod": true, "deployment": true, "statefulset": true, "daemonset": true, "service": true,
-	"ingress": true, "configmap": true, "persistentvolumeclaim": true, "namespace": true,
+	"ingress": true, "configmap": true, "persistentvolumeclaim": true, "namespace": true, "secret": true,
 }
 
 // A Kubernetes object name: lower-case letters, digits, "-" and ".".
@@ -253,8 +254,81 @@ func (a *App) KubeGet(kind string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return a.kubectl(ctx, nil, "get", resource, "-A", "-o", "json")
+	out, err := a.kubectl(ctx, nil, "get", resource, "-A", "-o", "json")
+	if err != nil || kind != "secrets" {
+		return out, err
+	}
+	return hideSecrets(out)
 }
+
+// hideSecrets keeps a secret list's names and keys and drops the values:
+// the screen shows what a secret holds, never the secret, and nothing that
+// can only look (the web server's look-only password) ever reads one.
+func hideSecrets(list string) (string, error) {
+	var l struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(list), &l); err != nil {
+		return "", err
+	}
+	for _, item := range l.Items {
+		sizes := map[string]any{}
+		if data, ok := item["data"].(map[string]any); ok {
+			for k, v := range data {
+				s, _ := v.(string)
+				b, _ := base64.StdEncoding.DecodeString(s)
+				sizes[k] = len(b)
+			}
+		}
+		delete(item, "data")
+		delete(item, "stringData")
+		item["sizes"] = sizes
+		if meta, ok := item["metadata"].(map[string]any); ok {
+			// kubectl apply keeps the whole object, values and all, here.
+			delete(meta, "annotations")
+			delete(meta, "managedFields")
+		}
+	}
+	b, err := json.Marshal(l)
+	return string(b), err
+}
+
+// KubeCreateData makes a ConfigMap or a Secret of the given keys and
+// values. Made with "kubectl create", not apply: apply would keep a copy
+// of the values in an annotation anyone who can read the object sees.
+func (a *App) KubeCreateData(kind, namespace, name string, data map[string]string) error {
+	if kind != "configmap" && kind != "secret" {
+		return fmt.Errorf("unknown kind %q", kind)
+	}
+	if _, err := kubeRef(kind, namespace, name); err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("add at least one key")
+	}
+	for k := range data {
+		if !kubeKey.MatchString(k) {
+			return fmt.Errorf("%q is not a key name: letters, digits, \"-\", \"_\" and \".\"", k)
+		}
+	}
+	obj := map[string]any{
+		"apiVersion": "v1",
+		"metadata":   map[string]any{"name": name, "namespace": namespace},
+	}
+	if kind == "secret" {
+		obj["kind"], obj["type"], obj["stringData"] = "Secret", "Opaque", data
+	} else {
+		obj["kind"], obj["data"] = "ConfigMap", data
+	}
+	b, _ := json.Marshal(obj)
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	_, err := a.kubectl(ctx, b, "create", "-f", "-")
+	return err
+}
+
+// A ConfigMap's or Secret's key.
+var kubeKey = regexp.MustCompile(`^[-._a-zA-Z0-9]{1,253}$`)
 
 // KubeDescribe returns kubectl's description of one object.
 func (a *App) KubeDescribe(kind, namespace, name string) (string, error) {

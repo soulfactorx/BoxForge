@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, type PullState, type Run } from "./bridge";
 import { ago } from "./format";
 import Terminal from "./Terminal";
+import { DataDialog, DeployDialog, Flow, type Item, PvcDialog, podsOf, routes, whyPod } from "./KubeExtras";
 import { Dialog, IconButton, Menu, Progress } from "./ui";
 
 interface KubeState {
@@ -12,21 +13,15 @@ interface KubeState {
   image: string;
 }
 
-interface Meta {
-  name: string;
-  namespace: string;
-  creationTimestamp: string;
-  deletionTimestamp?: string;
-}
-interface Item {
-  kind: string;
-  metadata: Meta;
-  spec: any;
-  status: any;
-  [key: string]: any;
-}
+type Tab = "flow" | "pods" | "workloads" | "services" | "ingresses" | "config" | "storage" | "events";
 
-type Tab = "pods" | "workloads" | "services" | "events";
+// What a delete takes away, said before it is done.
+interface Confirm {
+  title: string;
+  body: string;
+  command: string;
+  go: () => Promise<unknown>;
+}
 
 interface Forward {
   id: string;
@@ -110,12 +105,22 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const [state, setState] = useState<KubeState | null>(null);
   const [starting, setStarting] = useState<string | null>(null); // what the start is doing
   const [pull, setPull] = useState<PullState | null>(null);
-  const [tab, setTab] = useState<Tab>("pods");
+  const [tab, setTab] = useState<Tab>("flow");
   const [showSystem, setShowSystem] = useState(false);
   const [pods, setPods] = useState<Item[]>([]);
   const [workloads, setWorkloads] = useState<Item[]>([]);
   const [services, setServices] = useState<Item[]>([]);
   const [events, setEvents] = useState<Item[]>([]);
+  const [ingresses, setIngresses] = useState<Item[]>([]);
+  const [configs, setConfigs] = useState<Item[]>([]);
+  const [secrets, setSecrets] = useState<Item[]>([]);
+  const [pvcs, setPvcs] = useState<Item[]>([]);
+  const [deploying, setDeploying] = useState(false);
+  const [making, setMaking] = useState<"data" | "pvc" | null>(null);
+  const [working, setWorking] = useState(false);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const tabRef = useRef<Tab>("flow");
+  tabRef.current = tab;
   const [text, setText] = useState<{ title: string; body: string; reload?: () => Promise<string> } | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
   const [shell, setShell] = useState<{ namespace: string; name: string } | null>(null);
@@ -157,7 +162,17 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
       }
     };
     loadForwards();
-    await Promise.all([list("pods", setPods), list("workloads", setWorkloads), list("services", setServices), list("events", setEvents)]);
+    // The rest only while their tab is open: each is a command in the cluster.
+    const t = tabRef.current;
+    await Promise.all([
+      list("pods", setPods),
+      list("workloads", setWorkloads),
+      list("services", setServices),
+      list("events", setEvents),
+      list("ingresses", setIngresses),
+      ...(t === "config" ? [list("configmaps", setConfigs), list("secrets", setSecrets)] : []),
+      ...(t === "storage" ? [list("persistentvolumeclaims", setPvcs)] : []),
+    ]);
     busy.current = false;
   };
 
@@ -192,6 +207,10 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
       setWorkloads([]);
       setServices([]);
       setEvents([]);
+      setIngresses([]);
+      setConfigs([]);
+      setSecrets([]);
+      setPvcs([]);
     }
     refresh();
   };
@@ -199,6 +218,37 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const act = async (command: string, method: string, ...args: unknown[]) => {
     await run(kubectl(command), () => call(method, ...args));
     refresh();
+  };
+
+  // Deleting asks first, saying what goes with it.
+  const del = (kind: string, namespace: string, name: string, body: string) =>
+    setConfirm({ title: `${name} 삭제`, body, command: kubectl(`delete ${kind} ${name} -n ${namespace}`), go: () => call("KubeDelete", kind, namespace, name) });
+
+  const deploy = async (yaml: string) => {
+    let out = "";
+    setWorking(true);
+    const ok = await run(kubectl("apply -f app.yaml"), async () => (out = await call<string>("KubeApply", yaml)));
+    setWorking(false);
+    if (ok) {
+      setDeploying(false);
+      setMaking(null);
+      setApplied(out.trim());
+      setTab("flow");
+      refresh();
+    }
+  };
+
+  const makeData = async (kind: "configmap" | "secret", name: string, data: Record<string, string>) => {
+    const lits = Object.keys(data)
+      .map((k) => `--from-literal=${k}=${kind === "secret" ? "****" : JSON.stringify(data[k])}`)
+      .join(" ");
+    setWorking(true);
+    const ok = await run(kubectl(`create ${kind === "secret" ? "secret generic" : "configmap"} ${name} ${lits}`), () => call("KubeCreateData", kind, "default", name, data));
+    setWorking(false);
+    if (ok) {
+      setMaking(null);
+      refresh();
+    }
   };
 
   const open = async (title: string, command: string, load: () => Promise<string>) => {
@@ -231,6 +281,10 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const mine = <T extends Item>(items: T[]) => items.filter((i) => showSystem || !system(i.metadata.namespace));
   const shownPods = useMemo(() => mine(pods).sort((a, b) => a.metadata.namespace.localeCompare(b.metadata.namespace) || a.metadata.name.localeCompare(b.metadata.name)), [pods, showSystem]);
   const shownWork = useMemo(() => mine(workloads).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [workloads, showSystem]);
+  const shownIng = useMemo(() => mine(ingresses).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [ingresses, showSystem]);
+  const shownData = useMemo(() => mine([...configs, ...secrets]).filter((c) => c.metadata.name !== "kube-root-ca.crt").sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [configs, secrets, showSystem]);
+  const shownPvc = useMemo(() => mine(pvcs).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [pvcs, showSystem]);
+  const traefik = forwards.find((f) => f.namespace === "kube-system" && f.service === "traefik" && f.port === 80);
   const shownSvc = useMemo(() => mine(services).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [services, showSystem]);
   const warnings = useMemo(
     () =>
@@ -242,12 +296,19 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   );
 
   const ready = state?.ready;
-  const tabs: [Tab, string, number][] = [
+  const tabs: [Tab, string, number | null][] = [
+    ["flow", "흐름 그림", null],
     ["pods", "파드", shownPods.length],
     ["workloads", "워크로드", shownWork.length],
     ["services", "서비스", shownSvc.length],
+    ["ingresses", "주소", shownIng.length],
+    ["config", "설정값", tab === "config" ? shownData.length : null],
+    ["storage", "저장소", tab === "storage" ? shownPvc.length : null],
     ["events", "경고", warnings.length],
   ];
+  const openAddress = async () => {
+    if (await run(kubectl("port-forward svc/traefik 8080:80 -n kube-system"), () => call("KubeForward", "kube-system", "traefik", 80, 8080))) loadForwards();
+  };
 
   return (
     <section>
@@ -267,8 +328,16 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               시스템 항목도 보기
             </label>
             <button onClick={saveConfig}>kubeconfig 저장</button>
-            <button className="primary" onClick={() => setApplying(sample)}>
-              YAML 적용
+            <button onClick={() => setApplying(sample)}>YAML 적용</button>
+            <button
+              className="primary"
+              onClick={() => {
+                // Its list of settings to pass in: read now, whatever tab is open.
+                for (const [kind, set] of [["configmaps", setConfigs], ["secrets", setSecrets]] as const) call<string>("KubeGet", kind).then((j) => set(JSON.parse(j).items ?? []), () => {});
+                setDeploying(true);
+              }}
+            >
+              앱 배포
             </button>
           </>
         )}
@@ -331,14 +400,14 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
           <div className="tabs kube-tabs" role="tablist">
             {tabs.map(([id, label, n]) => (
               <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
-                {label} <span className="count">{n}</span>
+                {label} {n !== null && <span className="count">{n}</span>}
               </button>
             ))}
           </div>
 
           {tab === "pods" &&
             (shownPods.length === 0 ? (
-              <p className="empty">파드가 없습니다. "YAML 적용"으로 앱을 배포해 보세요.</p>
+              <p className="empty">파드가 없습니다. "앱 배포"로 앱을 띄워 보세요.</p>
             ) : (
               <table className="grid">
                 <thead>
@@ -354,6 +423,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                   {shownPods.map((p) => {
                     const s = podStatus(p);
                     const { name, namespace } = p.metadata;
+                    const why = s.tone === "bad" || s.tone === "wait" ? whyPod(p, events) : "";
                     const restarts = (p.status?.containerStatuses ?? []).reduce((n: number, c: any) => n + (c.restartCount ?? 0), 0);
                     return (
                       <tr key={namespace + "/" + name} data-testid={`pod-${name}`}>
@@ -367,6 +437,11 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                             {s.text}
                           </span>
                           <span className="sub">{meaning[s.text] ?? ""}</span>
+                          {why && (
+                            <span className="sub why" data-testid="pod-why">
+                              원인: {why}
+                            </span>
+                          )}
                         </td>
                         <td className="num">{restarts}</td>
                         <td className="muted nowrap">{since(p.metadata.creationTimestamp)}</td>
@@ -376,7 +451,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                             items={[
                               ...(s.text === "Running" || s.text === "NotReady" ? [{ label: "터미널", onClick: () => setShell({ namespace, name }) }] : []),
                               { label: "자세히 (describe)", onClick: () => open(name, `describe pod ${name} -n ${namespace}`, () => call<string>("KubeDescribe", "pod", namespace, name)) },
-                              { label: "삭제 (워크로드가 새로 만듦)", onClick: () => act(`delete pod ${name} -n ${namespace}`, "KubeDelete", "pod", namespace, name), danger: true },
+                              { label: "삭제 (워크로드가 새로 만듦)", onClick: () => del("pod", namespace, name, "이 파드를 지웁니다. 워크로드가 관리하는 파드라면 새 파드가 곧 다시 만들어집니다. 파드 안에만 있던 파일은 사라집니다."), danger: true },
                             ]}
                           />
                         </td>
@@ -407,6 +482,8 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                     const kind = w.kind.toLowerCase();
                     const want = w.kind === "DaemonSet" ? w.status?.desiredNumberScheduled ?? 0 : w.spec?.replicas ?? 0;
                     const have = (w.kind === "DaemonSet" ? w.status?.numberReady : w.status?.readyReplicas) ?? 0;
+                    const stuck = have < want ? podsOf(w, pods).find((p) => podStatus(p).tone !== "ok") : undefined;
+                    const why = stuck ? whyPod(stuck, events) : "";
                     return (
                       <tr key={w.kind + namespace + name} data-testid={`workload-${name}`}>
                         <td>
@@ -419,6 +496,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                             <span className="dot" />
                             {have} / {want}
                           </span>
+                          {why && <span className="sub why">원인: {why}</span>}
                         </td>
                         <td className="muted nowrap">{since(w.metadata.creationTimestamp)}</td>
                         <td className="actions">
@@ -429,7 +507,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                             </>
                           )}
                           <IconButton icon="restart" label="파드를 새로 바꾸기 (rollout restart)" onClick={() => act(`rollout restart ${kind} ${name} -n ${namespace}`, "KubeRestart", kind, namespace, name)} />
-                          <IconButton icon="trash" label="삭제 (파드도 함께 사라짐)" tone="danger" onClick={() => act(`delete ${kind} ${name} -n ${namespace}`, "KubeDelete", kind, namespace, name)} />
+                          <IconButton icon="trash" label="삭제 (파드도 함께 사라짐)" tone="danger" onClick={() => del(kind, namespace, name, `${w.kind} ${name}와 그 파드 ${have}개를 지웁니다. 서비스 · 주소 · 저장소는 남습니다.`)} />
                         </td>
                       </tr>
                     );
@@ -501,8 +579,207 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                             </button>
                           )}
                           {!(namespace === "default" && name === "kubernetes") && (
-                            <IconButton icon="trash" label="삭제" tone="danger" onClick={() => act(`delete service ${name} -n ${namespace}`, "KubeDelete", "service", namespace, name)} />
+                            <IconButton icon="trash" label="삭제" tone="danger" onClick={() => del("service", namespace, name, `서비스 ${name}를 지웁니다. 파드는 그대로 돌지만, 이 이름으로 접속하던 곳은 더 닿지 않습니다.`)} />
                           )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ))}
+
+          {tab === "flow" && <Flow workloads={shownWork} services={shownSvc} ingresses={shownIng} pods={shownPods} events={events} podTone={(p) => podStatus(p).tone} />}
+
+          {tab === "ingresses" && (
+            <div className="note-box forwards" data-testid="address-box">
+              {traefik ? (
+                <>
+                  <strong>주소가 내 PC의 {traefik.local}번 포트로 열려 있습니다</strong>
+                  <span className="sub">아래 주소를 누르면 브라우저로 열립니다. BoxForge가 켜져 있는 동안만 이어집니다.</span>
+                </>
+              ) : (
+                <>
+                  <strong>주소로 접속하려면 내 PC로 연결하세요</strong>
+                  <span className="sub">
+                    클러스터의 입구(Traefik, 80번)를 이 PC의 8080번 포트로 잇습니다. 그다음 <code>이름.localhost:8080</code> 으로 접속합니다.
+                  </span>
+                  <span>
+                    <button onClick={openAddress}>내 PC로 연결 (8080)</button>
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+          {tab === "ingresses" &&
+            (shownIng.length === 0 ? (
+              <p className="empty">주소(Ingress)가 없습니다. "앱 배포"에서 접속 방법을 "주소로"로 고르면 만들어집니다.</p>
+            ) : (
+              <table className="grid">
+                <thead>
+                  <tr>
+                    <th>이름</th>
+                    <th>주소</th>
+                    <th>보내는 곳</th>
+                    <th className="actions">작업</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shownIng.map((i) => {
+                    const { name, namespace } = i.metadata;
+                    return (
+                      <tr key={namespace + name} data-testid={`ingress-${name}`}>
+                        <td>
+                          <span className="name">{name}</span>
+                          <span className="sub">{namespace}</span>
+                        </td>
+                        <td>
+                          {routes(i).map((r) => {
+                            const url = `http://${r.host || "localhost"}${traefik ? `:${traefik.local}` : ""}${r.path}`;
+                            return (
+                              <span key={r.host + r.path} className="block">
+                                {traefik ? (
+                                  <a className="link" href={url} target="_blank" rel="noreferrer">
+                                    {url}
+                                  </a>
+                                ) : (
+                                  <code>{(r.host || "*") + r.path}</code>
+                                )}
+                                {r.host && !r.host.endsWith(".localhost") && r.host !== "localhost" && <span className="sub">이 이름이 이 PC를 가리키게 hosts 파일에 적어야 열립니다.</span>}
+                              </span>
+                            );
+                          })}
+                        </td>
+                        <td>
+                          {routes(i).map((r) => (
+                            <span key={r.host + r.path + "b"} className="block">
+                              {r.service}:{r.port}
+                            </span>
+                          ))}
+                        </td>
+                        <td className="actions">
+                          <IconButton icon="trash" label="삭제" tone="danger" onClick={() => del("ingress", namespace, name, `주소 ${name}을 지웁니다. 앱은 그대로 돌지만 이 주소로는 더 열리지 않습니다.`)} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ))}
+
+          {tab === "config" && (
+            <div className="kube-bar">
+              <p className="muted">앱에 줄 설정을 모아 둡니다. ConfigMap은 보통 설정, Secret은 비밀번호 · 키입니다.</p>
+              <span className="spacer" />
+              <button className="primary" onClick={() => setMaking("data")}>
+                설정값 만들기
+              </button>
+            </div>
+          )}
+          {tab === "config" &&
+            (shownData.length === 0 ? (
+              <p className="empty">설정값이 없습니다.</p>
+            ) : (
+              <table className="grid">
+                <thead>
+                  <tr>
+                    <th>이름</th>
+                    <th>종류</th>
+                    <th>키</th>
+                    <th>만든 때</th>
+                    <th className="actions">작업</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shownData.map((c) => {
+                    const { name, namespace } = c.metadata;
+                    const secret = c.kind === "Secret";
+                    const kind = secret ? "secret" : "configmap";
+                    const keys: string[] = Object.keys((secret ? c.sizes : c.data) ?? {});
+                    return (
+                      <tr key={c.kind + namespace + name} data-testid={`${kind}-${name}`}>
+                        <td>
+                          <span className="name">{name}</span>
+                          <span className="sub">{namespace}</span>
+                        </td>
+                        <td>
+                          {c.kind}
+                          {secret && c.type !== "Opaque" && <span className="sub">{c.type}</span>}
+                        </td>
+                        <td>
+                          {keys.length === 0 ? (
+                            <span className="muted">없음</span>
+                          ) : (
+                            keys.map((k) => (
+                              <span key={k} className="block">
+                                <code>{k}</code>
+                                {secret ? <span className="muted"> · {c.sizes[k]}바이트 (값은 보이지 않음)</span> : <span className="muted"> = {String(c.data[k]).slice(0, 60)}</span>}
+                              </span>
+                            ))
+                          )}
+                        </td>
+                        <td className="muted nowrap">{since(c.metadata.creationTimestamp)}</td>
+                        <td className="actions">
+                          <button onClick={() => open(name, `describe ${kind} ${name} -n ${namespace}`, () => call<string>("KubeDescribe", kind, namespace, name))}>자세히</button>
+                          <IconButton icon="trash" label="삭제" tone="danger" onClick={() => del(kind, namespace, name, `${c.kind} ${name}의 값 ${keys.length}개를 지웁니다. 이것을 쓰는 앱은 다시 시작할 때 설정을 찾지 못합니다.`)} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ))}
+
+          {tab === "storage" && (
+            <div className="kube-bar">
+              <p className="muted">파드가 지워져도 남는 저장 공간(PersistentVolumeClaim)입니다.</p>
+              <span className="spacer" />
+              <button className="primary" onClick={() => setMaking("pvc")}>
+                저장소 만들기
+              </button>
+            </div>
+          )}
+          {tab === "storage" &&
+            (shownPvc.length === 0 ? (
+              <p className="empty">저장소가 없습니다.</p>
+            ) : (
+              <table className="grid">
+                <thead>
+                  <tr>
+                    <th>이름</th>
+                    <th>상태</th>
+                    <th>크기</th>
+                    <th>쓰는 파드</th>
+                    <th className="actions">작업</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shownPvc.map((v) => {
+                    const { name, namespace } = v.metadata;
+                    const users = pods.filter((p) => p.metadata.namespace === namespace && (p.spec?.volumes ?? []).some((x: any) => x.persistentVolumeClaim?.claimName === name));
+                    const phase: string = v.status?.phase ?? "Pending";
+                    return (
+                      <tr key={namespace + name} data-testid={`pvc-${name}`}>
+                        <td>
+                          <span className="name">{name}</span>
+                          <span className="sub">{namespace}</span>
+                        </td>
+                        <td>
+                          <span className={"state " + (phase === "Bound" ? "running" : "paused")}>
+                            <span className="dot" />
+                            {phase}
+                          </span>
+                          <span className="sub">{phase === "Bound" ? "자리가 잡혀 쓰는 중" : phase === "Pending" ? "파드가 처음 쓸 때 만들어짐" : ""}</span>
+                        </td>
+                        <td>{v.status?.capacity?.storage ?? v.spec?.resources?.requests?.storage}</td>
+                        <td>{users.length ? users.map((p) => <span key={p.metadata.name} className="block">{p.metadata.name}</span>) : <span className="muted">없음</span>}</td>
+                        <td className="actions">
+                          <IconButton
+                            icon="trash"
+                            label="삭제"
+                            tone="danger"
+                            onClick={() => del("persistentvolumeclaim", namespace, name, `저장소 ${name}와 그 안의 데이터를 모두 지웁니다. 되돌릴 수 없습니다.${users.length ? ` 지금 쓰는 파드(${users.map((p) => p.metadata.name).join(", ")})가 끝날 때까지 지워지지 않고 기다립니다.` : ""}`)}
+                          />
                         </td>
                       </tr>
                     );
@@ -636,6 +913,33 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
             <button onClick={() => setApplying(null)}>취소</button>
             <button className="primary" disabled={!applying.trim()} onClick={apply}>
               적용
+            </button>
+          </div>
+        </Dialog>
+      )}
+
+      {deploying && <DeployDialog data={[...configs, ...secrets]} busy={working} onApply={(y) => deploy(y)} onYaml={(y) => (setDeploying(false), setApplying(y))} onClose={() => setDeploying(false)} />}
+      {making === "data" && <DataDialog busy={working} onCreate={makeData} onClose={() => setMaking(null)} />}
+      {making === "pvc" && <PvcDialog busy={working} onCreate={(y) => deploy(y)} onClose={() => setMaking(null)} />}
+      {confirm && (
+        <Dialog title={confirm.title} onClose={() => setConfirm(null)}>
+          <p>{confirm.body}</p>
+          <div className="cli-preview">
+            <span className="muted">같은 일을 하는 명령</span>
+            <code>{confirm.command}</code>
+          </div>
+          <div className="dialog-actions">
+            <button onClick={() => setConfirm(null)}>취소</button>
+            <button
+              className="danger solid"
+              onClick={async () => {
+                const c = confirm;
+                setConfirm(null);
+                await run(c.command, c.go);
+                refresh();
+              }}
+            >
+              삭제
             </button>
           </div>
         </Dialog>

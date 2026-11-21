@@ -18,7 +18,7 @@ const restarts: [string, string][] = [
 ];
 
 /** Rows of two inputs with add and remove: ports, folders, variables. */
-function Pairs(props: { label: string; help: string; rows: Pair[]; onChange: (rows: Pair[]) => void; a: string; b: string; sep: string; numeric?: boolean }) {
+export function Pairs(props: { label: string; help: string; rows: Pair[]; onChange: (rows: Pair[]) => void; a: string; b: string; sep: string; numeric?: boolean }) {
   const set = (i: number, k: "a" | "b", v: string) => props.onChange(props.rows.map((r, n) => (n === i ? { ...r, [k]: v } : r)));
   return (
     <fieldset>

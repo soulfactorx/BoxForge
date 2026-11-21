@@ -11,6 +11,7 @@
 //
 // Where Docker Hub can't be reached, name other images:
 //   E2E_ALPINE=mirror.gcr.io/library/alpine:3 E2E_REGISTRY=mirror.gcr.io/library/registry:2
+//   E2E_K3S=mirror.gcr.io/rancher/k3s:v1.33.5-k3s1 E2E_KUBE_NGINX=mirror.gcr.io/library/nginx:alpine
 import { defineConfig } from "@playwright/test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,6 +45,6 @@ export default defineConfig({
     url: `http://127.0.0.1:${port}/`,
     timeout: 180_000,
     reuseExistingServer: false,
-    env: { XDG_CONFIG_HOME: config, HOME: process.env.HOME ?? config },
+    env: { XDG_CONFIG_HOME: config, HOME: process.env.HOME ?? config, BOXFORGE_K3S_IMAGE: process.env.E2E_K3S ?? "" },
   },
 });

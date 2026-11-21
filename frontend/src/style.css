@@ -1159,3 +1159,39 @@ textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
 .resources-form { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; }
 .resources-form .dialog-actions { grid-column: 1 / -1; }
 @media (max-width: 760px) { .resources-form { grid-template-columns: minmax(0, 1fr); } }
+
+/* Kubernetes: the bar above a list, the picture of the way in */
+.kube-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.kube-bar p { margin: 0; }
+.grid .block { display: block; }
+.sub.why { color: var(--bad); white-space: normal; }
+.flow { display: grid; gap: 10px; }
+.flow > p { margin: 0; }
+.flow-row { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.flow-node { display: grid; align-content: start; gap: 2px; min-width: 130px; flex: 1 1 130px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--bg); }
+.flow-node.none { opacity: .65; border-style: dashed; }
+.flow-node.bad { border-color: var(--bad); }
+.flow-kind { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.flow-arrow { align-self: center; color: var(--muted); }
+.flow-pods { display: flex; gap: 4px; flex-wrap: wrap; padding-top: 2px; }
+.flow-pod { width: 12px; height: 12px; border-radius: 3px; background: var(--muted); }
+.flow-pod.kube-ok { background: var(--ok); }
+.flow-pod.kube-wait { background: var(--warn); }
+.flow-pod.kube-bad { background: var(--bad); }
+.flow-why { flex-basis: 100%; margin: 0; color: var(--bad); font-size: 13px; }
+@media (max-width: 760px) { .flow-arrow { transform: rotate(90deg); flex-basis: 100%; text-align: center; } .flow-node { flex-basis: 100%; } }
+.flow-why, .sub.why, .flow-node code { overflow-wrap: anywhere; }
+.flow-node { min-width: 0; }
+.kube-tabs { overflow-x: auto; scrollbar-width: none; }
+.kube-tabs button { flex: none; }
+
+/* Compose picture: joining services by dragging, parting by clicking a line */
+.map-link { cursor: crosshair; touch-action: none; }
+.map-link circle { fill: var(--panel); stroke: var(--accent); stroke-width: 2; }
+.map-link .map-link-hit { fill: transparent; stroke: none; }
+.map-link:hover circle:not(.map-link-hit), .map-link:focus circle:not(.map-link-hit), .map-link.on circle:not(.map-link-hit) { fill: var(--accent); }
+.map-edge-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; pointer-events: stroke; }
+.map-edge-hit:hover, .map-edge-hit:focus { stroke: color-mix(in srgb, var(--bad) 25%, transparent); outline: none; }
+.map-edge.drawing { stroke-dasharray: 6 4; pointer-events: none; }
+.map.linking .map-node { cursor: copy; }
+.map-hint { margin: 0 0 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

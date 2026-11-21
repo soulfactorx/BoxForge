@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { go, open, sh, sweep } from "./helpers";
+import { ALPINE, go, open, sh, sweep } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
 const dir = join(mkdtempSync(join(tmpdir(), "bfe2e-compose-")), "bfe2e-shop");
@@ -53,4 +53,37 @@ test("change a service from the picture; the file keeps its comments", async ({ 
   expect(readFileSync(join(dir, "compose.yaml"), "utf8")).not.toContain("MODE=prod");
   await page.getByRole("button", { name: /저장하고 적용/ }).click();
   await expect.poll(() => sh(`docker exec bfe2e-shop-web-1 sh -c 'echo $MODE'`, true), { timeout: 90_000 }).toBe("prod");
+});
+
+test("join two services in the picture by dragging, part them by clicking the line", async ({ page }) => {
+  await open(page);
+  await go(page, "compose");
+  await page.getByRole("button", { name: "자세히" }).first().click();
+  // A second service to join to.
+  await page.getByRole("tab", { name: "Compose 파일" }).click();
+  const box = page.getByLabel("compose 파일 내용");
+  await expect(page.getByTestId("file-state")).toHaveText("저장됨");
+  const before = await box.inputValue();
+  await box.fill(before.replace(/^services:\n/m, `services:\n  worker:\n    image: ${ALPINE}\n    command: ["sleep", "infinity"]\n`));
+  await page.getByRole("button", { name: /저장하고 적용/ }).click();
+  await expect.poll(() => sh(`docker ps --format '{{.Names}}'`), { timeout: 90_000 }).toContain("bfe2e-shop-worker-1");
+
+  await page.getByRole("tab", { name: "구조" }).click();
+  await expect(page.getByTestId("edge-needs")).toHaveCount(0);
+  await page.getByTestId("svc-link-worker").dragTo(page.getByTestId("svc-node-web"));
+  await expect(page.getByTestId("draft-note")).toContainText("worker가 web를 기다리게 잇기");
+  expect(await box.inputValue()).toMatch(/worker:[\s\S]*depends_on:\s*\n\s*- web/);
+  await page.getByRole("button", { name: /저장하고 적용/ }).click();
+  await expect.poll(() => readFileSync(join(dir, "compose.yaml"), "utf8")).toMatch(/depends_on:\s*\n\s*- web/);
+
+  await page.getByRole("tab", { name: "구조" }).click();
+  await expect(page.getByTestId("edge-needs")).toHaveCount(1);
+  // The other way round would make each wait for the other: refused.
+  await page.getByTestId("svc-link-web").dragTo(page.getByTestId("svc-node-worker"));
+  await expect(page.getByRole("alert")).toContainText("둘 다 시작하지 못합니다");
+
+  await page.getByTestId("edge-worker-web").click({ force: true });
+  await expect(page.getByTestId("draft-note")).toContainText("worker → web 연결 끊기");
+  expect(await box.inputValue()).not.toContain("depends_on");
+  expect(await box.inputValue()).toContain("# 내 PC의");
 });

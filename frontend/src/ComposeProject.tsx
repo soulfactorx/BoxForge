@@ -54,8 +54,36 @@ const changeText: Record<Change["action"], string> = {
 const BOX = { w: 250, h: 86, gapX: 90, gapY: 22 };
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
-function Graph({ services, onOpen, onEdit }: { services: Service[]; onOpen: (id: string) => void; onEdit?: (name: string) => void }) {
+/** Whether "from" already waits, through any chain, for "to". */
+export function needs(services: { name: string; deps: string[] }[], from: string, to: string): boolean {
+  const by = new Map(services.map((s) => [s.name, s.deps]));
+  const seen = new Set<string>();
+  const walk = (n: string): boolean => {
+    if (n === to) return true;
+    if (seen.has(n)) return false;
+    seen.add(n);
+    return (by.get(n) ?? []).some(walk);
+  };
+  return walk(from);
+}
+
+function Graph({ services, onOpen, onEdit, onLink, onUnlink }: { services: Service[]; onOpen: (id: string) => void; onEdit?: (name: string) => void; onLink?: (from: string, to: string) => void; onUnlink?: (from: string, to: string) => void }) {
   const [focus, setFocus] = useState<string | null>(null);
+  // Joining two services: from which, and where the pointer is while dragging.
+  const [from, setFrom] = useState<string | null>(null);
+  const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
+  const svg = useRef<SVGSVGElement>(null);
+  const at = (e: { clientX: number; clientY: number }) => {
+    const r = svg.current!.getBoundingClientRect();
+    const box = svg.current!.viewBox.baseVal;
+    return { x: ((e.clientX - r.left) / r.width) * box.width, y: ((e.clientY - r.top) / r.height) * box.height };
+  };
+  const nodeAt = (e: { clientX: number; clientY: number }) => (document.elementFromPoint(e.clientX, e.clientY) as Element | null)?.closest("[data-node]")?.getAttribute("data-node") ?? null;
+  const finish = (to: string | null) => {
+    if (from && to && to !== from) onLink?.(from, to);
+    setFrom(null);
+    setTip(null);
+  };
   const layout = useMemo(() => {
     const by = new Map(services.map((s) => [s.name, s]));
     // A service's depth is how long a chain of needs hangs below it.
@@ -83,7 +111,7 @@ function Graph({ services, onOpen, onEdit }: { services: Service[]; onOpen: (id:
       col.forEach((s, j) => pos.set(s.name, { x: 8 + i * (BOX.w + BOX.gapX), y: (height - used) / 2 + j * (BOX.h + BOX.gapY) }));
     });
     const edges = services.flatMap((s) => s.deps.filter((d) => by.has(d)).map((d) => ({ from: s.name, to: d })));
-    return { pos, edges, width: 16 + cols.length * BOX.w + (cols.length - 1) * BOX.gapX, height };
+    return { pos, edges, width: 28 + cols.length * BOX.w + (cols.length - 1) * BOX.gapX, height }; // room on the right for the join handles
   }, [services]);
 
   const lit = useMemo(() => {
@@ -98,7 +126,23 @@ function Graph({ services, onOpen, onEdit }: { services: Service[]; onOpen: (id:
 
   return (
     <div className="map-wrap">
-      <svg className="map" viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} role="group" aria-label={`서비스 ${services.length}개의 의존 관계`} data-testid="compose-graph">
+      {from && (
+        <p className="map-hint" role="status">
+          <strong>{from}</strong>가 기다릴(먼저 시작할) 서비스를 누르세요. <button type="button" className="link" onClick={() => finish(null)}>그만두기</button>
+        </p>
+      )}
+      <svg
+        ref={svg}
+        onPointerMove={(e) => from && tip && setTip(at(e))}
+        onPointerUp={(e) => {
+          if (!from || !tip) return;
+          const to = nodeAt(e);
+          // Let go on nothing: keep the start, and a click on a box finishes.
+          if (to && to !== from) finish(to);
+          else setTip(null);
+        }}
+        onKeyDown={(e) => e.key === "Escape" && finish(null)}
+        className={"map" + (from ? " linking" : "")} viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} role="group" aria-label={`서비스 ${services.length}개의 의존 관계`} data-testid="compose-graph">
         <defs>
           <marker id="needs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,1 L9,5 L0,9 z" className="arrow-head" />
@@ -113,8 +157,33 @@ function Graph({ services, onOpen, onEdit }: { services: Service[]; onOpen: (id:
           const y2 = b.y + BOX.h / 2;
           const bend = (x2 - x1) / 2;
           const off = lit && !(e.from === focus || e.to === focus);
-          return <path key={e.from + ">" + e.to} className={"map-edge needs" + (off ? " off" : "")} markerEnd="url(#needs)" d={`M${x1},${y1} C${x1 + bend},${y1} ${x2 - bend},${y2} ${x2},${y2}`} data-testid="edge-needs" />;
+          const d = `M${x1},${y1} C${x1 + bend},${y1} ${x2 - bend},${y2} ${x2},${y2}`;
+          return (
+            <g key={e.from + ">" + e.to}>
+              <path className={"map-edge needs" + (off ? " off" : "")} markerEnd="url(#needs)" d={d} data-testid="edge-needs" />
+              {onUnlink && (
+                <path
+                  className="map-edge-hit"
+                  d={d}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${e.from} → ${e.to} 연결 끊기`}
+                  data-testid={`edge-${e.from}-${e.to}`}
+                  onClick={() => onUnlink(e.from, e.to)}
+                  onKeyDown={(k) => (k.key === "Enter" || k.key === " ") && (k.preventDefault(), onUnlink(e.from, e.to))}
+                >
+                  <title>
+                    {e.from} → {e.to} 연결 끊기
+                  </title>
+                </path>
+              )}
+            </g>
+          );
         })}
+        {from && tip && (() => {
+          const a = layout.pos.get(from)!;
+          return <path className="map-edge needs drawing" markerEnd="url(#needs)" d={`M${a.x + BOX.w},${a.y + BOX.h / 2} L${tip.x},${tip.y}`} />;
+        })()}
         {services.map((s) => {
           const p = layout.pos.get(s.name)!;
           const c = s.container;
@@ -129,12 +198,13 @@ function Graph({ services, onOpen, onEdit }: { services: Service[]; onOpen: (id:
               tabIndex={0}
               aria-label={hint}
               data-testid={`svc-node-${s.name}`}
+              data-node={s.name}
               onMouseEnter={() => setFocus(s.name)}
               onMouseLeave={() => setFocus(null)}
               onFocus={() => setFocus(s.name)}
               onBlur={() => setFocus(null)}
-              onClick={() => c && onOpen(c.id)}
-              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && c && (e.preventDefault(), onOpen(c.id))}
+              onClick={() => (from ? finish(s.name) : c && onOpen(c.id))}
+              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), from ? finish(s.name) : c && onOpen(c.id))}
             >
               <title>{hint}</title>
               <rect width={BOX.w} height={BOX.h} rx="9" />
@@ -174,6 +244,34 @@ function Graph({ services, onOpen, onEdit }: { services: Service[]; onOpen: (id:
                   <title>{s.name} 설정 고치기</title>
                   <rect width="28" height="24" rx="6" />
                   <path d="M9 16.5l1-3.5 6.5-6.5 2.5 2.5-6.5 6.5z M15 8l2.5 2.5" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </g>
+              )}
+              {onLink && (
+                <g
+                  className={"map-link" + (from === s.name ? " on" : "")}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${s.name}에서 선 잇기`}
+                  data-testid={`svc-link-${s.name}`}
+                  transform={`translate(${BOX.w},${BOX.h / 2})`}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    (e.target as Element).releasePointerCapture?.(e.pointerId);
+                    setFrom(s.name);
+                    setTip(at(e));
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setFrom(s.name);
+                    }
+                  }}
+                >
+                  <title>끌어서 {s.name}가 기다릴 서비스에 놓기</title>
+                  <circle r="11" className="map-link-hit" />
+                  <circle r="6" />
                 </g>
               )}
             </g>
@@ -271,6 +369,9 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
 
   const index = useMemo(() => serviceLines(text), [text]);
   const dirty = saved !== null && text !== saved;
+  // Changed text is saved only once compose has read it and found nothing
+  // wrong: an empty or broken file never replaces a working one.
+  const unsure = dirty && (checking || !text.trim());
   const news = (changes ?? []).filter((c) => c.action !== "keep");
 
   const jump = (line: number) => {
@@ -337,10 +438,10 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
           <button disabled={!dirty} onClick={() => setText(saved ?? "")}>
             되돌리기
           </button>
-          <button disabled={!dirty || !!problem} onClick={save}>
+          <button disabled={!dirty || !!problem || unsure} onClick={save}>
             저장만
           </button>
-          <button className="primary" disabled={busy || !!problem || saved === null} onClick={apply}>
+          <button className="primary" disabled={busy || !!problem || saved === null || unsure} onClick={apply}>
             {dirty ? "저장하고 적용" : "적용"}
           </button>
         </div>
@@ -494,6 +595,33 @@ export default function ComposeProject({ project, run, showCli, busy, act, onDow
   const [config, setConfig] = useState<any>(null);
   const [round, setRound] = useState(0);
 
+  const [linkNote, setLinkNote] = useState("");
+  // Joining or parting two services is a change to the file: made as a
+  // draft, shown on the file tab, applied from there.
+  const relink = async (name: string, change: (deps: string[]) => string[], what: string) => {
+    setLinkNote("");
+    try {
+      const file = project.files[0];
+      const text = await call<string>("ComposeFile", file);
+      const e = await call<any>("ComposeService", text, name);
+      if (e.locked.includes("depends_on")) {
+        setLinkNote(`${name}의 depends_on은 그림에서 바꿀 수 없는 형태로 적혀 있습니다. "Compose 파일" 탭에서 직접 고치세요.`);
+        return;
+      }
+      showCli(`# ${file} 의 services.${name}.depends_on 고치기 (파일을 고친 뒤 docker compose up -d)`);
+      setDraft({ file, text: await call<string>("ComposeEdit", text, { ...e, dependsOn: change(e.dependsOn ?? []) }), what });
+      setTab("file");
+    } catch (err: any) {
+      setLinkNote(err.message);
+    }
+  };
+  const link = (from: string, to: string) => {
+    if (needs(services, from, to)) return setLinkNote(`${from}는 이미 ${to}를 기다립니다.`);
+    if (needs(services, to, from)) return setLinkNote(`${to}가 이미 ${from}를 기다리고 있어서, 서로 기다리게 되면 둘 다 시작하지 못합니다.`);
+    relink(from, (d) => [...d, to], `${from}가 ${to}를 기다리게 잇기`);
+  };
+  const unlink = (from: string, to: string) => relink(from, (d) => d.filter((x) => x !== to), `${from} → ${to} 연결 끊기`);
+
   const files = project.files.join("|");
   useEffect(() => {
     call<string>("ComposeConfig", project.name, project.files).then(
@@ -605,10 +733,15 @@ export default function ComposeProject({ project, run, showCli, busy, act, onDow
           {project.files.length > 0 && (
             <div className="graph-bar">
               <button onClick={() => setEditing("")}>서비스 추가</button>
-              <span className="muted">상자의 연필을 누르면 그 서비스의 설정(이미지 · 포트 · 환경변수 · 저장 공간)을 고칩니다.</span>
+              <span className="muted">상자의 연필을 누르면 그 서비스의 설정(이미지 · 포트 · 환경변수 · 저장 공간)을 고칩니다. 상자 오른쪽의 점을 다른 상자로 끌면 "먼저 시작할 서비스"로 잇고, 선을 누르면 끊습니다.</span>
             </div>
           )}
-          <Graph services={services} onOpen={onOpen} onEdit={project.files.length > 0 ? setEditing : undefined} />
+          {linkNote && (
+            <p className="note" role="alert">
+              {linkNote}
+            </p>
+          )}
+          <Graph services={services} onOpen={onOpen} onEdit={project.files.length > 0 ? setEditing : undefined} onLink={project.files.length > 0 ? link : undefined} onUnlink={project.files.length > 0 ? unlink : undefined} />
           <p className="muted footnote">
             화살표는 서비스가 필요로 하는 대상을 가리킵니다. Compose는 화살표가 가리키는 쪽을 먼저 시작합니다.
             {services.every((s) => s.deps.length === 0) && " 이 프로젝트에는 서로 기다리는 관계(depends_on)가 없습니다."}
