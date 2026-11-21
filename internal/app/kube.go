@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/soulfactorx/boxforge/internal/engine"
@@ -241,6 +242,11 @@ func (a *App) KubeStart() error {
 			return err
 		}
 	}
+	// What the cluster itself says while it comes up, for the screen.
+	logs, stopLogs := context.WithCancel(ctx)
+	defer stopLogs()
+	go a.kubeBootLog(logs)
+
 	if len(trustedCAs()) > 0 {
 		say("사내 인증서를 클러스터에 넣는 중")
 		// A cluster just made is restarted whatever the script says: a
@@ -250,13 +256,20 @@ func (a *App) KubeStart() error {
 		}
 	}
 	say("Kubernetes가 준비되기를 기다리는 중")
-	deadline := time.Now().Add(kubeBoot)
+	begun := time.Now()
+	deadline := begun.Add(kubeBoot)
 	for {
 		probe, stop := context.WithTimeout(ctx, 10*time.Second)
-		ready, _ := a.nodeReady(probe)
+		ready, version := a.nodeReady(probe)
 		stop()
 		if ready {
 			return nil
+		}
+		waited := int(time.Since(begun).Seconds())
+		if version == "" {
+			say(fmt.Sprintf("Kubernetes가 준비되기를 기다리는 중: API 서버를 시작하는 중 (%d초)", waited))
+		} else {
+			say(fmt.Sprintf("Kubernetes가 준비되기를 기다리는 중: 노드를 준비하는 중 (%d초)", waited))
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the cluster did not become ready in time; its container's log says why")
@@ -267,6 +280,83 @@ func (a *App) KubeStart() error {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// kubeBootLog sends the cluster container's log lines to the screen as
+// "kube-log" events, a few at a time, until ctx ends.
+func (a *App) kubeBootLog(ctx context.Context) {
+	w := &lineBatch{}
+	go func() {
+		tick := time.NewTicker(500 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if lines := w.take(); len(lines) > 0 {
+					a.emit("kube-log", lines)
+				}
+			}
+		}
+	}()
+	_ = a.eng().Containers().Logs(ctx, kubeContainer, 30, w)
+}
+
+// lineBatch collects written text as lines, in k3s's words made short.
+type lineBatch struct {
+	mu    sync.Mutex
+	part  string
+	lines []string
+}
+
+func (b *lineBatch) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	text := b.part + string(p)
+	parts := strings.Split(text, "\n")
+	b.part = parts[len(parts)-1]
+	for _, l := range parts[:len(parts)-1] {
+		if l = shortLog(l); l != "" {
+			b.lines = append(b.lines, l)
+		}
+	}
+	// A burst is cut to its end: the screen keeps the last lines anyway.
+	if len(b.lines) > 200 {
+		b.lines = b.lines[len(b.lines)-200:]
+	}
+	return len(p), nil
+}
+
+func (b *lineBatch) take() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := b.lines
+	b.lines = nil
+	return out
+}
+
+// k3s writes `time="…" level=info msg="Starting k3s"`, and the kubelet's
+// own lines `I1121 12:00:00.000 1 file.go:12] text`.
+var (
+	k3sLine    = regexp.MustCompile(`level=(\w+) msg="((?:[^"\\]|\\.)*)"`)
+	klogLine   = regexp.MustCompile(`^([IWEF])\d{4} [\d:.]+\s+\d+ [^\]]+\] (.*)$`)
+	klogLevels = map[string]string{"I": "info", "W": "warning", "E": "error", "F": "fatal"}
+)
+
+// shortLog is one log line as "level: message", or "" for an empty one.
+func shortLog(l string) string {
+	l = strings.TrimSpace(strings.TrimRight(l, "\r"))
+	if m := k3sLine.FindStringSubmatch(l); m != nil {
+		return m[1] + ": " + strings.ReplaceAll(m[2], `\"`, `"`)
+	}
+	if m := klogLine.FindStringSubmatch(l); m != nil {
+		return klogLevels[m[1]] + ": " + m[2]
+	}
+	if len(l) > 300 {
+		l = l[:300] + "…"
+	}
+	return l
 }
 
 // KubeStop stops the cluster, keeping everything in it.

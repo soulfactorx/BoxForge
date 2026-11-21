@@ -28,7 +28,11 @@ async function kube(page: Page) {
   await expect(state).toBeVisible();
   if (!(await state.innerText()).includes("준비됨")) {
     const start = page.getByTestId("kube-start");
-    if (await start.isVisible()) await start.click();
+    if (await start.isVisible()) {
+      await start.click();
+      // What the cluster says while it comes up is shown as it comes.
+      await expect(page.getByTestId("kube-boot-log")).toContainText(/(info|warning|error): /, { timeout: 240_000 });
+    }
     await expect(state).toContainText("준비됨", { timeout: 300_000 });
   }
   // Where the cluster can't reach the internet itself (E2E_KUBE_PRELOAD=1),

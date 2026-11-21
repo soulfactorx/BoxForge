@@ -18,7 +18,7 @@ import PathPicker from "./PathPicker";
 import RunDialog from "./RunDialog";
 import Topology from "./Topology";
 import { bytes } from "./format";
-import { Dialog, Icon } from "./ui";
+import { Dialog, Icon, IconButton } from "./ui";
 
 type Page = "home" | "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds" | "kube" | "settings";
 
@@ -246,10 +246,20 @@ export default function App() {
       } catch (e: any) {
         setError(friendly(e.message));
         return false;
+      } finally {
+        // The lists follow the engine's own change reports; some engines
+        // miss one, so after anything done here they are read again.
+        call("Refresh").catch(() => {});
       }
     },
     [showCli],
   );
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    setRefreshing(true);
+    await run("docker ps -a  # 목록을 엔진에서 다시 읽기", () => call("Refresh"));
+    setRefreshing(false);
+  };
 
   const info = engine.info;
   const shownCount = containers.filter((c) => !c.system).length;
@@ -279,6 +289,9 @@ export default function App() {
               {/^\d/.test(appVersion) ? "v" + appVersion : appVersion}
             </span>
           )}
+          <span className="brand-refresh">
+            <IconButton icon="restart" label={refreshing ? "다시 읽는 중…" : "목록 새로 고침"} disabled={refreshing || !engine.connected} onClick={refresh} />
+          </span>
         </div>
         <button className="search-button" onClick={() => setPalette(true)} data-testid="palette-open">
           <Icon name="search" />

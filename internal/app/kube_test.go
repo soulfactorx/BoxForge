@@ -37,3 +37,23 @@ func TestKubeCreateDataChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestShortLog(t *testing.T) {
+	for in, want := range map[string]string{
+		`time="2026-11-21T12:00:00Z" level=info msg="Starting k3s v1.33.5+k3s1 (\"abc\")"`: `info: Starting k3s v1.33.5+k3s1 ("abc")`,
+		`I1121 12:00:00.123456      42 server.go:12] Started kubelet`:                      `info: Started kubelet`,
+		`E1121 12:00:01.000000 7 pod.go:1] "Error syncing pod"`:                            `error: "Error syncing pod"`,
+		"  \r":       "",
+		"plain text": "plain text",
+	} {
+		if got := shortLog(in); got != want {
+			t.Errorf("shortLog(%q) = %q, want %q", in, got, want)
+		}
+	}
+	b := &lineBatch{}
+	b.Write([]byte("level=info msg=\"one\"\nlevel=warning msg=\"tw"))
+	b.Write([]byte("o\"\n"))
+	if got := b.take(); len(got) != 2 || got[1] != "warning: two" {
+		t.Fatalf("lines: %q", got)
+	}
+}

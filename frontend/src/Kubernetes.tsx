@@ -103,9 +103,31 @@ spec:
     - port: 80
 `;
 
+/** The cluster's log while it starts, kept scrolled to its end. */
+function BootLog({ lines, open, onToggle }: { lines: string[]; open: boolean; onToggle: () => void }) {
+  const box = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    if (box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [lines, open]);
+  return (
+    <div className="boot-log">
+      <button type="button" className="link" onClick={onToggle}>
+        {open ? "진행 로그 숨기기" : "진행 로그 보기"} ({lines.length}줄)
+      </button>
+      {open && (
+        <pre ref={box} className="log-box" data-testid="kube-boot-log">
+          {lines.length ? lines.join("\n") : "클러스터 컨테이너의 로그를 기다리는 중…"}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: string) => void }) {
   const [state, setState] = useState<KubeState | null>(null);
   const [starting, setStarting] = useState<string | null>(null); // what the start is doing
+  const [bootLog, setBootLog] = useState<string[]>([]); // the cluster's own words while it starts
+  const [showLog, setShowLog] = useState(true);
   const [pull, setPull] = useState<PullState | null>(null);
   const [tab, setTab] = useState<Tab>("flow");
   const [showSystem, setShowSystem] = useState(false);
@@ -181,7 +203,11 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   useEffect(() => {
     refresh();
     const timer = setInterval(refresh, 3000);
-    const off = [on("kube", (t: string) => setStarting(t)), on("pull", (p: PullState) => setPull(p.done ? null : p))];
+    const off = [
+      on("kube", (t: string) => setStarting(t)),
+      on("pull", (p: PullState) => setPull(p.done ? null : p)),
+      on("kube-log", (lines: string[]) => setBootLog((l) => [...l, ...lines].slice(-300))),
+    ];
     return () => {
       clearInterval(timer);
       off.forEach((f) => f());
@@ -190,6 +216,8 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
 
   const start = async () => {
     setStarting("준비하는 중");
+    setBootLog([]);
+    setShowLog(true);
     setNote("");
     await run("docker run -d --name boxforge-k3s --privileged -p 127.0.0.1:6443:6443 -v boxforge-k3s:/var/lib/rancher/k3s rancher/k3s server", () => call("KubeStart"));
     setStarting(null);
@@ -391,6 +419,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                 </div>
               )}
               <p className="muted">처음에는 이미지를 받느라 몇 분 걸릴 수 있습니다. 그다음부터는 수십 초면 켜집니다.</p>
+              <BootLog lines={bootLog} open={showLog} onToggle={() => setShowLog(!showLog)} />
             </>
           ) : (
             <>
@@ -400,6 +429,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               <button className="primary" onClick={start} data-testid="kube-start">
                 Kubernetes 켜기
               </button>
+              {bootLog.length > 0 && <BootLog lines={bootLog} open={showLog} onToggle={() => setShowLog(!showLog)} />}
               {!state.exists && (
                 <p className="muted">
                   <code>{state.image}</code> 이미지(약 300MB)로 <code>boxforge-k3s</code> 컨테이너를 만듭니다. 그 안에서 다시 컨테이너를 돌려야 해서

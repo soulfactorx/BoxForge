@@ -237,5 +237,5 @@ var lookOnly = []string{
 	"Containers", "InspectContainer", "StartLogs", "StopLogs", "StartStats", "StopStats", "ContainerSizes",
 	"Images", "ImageDefaults", "ImageHistory", "SearchImages", "Volumes", "VolumeSizes", "Networks", "DiskUsage", "Registries",
 	"ComposeVersion", "ComposeLogs",
-	"KubeStatus", "KubeGet", "KubeDescribe", "KubeLogs", "KubeForwards",
+	"Refresh", "KubeStatus", "KubeGet", "KubeDescribe", "KubeLogs", "KubeForwards",
 }

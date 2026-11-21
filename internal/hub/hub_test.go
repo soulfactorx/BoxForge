@@ -81,3 +81,45 @@ func TestHubPushesChangesMadeOutsideIt(t *testing.T) {
 	}
 	c.waitFor(t, func(l []engine.Container) bool { return find(l, "a5") == nil })
 }
+
+// quiet is an engine that reports no changes at all, as some miss them.
+type quiet struct{ engine.Runtime }
+
+func (quiet) Events(ctx context.Context) (<-chan engine.Event, <-chan error) {
+	return make(chan engine.Event), make(chan error)
+}
+
+func TestHubCatchesUpWithoutEvents(t *testing.T) {
+	rt := fake.New()
+	var c collect
+	h := New(quiet{rt}, c.emit)
+	h.Resync = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.Run(ctx)
+	c.waitFor(t, func(l []engine.Container) bool { return find(l, "a5") != nil })
+
+	// Gone, and nothing said so: the refresh button finds out.
+	if err := rt.Containers().Remove(ctx, "a5", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c.waitFor(t, func(l []engine.Container) bool { return find(l, "a5") == nil })
+}
+
+func TestHubResyncsOnItsOwn(t *testing.T) {
+	rt := fake.New()
+	var c collect
+	h := New(quiet{rt}, c.emit)
+	h.Resync = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.Run(ctx)
+	c.waitFor(t, func(l []engine.Container) bool { return find(l, "a1") != nil })
+	if err := rt.Containers().Remove(ctx, "a1", true, false); err != nil {
+		t.Fatal(err)
+	}
+	c.waitFor(t, func(l []engine.Container) bool { return find(l, "a1") == nil })
+}

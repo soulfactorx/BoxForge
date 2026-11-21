@@ -39,6 +39,10 @@ type Hub struct {
 	// the first and longest waits between connection attempts.
 	Debounce           time.Duration
 	RetryMin, RetryMax time.Duration
+	// Resync reloads everything this often even with no event: some
+	// engines (Kiri's) don't report every change, and a list that missed
+	// one would keep showing a container already gone.
+	Resync time.Duration
 
 	mu         sync.Mutex
 	status     Status
@@ -52,7 +56,7 @@ func New(rt engine.Runtime, emit Emit) *Hub {
 	return &Hub{
 		rt: rt, emit: emit, containers: []engine.Container{}, images: []engine.Image{},
 		volumes: []engine.Volume{}, networks: []engine.Network{},
-		Debounce: 150 * time.Millisecond, RetryMin: time.Second, RetryMax: 10 * time.Second,
+		Debounce: 150 * time.Millisecond, RetryMin: time.Second, RetryMax: 10 * time.Second, Resync: 20 * time.Second,
 	}
 }
 
@@ -134,8 +138,18 @@ func (h *Hub) session(ctx context.Context) error {
 	}
 	var timer *time.Timer
 	var due <-chan time.Time
+	every := h.Resync
+	if every <= 0 {
+		every = 20 * time.Second
+	}
+	resync := time.NewTicker(every)
+	defer resync.Stop()
 	for {
 		select {
+		case <-resync.C:
+			if err := h.reload(ctx); err != nil {
+				return err
+			}
 		case ev, ok := <-events:
 			if !ok {
 				return <-errs
@@ -207,6 +221,15 @@ func (h *Hub) reload(ctx context.Context) error {
 	h.emit(EventVolumes, volumes)
 	h.emit(EventNetworks, networks)
 	return nil
+}
+
+// Refresh reloads everything now and pushes it to the UI, for an engine
+// whose events missed a change (and for the UI's refresh button).
+func (h *Hub) Refresh(ctx context.Context) error {
+	if !h.Status().Connected {
+		return nil // the connection loop is already trying
+	}
+	return h.reload(ctx)
 }
 
 func (h *Hub) setStatus(s Status) {

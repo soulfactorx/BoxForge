@@ -83,3 +83,13 @@ test("rename, stop and delete", async ({ page }) => {
   await page.getByRole("dialog").getByRole("button", { name: /삭제/ }).last().click();
   await expect(renamed).toHaveCount(0, { timeout: 15_000 });
 });
+
+test("the lists can be read again by hand", async ({ page }) => {
+  await open(page);
+  await go(page, "containers");
+  const button = page.getByRole("button", { name: "목록 새로 고침" });
+  await expect(button).toBeEnabled();
+  await button.click();
+  await expect(page.getByTestId("cli")).toContainText("docker ps -a");
+  await expect(button).toBeEnabled();
+});

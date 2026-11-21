@@ -181,6 +181,13 @@ func (a *App) mirror() *hub.Hub {
 	return a.hub
 }
 
+// Refresh reads every list from the engine again now.
+func (a *App) Refresh() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return a.mirror().Refresh(ctx)
+}
+
 // EngineChoice is the engines to choose from and the one in use.
 type EngineChoice struct {
 	Current string           `json:"current"`
