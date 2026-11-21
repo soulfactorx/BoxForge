@@ -1137,6 +1137,6 @@ textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
 .project-title .state { white-space: nowrap; }
 @media (max-width: 760px) {
   .project > header { flex-wrap: wrap; }
-  .project .actions { display: flex; flex-wrap: wrap; gap: 5px; }
-  .project .actions > * { margin-left: 0; }
+  .project > header .actions { display: flex; flex-wrap: wrap; gap: 5px; }
+  .project > header .actions > * { margin-left: 0; }
 }
