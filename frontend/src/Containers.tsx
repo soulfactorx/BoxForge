@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Avatar } from "./brand";
 import { call, openURL, type Container, type Image, type Run, type Size, remote } from "./bridge";
 import { ago, bytes, isUp, stateLabel, statusText } from "./format";
@@ -42,6 +42,93 @@ interface Props {
   onRecreate: (init: RunInit) => void;
 }
 
+const healthText: Record<string, string> = { healthy: "정상", unhealthy: "이상", starting: "확인 중" };
+
+/** What the image's own health check says of a running container. */
+export function HealthBadge({ health }: { health: string }) {
+  return (
+    <span className={"health " + health} title="이미지에 정해진 상태 검사(healthcheck)의 결과입니다." data-testid="health">
+      {healthText[health] ?? health}
+    </span>
+  );
+}
+
+/** Changes how much memory and CPU a running container may use, without remaking it. */
+function LimitDialog({ c, run, onClose }: { c: Container; run: Run; onClose: () => void }) {
+  const [mem, setMem] = useState("");
+  const [cpus, setCpus] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    call<string>("InspectContainer", c.id).then((raw) => {
+      const h = JSON.parse(raw)?.HostConfig ?? {};
+      if (h.Memory > 0) setMem(String(Math.round(h.Memory / (1 << 20))));
+      if (h.NanoCpus > 0) setCpus(String(h.NanoCpus / 1e9));
+    }, () => {});
+  }, []);
+  const m = mem.trim() === "" ? 0 : Number(mem);
+  const k = cpus.trim() === "" ? 0 : Number(cpus);
+  const bad = !(m >= 0) || !(k >= 0) || (m > 0 && m < 6);
+  const command = `docker update --memory ${m > 0 ? m + "m" : "0"} --memory-swap ${m > 0 ? m * 2 + "m" : "-1"} --cpus ${k} ${c.name}`;
+  const save = async () => {
+    setBusy(true);
+    setError("");
+    let failed = "";
+    const ok = await run(command, async () => {
+      try {
+        await call("LimitContainer", c.id, { memory: Math.round(m * (1 << 20)), cpus: k });
+      } catch (e: any) {
+        failed = e.message;
+        throw e;
+      }
+    });
+    setBusy(false);
+    if (ok) onClose();
+    else setError(failed);
+  };
+  return (
+    <Dialog title={`${c.name}: 자원 제한`} onClose={onClose}>
+      <p>컨테이너가 쓸 수 있는 메모리와 CPU의 상한입니다. 실행 중에 바로 바뀌고, 다시 만들 필요가 없습니다. 비워 두면 제한하지 않습니다.</p>
+      <form
+        className="run-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!bad) save();
+        }}
+      >
+        <label>
+          메모리 (MB)
+          <input inputMode="numeric" aria-label="메모리 (MB)" placeholder="제한 없음" value={mem} onChange={(e) => setMem(e.target.value.replace(/[^\d]/g, ""))} />
+          <span className="help">넘게 쓰면 엔진이 그 컨테이너의 프로그램을 끝냅니다. 6 이상. 예: 512</span>
+        </label>
+        <label>
+          CPU (코어 수)
+          <input inputMode="decimal" aria-label="CPU (코어 수)" placeholder="제한 없음" value={cpus} onChange={(e) => setCpus(e.target.value.replace(/[^\d.]/g, ""))} />
+          <span className="help">1이면 코어 하나만큼, 0.5면 그 절반까지 씁니다.</span>
+        </label>
+        {bad && <p className="warn">메모리는 6MB 이상의 숫자, CPU는 0보다 큰 숫자로 적어 주세요.</p>}
+        <div className="cli-preview">
+          <span className="muted">같은 일을 하는 명령</span>
+          <code>{command}</code>
+        </div>
+        {error && (
+          <p className="warn" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="dialog-actions">
+          <button type="button" onClick={onClose}>
+            취소
+          </button>
+          <button className="primary" type="submit" disabled={bad || busy}>
+            {busy ? "바꾸는 중…" : "바꾸기"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 /** Reads a container's settings back into the form that made it. */
 async function settingsOf(c: Container): Promise<RunInit> {
   const info = JSON.parse(await call<string>("InspectContainer", c.id));
@@ -73,6 +160,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
   const [removing, setRemoving] = useState<{ c: Container; volumes: boolean } | null>(null);
   const [copying, setCopying] = useState<Container | null>(null);
   const [exporting, setExporting] = useState<string[] | null>(null);
+  const [limiting, setLimiting] = useState<Container | null>(null);
   const [importing, setImporting] = useState(false);
   const [copied, setCopied] = useState<{ text: string; notes: string[] } | null>(null);
   // What is being done to each container right now, by ID: shown in its
@@ -177,6 +265,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
     if (c.state === "running") {
       if (!remote()) items.push({ label: "외부 터미널 열기", onClick: () => run(`docker exec -it ${c.name} sh`, () => call("OpenTerminal", c.name)) });
     }
+    if (isUp(c)) items.push({ label: "자원 제한 바꾸기", onClick: () => setLimiting(c) });
     items.push({ label: "설정 바꿔 다시 만들기", onClick: () => settingsOf(c).then(onRecreate, () => {}) });
     items.push({ label: "다른 엔진으로 복사", onClick: () => setCopying(c) });
     items.push({ label: "파일로 내보내기", onClick: () => setExporting([c.id]) });
@@ -232,6 +321,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
             <span className={"state " + (c.failed ? "failed" : c.state)}>
               <span className="dot" />
               {c.failed ? "실패" : stateLabel[c.state] ?? c.state}
+              {c.health && c.state === "running" && <HealthBadge health={c.health} />}
             </span>
             <span className="sub" title={c.status}>
               {statusText(c)}
@@ -403,6 +493,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
         </div>
       )}
 
+      {limiting && <LimitDialog c={limiting} run={run} onClose={() => setLimiting(null)} />}
       {exporting && (
         <ExportDialog
           containers={containers}

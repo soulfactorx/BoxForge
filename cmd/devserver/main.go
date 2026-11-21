@@ -28,7 +28,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	srv := webserver.New(a, webserver.Options{UI: os.DirFS(*dist), Open: true})
+	// Files the page sends (to put into containers, or to import) land here.
+	inbox, err := os.MkdirTemp("", "boxforge-dev-inbox-")
+	if err != nil {
+		log.Fatal(err)
+	}
+	os.Setenv("BOXFORGE_INBOX", inbox)
+	srv := webserver.New(a, webserver.Options{UI: os.DirFS(*dist), Open: true, Inbox: inbox})
 	app.Start(a, srv.Emit)
 	defer app.Stop(a)
 

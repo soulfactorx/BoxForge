@@ -44,7 +44,19 @@ export default function Home({ engine, containers, images, volumes, run, go, onR
   const failed = mine.filter((c) => c.failed);
   const projects = new Set(mine.filter((c) => c.project).map((c) => c.project)).size;
 
-  const measure = () => call<Usage>("DiskUsage").then(setUsage, () => setUsage(null));
+  const [leftovers, setLeftovers] = useState<string[]>([]);
+  const [clearing, setClearing] = useState(false);
+  const measure = () => {
+    call<string[]>("Leftovers").then((l) => setLeftovers(l ?? []), () => {});
+    return call<Usage>("DiskUsage").then(setUsage, () => setUsage(null));
+  };
+  const clearLeftovers = async () => {
+    setClearing(false);
+    if (await run(`docker rmi ${leftovers.join(" ")}`, () => call("RemoveLeftovers"))) {
+      setNote(`BoxForge가 남긴 이미지 ${leftovers.length}개를 지웠습니다.`);
+      measure();
+    }
+  };
   const key = engine.connected ? mine.length + ":" + images.length + ":" + volumes.length : "";
   useEffect(() => {
     if (engine.connected) measure();
@@ -224,6 +236,14 @@ export default function Home({ engine, containers, images, volumes, run, go, onR
                   <p className="muted disk-key">
                     <span className="key-free" /> 옅은 부분은 아무도 쓰지 않아 비울 수 있는 양입니다.
                   </p>
+                  {leftovers.length > 0 && (
+                    <div className="note-box leftovers" data-testid="leftovers">
+                      <span>
+                        BoxForge가 복사 · 내보내기 · 다시 만들기를 하다 남긴 이미지가 {leftovers.length}개 있습니다. 작업이 중간에 끊기면 남습니다.
+                      </span>
+                      <button onClick={() => setClearing(true)}>지우기</button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -255,6 +275,25 @@ export default function Home({ engine, containers, images, volumes, run, go, onR
             <dd>컨테이너를 실제로 돌리는 프로그램입니다(Docker Engine 등). BoxForge는 엔진에 일을 시키는 화면입니다.</dd>
           </dl>
         </details>
+      )}
+
+      {clearing && (
+        <Dialog title="BoxForge가 남긴 이미지 지우기" onClose={() => setClearing(false)}>
+          <p>아래 이미지를 지웁니다. 어느 컨테이너도 쓰지 않는 것들입니다. 되돌릴 수 없습니다.</p>
+          <ul className="doomed">
+            {leftovers.map((l) => (
+              <li key={l}>
+                <code>{l}</code>
+              </li>
+            ))}
+          </ul>
+          <div className="dialog-actions">
+            <button onClick={() => setClearing(false)}>취소</button>
+            <button className="primary danger" onClick={clearLeftovers}>
+              지우기
+            </button>
+          </div>
+        </Dialog>
       )}
 
       {sweep && (

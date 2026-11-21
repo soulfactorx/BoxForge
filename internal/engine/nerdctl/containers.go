@@ -658,6 +658,26 @@ func (s containers) Archive(ctx context.Context, id, p string) (io.ReadCloser, e
 	return pr, nil
 }
 
+func (s containers) Put(ctx context.Context, id, dir string, tar io.Reader) error {
+	err := s.r.writing(ctx, tar, "exec", "-i", id, "tar", "-xf", "-", "-C", path.Clean("/"+dir))
+	s.r.changed("container")
+	return err
+}
+
+func (s containers) Limit(ctx context.Context, id string, memory int64, cpus float64) error {
+	args := []string{"update"}
+	if memory > 0 {
+		args = append(args, "--memory", strconv.FormatInt(memory, 10))
+	}
+	if cpus > 0 {
+		args = append(args, "--cpus", strconv.FormatFloat(cpus, 'f', -1, 64))
+	}
+	if len(args) == 1 {
+		return errors.New("containerd (nerdctl) can set limits but not take them away: remake the container without them")
+	}
+	return s.r.do(ctx, "container", append(args, id)...)
+}
+
 // Prune: nerdctl does not say how much it freed, so what the stopped
 // containers held is measured first.
 func (s containers) Prune(ctx context.Context) (int64, error) {

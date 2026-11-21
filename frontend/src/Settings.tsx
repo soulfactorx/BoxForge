@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { choose, chosen, lang } from "./i18n";
 import { pick } from "./PathPicker";
+import { allowSystem, setAlerts } from "./Alerts";
 import { call, openURL, type Run, remote, signOut as leaveServer, viewer } from "./bridge";
 import { Dialog } from "./ui";
 
@@ -35,6 +36,10 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
   const [login, setLogin] = useState<{ server: string; user: string; password: string } | null>(null);
   const [note, setNote] = useState("");
   const [restarting, setRestarting] = useState(false);
+  const [notify, setNotify] = useState({ on: true, system: "" });
+  useEffect(() => {
+    call<string>("Setting", "notify.fail").then((v) => setNotify((n) => ({ ...n, on: v !== "off" })), () => {});
+  }, []);
   // The desktop app closes and opens again by itself. A server goes away
   // for a moment: the page waits for it to answer again, then reloads.
   const restartNow = async () => {
@@ -164,6 +169,33 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
             ))}
           </div>
         </div>
+        <label className="setting">
+          <span>
+            <strong>컨테이너가 실패하면 알림</strong>
+            <span className="sub">
+              실행 중이던 컨테이너가 오류로 멈추거나 상태 검사가 이상을 알리면 화면 구석에 알려 줍니다. 직접 멈춘 것은 알리지 않습니다.
+              {"Notification" in window && Notification.permission !== "granted" && " 화면을 보고 있지 않을 때도 알림을 받으려면 시스템 알림을 허용하세요."}
+            </span>
+          </span>
+          <span className="setting-actions">
+            {"Notification" in window && Notification.permission === "default" && (
+              <button type="button" onClick={() => allowSystem().then((p) => setNotify((n) => ({ ...n, system: p })))}>
+                시스템 알림 허용
+              </button>
+            )}
+            <input
+              type="checkbox"
+              className="switch"
+              aria-label="컨테이너가 실패하면 알림"
+              checked={notify.on}
+              onChange={(e) => {
+                setNotify({ ...notify, on: e.target.checked });
+                setAlerts(e.target.checked);
+                call("SetSetting", "notify.fail", e.target.checked ? "on" : "off");
+              }}
+            />
+          </span>
+        </label>
         {tray?.available && (
           <label className="setting">
             <span>

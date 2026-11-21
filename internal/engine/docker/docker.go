@@ -218,6 +218,7 @@ func (c containers) List(ctx context.Context) ([]engine.Container, error) {
 			State:    state,
 			Status:   s.Status,
 			Failed:   engine.FailedStatus(state, s.Status),
+			Health:   engine.HealthOf(s.Status),
 			ExitCode: code,
 			System:   engine.SystemName(name),
 			Created:  s.Created,
@@ -428,6 +429,23 @@ func (c containers) Files(ctx context.Context, id, p string) ([]engine.FileEntry
 func (c containers) Archive(ctx context.Context, id, p string) (io.ReadCloser, error) {
 	rc, _, err := c.cli.CopyFromContainer(ctx, id, path.Clean("/"+p))
 	return rc, err
+}
+
+func (c containers) Put(ctx context.Context, id, dir string, tar io.Reader) error {
+	return c.cli.CopyToContainer(ctx, id, path.Clean("/"+dir), tar, container.CopyToContainerOptions{})
+}
+
+func (c containers) Limit(ctx context.Context, id string, memory int64, cpus float64) error {
+	res := container.Resources{Memory: memory, NanoCPUs: int64(cpus * 1e9)}
+	// A memory limit leaves swap at twice as much unless it is said; with
+	// none, swap goes back to no limit as well.
+	if memory > 0 {
+		res.MemorySwap = memory * 2
+	} else {
+		res.MemorySwap = -1
+	}
+	_, err := c.cli.ContainerUpdate(ctx, id, container.UpdateConfig{Resources: res})
+	return err
 }
 
 func (c containers) Prune(ctx context.Context) (int64, error) {
@@ -991,6 +1009,17 @@ func (v volumes) helperMode(ctx context.Context, name string, entrypoint []strin
 		_ = v.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
 	}
 	return created.ID, remove, nil
+}
+
+func (v volumes) Put(ctx context.Context, name, dir string, tar io.Reader) error {
+	id, remove, err := v.helperMode(ctx, name, []string{"/bin/sh", "-c", "sleep 900"}, "")
+	if err != nil {
+		return err
+	}
+	defer remove()
+	// Started first: some engines attach a container's volumes only while it runs.
+	_ = v.cli.ContainerStart(ctx, id, container.StartOptions{})
+	return v.cli.CopyToContainer(ctx, id, inVolume(dir), tar, container.CopyToContainerOptions{})
 }
 
 func (v volumes) Files(ctx context.Context, name, p string) ([]engine.FileEntry, error) {

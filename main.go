@@ -89,6 +89,9 @@ func main() {
 					Filters: []runtime.FileFilter{{DisplayName: "인증서 (*.crt, *.pem, *.cer)", Pattern: "*.crt;*.pem;*.cer"}},
 				})
 			})
+			app.SetAnyFilePicker(func() (string, error) {
+				return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{Title: "올릴 파일"})
+			})
 			bundles := []runtime.FileFilter{{DisplayName: "BoxForge 묶음 (*.boxforge)", Pattern: "*.boxforge"}}
 			app.SetBundlePickers(
 				func(name string) (string, error) {

@@ -19,6 +19,7 @@ type Container struct {
 	State    string            `json:"state"`    // running, exited, paused, created, restarting, dead
 	Status   string            `json:"status"`   // human text from the engine, e.g. "Up 4 minutes"
 	Failed   bool              `json:"failed"`   // ended by its own failure, see FailedStatus
+	Health   string            `json:"health"`   // healthy, unhealthy, starting; "" when the image has no health check
 	ExitCode int               `json:"exitCode"` // of a stopped container; 0 when unknown
 	System   bool              `json:"system"`   // a tool's own helper (a build worker), hidden by default
 	Created  int64             `json:"created"`
@@ -279,6 +280,11 @@ type ContainerService interface {
 	Files(ctx context.Context, id, path string) ([]FileEntry, error)
 	// Archive returns the file or directory at path as a tar stream.
 	Archive(ctx context.Context, id, path string) (io.ReadCloser, error)
+	// Put unpacks a tar stream into the folder dir of the container.
+	Put(ctx context.Context, id, dir string, tar io.Reader) error
+	// Limit changes how much memory (bytes) and CPU (in cores, e.g. 1.5) the
+	// container may use; 0 for no limit.
+	Limit(ctx context.Context, id string, memory int64, cpus float64) error
 	// Prune deletes every stopped container and returns the bytes freed.
 	Prune(ctx context.Context) (int64, error)
 	// Commit makes an image of the container as it is now: its image plus
@@ -306,6 +312,8 @@ type VolumeService interface {
 	Files(ctx context.Context, name, path string) ([]FileEntry, error)
 	// Archive returns the file or directory at path as a tar stream.
 	Archive(ctx context.Context, name, path string) (io.ReadCloser, error)
+	// Put unpacks a tar stream into the folder dir of the volume.
+	Put(ctx context.Context, name, dir string, tar io.Reader) error
 	// Restore fills the volume, made if need be, from what Archive(name,
 	// "/") gave on another engine.
 	Restore(ctx context.Context, name string, tar io.Reader) error
@@ -411,4 +419,18 @@ const ClusterName = "boxforge-k3s"
 // buildx names its build workers buildx_buildkit_<builder>.
 func SystemName(name string) bool {
 	return strings.HasPrefix(name, "buildx_buildkit_") || strings.HasPrefix(name, HelperPrefix) || name == ClusterName
+}
+
+// HealthOf reads the health from a status line such as "Up 2 minutes
+// (healthy)"; "" when it names none.
+func HealthOf(status string) string {
+	switch {
+	case strings.Contains(status, "(healthy)"):
+		return "healthy"
+	case strings.Contains(status, "(unhealthy)"):
+		return "unhealthy"
+	case strings.Contains(status, "(health: starting)"):
+		return "starting"
+	}
+	return ""
 }

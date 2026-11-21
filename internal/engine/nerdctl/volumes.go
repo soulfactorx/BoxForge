@@ -154,6 +154,35 @@ func (s volumes) Archive(ctx context.Context, name, p string) (io.ReadCloser, er
 	return s.r.reading(ctx, append(args, "tar", "-cf", "-", "-C", dir, base)...)
 }
 
+// Put unpacks into a folder of the volume, the way Restore does.
+func (s volumes) Put(ctx context.Context, name, dir string, tar io.Reader) error {
+	args, err := s.helper(ctx, name, "", "-d")
+	if err != nil {
+		return err
+	}
+	run := []string{"run"}
+	for _, a := range args[1:] {
+		if a != "--rm" {
+			run = append(run, a)
+		}
+	}
+	b, err := s.r.out(ctx, append(run, "sleep", "900")...)
+	if err != nil {
+		return err
+	}
+	f := strings.Fields(string(b))
+	if len(f) == 0 {
+		return errors.New("nerdctl did not say which container it made")
+	}
+	id := f[len(f)-1]
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = s.r.out(ctx, "rm", "-f", id)
+	}()
+	return s.r.writing(ctx, tar, "exec", "-i", id, "tar", "-xf", "-", "-C", path.Join(mount, path.Clean("/"+dir)))
+}
+
 // Restore unpacks at the top of a helper: the archive's first name is the
 // mount point itself.
 //

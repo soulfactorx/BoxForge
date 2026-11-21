@@ -15,6 +15,8 @@ export interface Container {
   state: string;
   status: string;
   failed: boolean;
+  /** healthy, unhealthy, starting; "" when the image has no health check. */
+  health?: string;
   exitCode: number;
   system: boolean;
   imageId: string;

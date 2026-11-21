@@ -1,3 +1,4 @@
+import { HealthBadge } from "./Containers";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, openURL, type Container, type LogChunk, type Run } from "./bridge";
 import Charts from "./Charts";
@@ -146,6 +147,26 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
         <dd>
           {c.failed ? "실패" : stateLabel[c.state] ?? c.state} · {statusText(c)}
         </dd>
+        {st?.Health && (
+          <>
+            <dt>상태 검사</dt>
+            <dd data-testid="health-detail">
+              <HealthBadge health={st.Health.Status} />
+              {st.Health.FailingStreak > 0 && <span className="muted"> · 연속 {st.Health.FailingStreak}번 실패</span>}
+              {st.Health.Log?.length > 0 && <span className="sub">마지막 결과: {String(st.Health.Log[st.Health.Log.length - 1].Output ?? "").trim().slice(0, 200) || "(출력 없음)"}</span>}
+            </dd>
+          </>
+        )}
+        {(info?.HostConfig?.Memory > 0 || info?.HostConfig?.NanoCpus > 0) && (
+          <>
+            <dt>자원 제한</dt>
+            <dd>
+              {info.HostConfig.Memory > 0 && `메모리 ${Math.round(info.HostConfig.Memory / (1 << 20))}MB`}
+              {info.HostConfig.Memory > 0 && info.HostConfig.NanoCpus > 0 && " · "}
+              {info.HostConfig.NanoCpus > 0 && `CPU ${info.HostConfig.NanoCpus / 1e9}코어`}
+            </dd>
+          </>
+        )}
         <dt>이미지</dt>
         <dd>{c.image}</dd>
         <dt>ID</dt>

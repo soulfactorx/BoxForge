@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { call, type Run } from "./bridge";
+import { useEffect, useRef, useState } from "react";
+import { call, type Run, inWindow, upload, viewer } from "./bridge";
 import { ago, bytes, shq } from "./format";
 import { Icon, IconButton } from "./ui";
 
@@ -44,6 +44,42 @@ export default function VolumeBrowser({ kind = "Volume", name, label, run, showC
   const [error, setError] = useState("");
   const [open, setOpen] = useState<{ path: string; preview: Preview | null } | null>(null);
   const [saved, setSaved] = useState("");
+  const [round, setRound] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+
+  // A file of this PC (desktop: the system's window) or of this device
+  // (browser: sent to the server first) goes into the folder shown.
+  const put = async (path: string, shown: string) => {
+    const where = dir === "/" ? "/" : dir;
+    const command =
+      kind === "Container" ? `docker cp ${shq(shown)} ${label}:${where}` : `docker run --rm -i -v ${name}:/v alpine tar -x -C ${shq("/v" + (dir === "/" ? "" : dir))} < ${shq(shown)}`;
+    setSaved("");
+    if (await run(command, () => call(`${kind}Upload`, name, dir, path))) {
+      setSaved(`올렸습니다: ${shown} → ${where}`);
+      setRound((n) => n + 1);
+    }
+  };
+  const chooseUpload = async () => {
+    if (!inWindow()) return picker.current?.click();
+    const path = await call<string>("PickUploadFile").catch(() => "");
+    if (path) {
+      setUploading(true);
+      await put(path, path);
+      setUploading(false);
+    }
+  };
+  const sendUpload = async (f: File | undefined) => {
+    if (!f) return;
+    setUploading(true);
+    try {
+      await put(await upload(f), f.name);
+    } catch (e: any) {
+      setError(e.message);
+    }
+    setUploading(false);
+    if (picker.current) picker.current.value = "";
+  };
 
   useEffect(() => {
     let stale = false;
@@ -57,7 +93,7 @@ export default function VolumeBrowser({ kind = "Volume", name, label, run, showC
     return () => {
       stale = true;
     };
-  }, [name, dir]);
+  }, [name, dir, round]);
 
   const show = async (path: string) => {
     setOpen({ path, preview: null });
@@ -125,7 +161,16 @@ export default function VolumeBrowser({ kind = "Volume", name, label, run, showC
             {error}
           </p>
         )}
-        {saved && <p className="note">저장했습니다: {saved}</p>}
+        {saved && <p className="note">{saved.startsWith("올렸습니다") ? saved : `저장했습니다: ${saved}`}</p>}
+        {!open && !viewer() && (
+          <div className="upload-bar">
+            <button type="button" onClick={chooseUpload} disabled={uploading}>
+              <Icon name="plus" /> {uploading ? "올리는 중…" : "파일 올리기"}
+            </button>
+            <span className="muted">지금 보고 있는 폴더에 넣습니다. 같은 이름의 파일이 있으면 바뀝니다.</span>
+            <input ref={picker} type="file" hidden aria-label="올릴 파일" data-testid="upload-input" onChange={(e) => sendUpload(e.target.files?.[0])} />
+          </div>
+        )}
 
         {open ? (
           <div className="file-view">

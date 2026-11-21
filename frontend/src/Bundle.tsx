@@ -74,7 +74,7 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
 
   // Where to write: proposed at once, changed with the dialog.
   useEffect(() => {
-    if (!file) call<string>("PickExportFileDefault", base).then(setFile, () => {});
+    if (!file) call<string>("PickExportFileDefault", base).then((d) => setFile((f) => f || d), () => {});
   }, []);
   const browse = async () => {
     try {

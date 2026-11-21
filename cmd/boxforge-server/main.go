@@ -125,6 +125,7 @@ func main() {
 		log.Fatal(err)
 	}
 	app.SetRemote(outbox)
+	os.Setenv("BOXFORGE_INBOX", inbox)
 	// The server updates itself with the server's program, and starts
 	// afresh as it was started: same arguments, same address.
 	update.Server = true

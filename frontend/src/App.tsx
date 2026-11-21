@@ -13,6 +13,7 @@ import type { RunInit } from "./recipes";
 import Settings, { type Theme, type UpdateInfo } from "./Settings";
 import Images from "./Images";
 import Kubernetes from "./Kubernetes";
+import Alerts from "./Alerts";
 import PathPicker from "./PathPicker";
 import RunDialog from "./RunDialog";
 import Topology from "./Topology";
@@ -439,6 +440,7 @@ export default function App() {
       )}
 
       <PathPicker />
+      <Alerts containers={containers} engine={engineLabel ?? ""} onOpen={(id) => setDetail({ id, tab: "overview" })} />
       {closing && (
         <Dialog title="창을 닫으면 어떻게 할까요?" onClose={() => setClosing(false)}>
           <p>BoxForge는 창을 닫아도 작업 표시줄의 트레이 아이콘으로 남아 계속 실행될 수 있습니다. 트레이 아이콘을 누르면 창이 다시 열립니다.</p>

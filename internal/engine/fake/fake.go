@@ -327,6 +327,10 @@ func (c containers) Pipe(context.Context, string, []string) (io.ReadWriteCloser,
 
 func (c containers) Prune(context.Context) (int64, error) { return 0, nil }
 
+func (c containers) Put(context.Context, string, string, io.Reader) error { return nil }
+
+func (c containers) Limit(context.Context, string, int64, float64) error { return nil }
+
 func (c containers) Files(ctx context.Context, _, p string) ([]engine.FileEntry, error) {
 	return volumes{c.r}.Files(ctx, "", p)
 }
@@ -656,6 +660,8 @@ func (v volumes) Archive(_ context.Context, _, p string) (io.ReadCloser, error) 
 	_ = tw.Close()
 	return io.NopCloser(&buf), nil
 }
+
+func (v volumes) Put(context.Context, string, string, io.Reader) error { return nil }
 
 func (v volumes) Restore(ctx context.Context, name string, r io.Reader) error {
 	_, _ = io.Copy(io.Discard, r)
