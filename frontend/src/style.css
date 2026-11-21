@@ -1102,3 +1102,22 @@ fieldset.plain legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
 .map-edit:hover path, .map-edit:focus path { stroke: var(--accent); }
 .run-form textarea.lines { min-height: 0; font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: 13px; resize: vertical; }
 .dialog-actions .spacer { flex: 1; }
+
+textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
+.pull-bar label { white-space: nowrap; }
+@media (max-width: 760px) {
+  /* Image pull bar: its label on a line of its own, the box taking the width. */
+  .pull-bar { flex-wrap: wrap; }
+  .pull-bar label { flex: 1 0 100%; }
+  .pull-bar input { flex: 1 1 140px; min-width: 0; max-width: none; }
+  /* Build form: one column, and nothing wider than the screen. */
+  .build-form { padding: 14px 12px; overflow: hidden; }
+  .build-form .two { grid-template-columns: minmax(0, 1fr); }
+  .build-form label, .build-form .pair, .run-form label { min-width: 0; }
+  .pair > input, .pair > .field { flex: 1 1 0; min-width: 0; width: auto; }
+  .preset-bar select { min-width: 0; flex: 1 1 140px; }
+  .cli-preview code { white-space: pre-wrap; word-break: break-all; }
+  .run-form input, .run-form select, .run-form textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+  .page-head .spacer { display: none; }
+}
+@media (max-width: 760px) { .sidebar .brand { overflow: hidden; white-space: nowrap; } }

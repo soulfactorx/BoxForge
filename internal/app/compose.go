@@ -189,6 +189,35 @@ func (a *App) ComposeSave(file, text string) error {
 	return writeBeside(file, text)
 }
 
+// ComposeCreate starts a new project: it makes the folder if need be and
+// writes compose.yaml in it. A folder that has a compose file already is
+// refused: that one is opened, not written over. It returns the file.
+func (a *App) ComposeCreate(dir, text string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return "", fmt.Errorf("name the folder for the project")
+	}
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("write the folder's whole path (one that begins at the top, like /home/me/shop or C:\\projects\\shop)")
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("the compose file is empty")
+	}
+	for _, name := range []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return "", fmt.Errorf("this folder has a compose file already (%s): open that one instead", name)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	file := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(file, []byte(text), 0o644); err != nil {
+		return "", err
+	}
+	return file, nil
+}
+
 // Change is what bringing a project up would do to one of its parts.
 type Change struct {
 	Kind   string `json:"kind"` // Container, Network, Volume

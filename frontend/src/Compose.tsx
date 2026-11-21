@@ -1,3 +1,4 @@
+import { lang, translate } from "./i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, openURL, type Container, type Run } from "./bridge";
 import { published } from "./Containers";
@@ -21,6 +22,94 @@ const naming: Record<Action, string> = { up: "올리기", down: "내리기", sto
 
 const dirname = (file: string) => file.replace(/[\\/][^\\/]*$/, "");
 
+// A note in a compose file ("# …", which Compose skips), in the language
+// of the screens: the file is the user's to keep.
+const c = (note: string) => "# " + (lang() === "en" ? translate(note) : note);
+
+// Starting points for a new project.
+const starters: { id: string; title: string; about: string; text: string }[] = [
+  {
+    id: "web",
+    title: "웹 서버 하나",
+    about: "nginx 하나를 띄웁니다. 올린 뒤 브라우저에서 localhost:8080 으로 엽니다.",
+    text: `services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"          ${c("내 PC의 8080 → 컨테이너의 80")}
+    restart: unless-stopped
+`,
+  },
+  {
+    id: "web-db",
+    title: "웹 + 데이터베이스",
+    about: "웹 서버와 PostgreSQL. 데이터베이스의 내용은 볼륨에 남고, 웹은 데이터베이스가 켜진 뒤에 시작합니다. 비밀번호는 꼭 바꾸세요.",
+    text: `services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    depends_on:
+      - db                 ${c("db가 먼저 켜집니다")}
+    restart: unless-stopped
+  db:
+    image: postgres:17
+    environment:
+      - POSTGRES_PASSWORD=change-me   ${c("꼭 바꾸세요")}
+    volumes:
+      - dbdata:/var/lib/postgresql/data   ${c("컨테이너를 지워도 남는 데이터")}
+    restart: unless-stopped
+
+volumes:
+  dbdata:
+`,
+  },
+  {
+    id: "wordpress",
+    title: "WordPress",
+    about: "WordPress와 MariaDB. 올린 뒤 localhost:8080 에서 설치 화면이 열립니다. 비밀번호 두 곳은 같은 값으로 바꾸세요.",
+    text: `services:
+  wordpress:
+    image: wordpress:latest
+    ports:
+      - "8080:80"
+    environment:
+      - WORDPRESS_DB_HOST=db
+      - WORDPRESS_DB_USER=wordpress
+      - WORDPRESS_DB_PASSWORD=change-me   ${c("아래 MARIADB_PASSWORD 와 같게")}
+      - WORDPRESS_DB_NAME=wordpress
+    volumes:
+      - site:/var/www/html
+    depends_on:
+      - db
+    restart: unless-stopped
+  db:
+    image: mariadb:11
+    environment:
+      - MARIADB_DATABASE=wordpress
+      - MARIADB_USER=wordpress
+      - MARIADB_PASSWORD=change-me
+      - MARIADB_RANDOM_ROOT_PASSWORD=1
+    volumes:
+      - dbdata:/var/lib/mysql
+    restart: unless-stopped
+
+volumes:
+  site:
+  dbdata:
+`,
+  },
+  {
+    id: "blank",
+    title: "거의 빈 파일",
+    about: "서비스 하나만 적힌 파일입니다. 이미지 이름을 바꾸고, 올린 뒤 구조 그림에서 서비스를 더하세요.",
+    text: `services:
+  app:
+    image: nginx:alpine    ${c("실행할 이미지로 바꾸세요")}
+`,
+  },
+];
+
 export default function Compose({ containers, run, showCli, onOpen }: Props) {
   const [opened, setOpened] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
@@ -28,6 +117,30 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
   const [busy, setBusy] = useState<{ key: string; text: string } | null>(null);
   const [output, setOutput] = useState<{ title: string; lines: string[] } | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+  // A new project being written: its folder, and the file's text.
+  const [making, setMaking] = useState<{ dir: string; kind: string; text: string; error: string } | null>(null);
+
+  const pickFolder = async () => {
+    try {
+      const dir = await call<string>("PickFolder");
+      if (dir && making) setMaking({ ...making, dir });
+    } catch {
+      // No folder dialog in a browser: the path is typed instead.
+    }
+  };
+
+  const create = async () => {
+    if (!making) return;
+    let file = "";
+    try {
+      file = await call<string>("ComposeCreate", making.dir, making.text);
+    } catch (e: any) {
+      setMaking({ ...making, error: e.message });
+      return;
+    }
+    setMaking(null);
+    await compose(`${file} · 올리기`, `docker compose -f ${file} up -d`, { project: "", workDir: dirname(file), files: [file], action: "up" });
+  };
   const [downing, setDowning] = useState<Project | null>(null);
   const [viewing, setViewing] = useState<{ file: string; text: string } | null>(null);
   const [fileError, setFileError] = useState("");
@@ -117,6 +230,9 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
         <h1>Compose</h1>
         {version && <span className="muted">Compose {version}</span>}
         <span className="spacer" />
+        <button disabled={off || !!busy} onClick={() => setMaking({ dir: "", kind: starters[0].id, text: starters[0].text, error: "" })}>
+          새로 만들기
+        </button>
         <button className="primary" disabled={off || !!busy} onClick={() => setOpening("")}>
           Compose 파일 열기
         </button>
@@ -239,6 +355,61 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
             </article>
           );
         })
+      )}
+
+      {making && (
+        <Dialog title="새 Compose 프로젝트" onClose={() => setMaking(null)} wide>
+          <p>
+            폴더 하나에 <code>compose.yaml</code>을 만들고 올립니다. 폴더 이름이 프로젝트 이름이 됩니다. 아래의 글은 시작용이니 그대로 써도 되고, 올린 뒤에 구조 그림이나
+            "파일" 탭에서 고칠 수 있습니다.
+          </p>
+          <form
+            className="run-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              create();
+            }}
+          >
+            <label>
+              폴더
+              <div className="pair">
+                <input autoFocus className="field" aria-label="프로젝트 폴더" placeholder="예: C:\projects\shop 또는 /home/me/shop" value={making.dir} onChange={(e) => setMaking({ ...making, dir: e.target.value, error: "" })} />
+                <button type="button" onClick={pickFolder}>
+                  찾아보기
+                </button>
+              </div>
+              <span className="help">없는 폴더면 새로 만듭니다. 이미 compose 파일이 있는 폴더에는 만들지 않습니다.</span>
+            </label>
+            <fieldset className="plain">
+              <legend>무엇으로 시작할까요?</legend>
+              <div className="recipe-chips">
+                {starters.map((s) => (
+                  <button key={s.id} type="button" className={"chip" + (making.kind === s.id ? " on" : "")} onClick={() => setMaking({ ...making, kind: s.id, text: s.text })}>
+                    {s.title}
+                  </button>
+                ))}
+              </div>
+              <span className="help">{starters.find((s) => s.id === making.kind)?.about}</span>
+            </fieldset>
+            <label>
+              compose.yaml
+              <textarea className="editor starter" aria-label="새 compose 파일 내용" spellCheck={false} rows={14} value={making.text} onChange={(e) => setMaking({ ...making, text: e.target.value })} />
+            </label>
+            {making.error && (
+              <p className="warn" role="alert">
+                {making.error}
+              </p>
+            )}
+            <div className="dialog-actions">
+              <button type="button" onClick={() => setMaking(null)}>
+                취소
+              </button>
+              <button className="primary" type="submit" disabled={!making.dir.trim() || !making.text.trim()}>
+                만들고 올리기
+              </button>
+            </div>
+          </form>
+        </Dialog>
       )}
 
       {opening !== null && (
