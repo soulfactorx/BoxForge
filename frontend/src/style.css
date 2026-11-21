@@ -997,7 +997,7 @@ fieldset.plain legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
    The side bar becomes a strip across the top, its menu scrolling
    sideways; tables scroll sideways inside their own box; panels that
    slide in or pop up take the whole width. */
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-height: 520px) {
   .shell { grid-template: "side" auto "main" minmax(0, 1fr) "status" auto / minmax(0, 1fr); }
   .sidebar { padding: 8px 10px 6px; gap: 6px; border-right: none; border-bottom: 1px solid var(--line); min-width: 0; }
   .sidebar .brand { padding: 0 2px; font-size: 15px; }
@@ -1030,14 +1030,35 @@ fieldset.plain legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
   .pair { flex-wrap: wrap; }
   .setting { flex-wrap: wrap; gap: 8px; }
   /* A finger needs more room than a pointer. */
-  button, .field, select, input[type="text"], input[type="search"], input[type="password"] { min-height: 36px; }
+  button.primary, .page-head > button, .dialog-actions button, .field, select, input[type="text"], input[type="search"], input[type="password"] { min-height: 36px; }
   input, select, textarea { font-size: 16px; } /* smaller text makes a phone zoom in on focus */
 }
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-height: 520px) {
   .engine-card { max-width: 40vw; margin-right: 52px; }
   .engine-card > *:not(:first-child) { display: none !important; }
   .engine-card > div:first-child > *:not(:first-child):not(strong) { display: none; }
   .nav-item::before, .nav-item::after, .settings-link::before { display: none !important; }
   .sidebar .brand { min-width: 0; }
   .brand-version { flex: none; }
+}
+
+/* A window too short for the whole side bar: the bar scrolls rather than
+   squeezing its menu away. */
+.sidebar { overflow-y: auto; }
+.sidebar nav { flex: 1 0 auto; }
+@media (max-width: 760px), (max-height: 520px) {
+  .sidebar { overflow: visible; }
+  .sidebar nav { flex: none; }
+  .tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+}
+@media (max-width: 760px), (max-height: 520px) {
+  /* The settings button takes its own place in the top row, beside the engine. */
+  .sidebar { grid-template: "brand engine settings" auto "nav nav nav" auto / minmax(0, 1fr) auto auto; column-gap: 6px; }
+  .sidebar .settings-link { position: static; grid-area: settings; height: 34px; padding: 0 8px; }
+  .engine-card { margin-right: 0; max-width: 44vw; }
+}
+/* Short but wide (a phone held sideways): there is room for whole tables. */
+@media (min-width: 761px) and (max-height: 520px) {
+  table.grid { display: table; white-space: normal; }
+  .page-head .search { flex: 1 1 220px; }
 }
