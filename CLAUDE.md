@@ -11,6 +11,8 @@ Docker를 쉽게 쓰기 위한 앱. Go 백엔드(`internal/`) + React 화면(`fr
 - 되돌릴 수 없는 일(삭제 · 정리)은 무엇이 사라지는지 보여주고 확인받는다.
 - Docker Desktop에는 의존하지 않는다(유료). 무료 엔진만.
 - 폼 안의 버튼은 `type="button"`을 명시한다(안 하면 Enter가 그 버튼을 누른다).
+- 화면 글은 한국어로 쓴다. 영어는 `frontend/src/i18n/en.json`의 표로 낸다: 글을 더하거나 고치면 `cd frontend && node scripts/extract-strings.cjs`가 번역이 없는 글을 알려 주니 그 표에 채운다(`{0}`은 실행 중에 채워지는 자리).
+- Playwright 테스트는 한국어 라벨로 요소를 찾으므로 브라우저를 `locale: "ko-KR"`로 연다(아니면 영어 화면이 뜬다).
 
 ## 검사
 

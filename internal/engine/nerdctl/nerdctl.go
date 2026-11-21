@@ -591,6 +591,20 @@ func (r *runtime) writing(ctx context.Context, in io.Reader, args ...string) err
 	return nil
 }
 
+func (s images) History(ctx context.Context, ref string) ([]engine.Layer, error) {
+	b, err := s.r.out(ctx, "history", "--no-trunc", "--format", "{{json .}}", ref)
+	if err != nil {
+		return nil, err
+	}
+	list := []engine.Layer{}
+	for _, h := range lines[struct{ CreatedBy, Size, CreatedAt string }](b) {
+		cmd := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(h.CreatedBy), "# buildkit"))
+		cmd = strings.TrimPrefix(cmd, "/bin/sh -c #(nop) ")
+		list = append(list, engine.Layer{Command: cmd, Size: size(h.Size), Created: stamp(h.CreatedAt)})
+	}
+	return list, nil
+}
+
 func (s images) Save(ctx context.Context, ref string) (io.ReadCloser, error) {
 	return s.r.reading(ctx, "save", ref)
 }

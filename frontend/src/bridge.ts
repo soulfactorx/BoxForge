@@ -129,6 +129,7 @@ export async function call<T>(method: string, ...args: unknown[]): Promise<T> {
     throw new Error("로그인이 필요합니다.");
   }
   const body = await res.json();
+  if (body.error === "viewer") throw new Error("보기 전용으로 로그인했습니다. 바꾸는 일은 관리용 비밀번호로 로그인해야 할 수 있습니다.");
   if (body.error) throw new Error(body.error);
   // A file the server wrote for this browser: fetched at once, and what
   // the caller is told is its name, not a path on the server.
@@ -173,10 +174,13 @@ export const inWindow = () => !!bound();
 
 // What the web server said about itself: whether it is the one for use
 // from other machines, and where it writes files for the browser to fetch.
-let server: { remote?: boolean; outbox?: string } = {};
-export const setServer = (s: { remote?: boolean; outbox?: string }) => {
+let server: { remote?: boolean; outbox?: string; viewer?: boolean } = {};
+export const setServer = (s: { remote?: boolean; outbox?: string; viewer?: boolean }) => {
   server = s ?? {};
 };
+
+/** Whether this sign-in may only look (the web server's second password). */
+export const viewer = () => !!server.viewer;
 
 /** Whether BoxForge is being used from a browser, on a server elsewhere. */
 export const remote = () => !!server.remote;

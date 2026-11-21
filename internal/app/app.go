@@ -8,8 +8,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1535,19 +1540,68 @@ func (a *App) SetProxy(proxy, noProxy string) error {
 	return nil
 }
 
-// TrustCertificate adds a certificate file (PEM) to those the engine
-// trusts, and restarts the engine. Only for an engine inside WSL.
+// TrustCertificate adds a certificate file (PEM) to those BoxForge's own
+// things trust: the engine, when it is one inside WSL (which is then
+// restarted), and the Kubernetes cluster, now if it is running and
+// whenever one is made. BoxForge keeps a copy of the certificate for that.
 func (a *App) TrustCertificate(file string) error {
-	distro := a.wslTarget()
-	if distro == "" {
-		return fmt.Errorf("this can be done only for an engine inside WSL")
-	}
-	if _, err := os.Stat(file); err != nil {
+	file = strings.TrimSpace(file)
+	pemBytes, err := os.ReadFile(file)
+	if err != nil {
 		return err
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return fmt.Errorf("this is not a certificate in PEM form (a text file that begins with -----BEGIN CERTIFICATE-----)")
+	}
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return fmt.Errorf("the certificate can't be read: %w", err)
+	}
+	if dir := caDir(); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		sum := sha256.Sum256(block.Bytes)
+		if err := os.WriteFile(filepath.Join(dir, hex.EncodeToString(sum[:8])+".crt"), pem.EncodeToMemory(block), 0o644); err != nil {
+			return err
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sizeTimeout)
 	defer cancel()
-	return provision.TrustCA(ctx, distro, file)
+	if distro := a.wslTarget(); distro != "" {
+		if err := provision.TrustCA(ctx, distro, file); err != nil {
+			return err
+		}
+	}
+	if c := a.kubeContainer(); c != nil && c.State == "running" {
+		if err := a.kubeTrust(ctx); err != nil {
+			return fmt.Errorf("the certificate was saved, but the Kubernetes cluster did not take it: %w", err)
+		}
+	}
+	return nil
+}
+
+// caDir is where the certificates the user added are kept.
+func caDir() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "BoxForge", "ca")
+}
+
+// trustedCAs returns the certificates the user added, as one PEM text.
+func trustedCAs() []byte {
+	files, _ := filepath.Glob(filepath.Join(caDir(), "*.crt"))
+	sort.Strings(files)
+	var all []byte
+	for _, f := range files {
+		if b, err := os.ReadFile(f); err == nil {
+			all = append(all, b...)
+			all = append(all, '\n')
+		}
+	}
+	return all
 }
 
 // keepAlive applies the "keep the engine running" setting to the engine in use.

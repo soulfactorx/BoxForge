@@ -37,6 +37,11 @@ type Options struct {
 	Open bool
 	// Check reports whether a password is the right one.
 	Check func(password string) bool
+	// CheckViewer reports whether a password is the one that lets its
+	// holder look and change nothing; nil when there is no such password.
+	CheckViewer func(password string) bool
+	// ViewerMethods are the methods that only read: all a viewer may call.
+	ViewerMethods []string
 	// Secure says the server is reached over TLS: cookies are then marked
 	// to travel no other way.
 	Secure bool
@@ -58,8 +63,15 @@ type Server struct {
 
 	mu       sync.Mutex
 	subs     map[chan []byte]struct{}
-	sessions map[string]time.Time // session → when it ends
-	failures map[string]*failure  // by client address
+	sessions map[string]session // by the cookie's value
+	viewer   map[string]bool
+	failures map[string]*failure // by client address
+}
+
+// session is one sign-in: until when, and whether it may only look.
+type session struct {
+	end    time.Time
+	viewer bool
 }
 
 type failure struct {
@@ -81,7 +93,10 @@ const (
 func New(target any, o Options) *Server {
 	s := &Server{
 		o: o, target: reflect.ValueOf(target), denied: map[string]bool{},
-		subs: map[chan []byte]struct{}{}, sessions: map[string]time.Time{}, failures: map[string]*failure{},
+		subs: map[chan []byte]struct{}{}, sessions: map[string]session{}, failures: map[string]*failure{}, viewer: map[string]bool{},
+	}
+	for _, m := range o.ViewerMethods {
+		s.viewer[m] = true
 	}
 	for _, m := range o.Denied {
 		s.denied[m] = true
@@ -114,8 +129,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.HandleFunc("POST /api/call/{method}", s.guard(s.call))
 	mux.HandleFunc("GET /api/events", s.guard(s.events))
-	mux.HandleFunc("GET /api/outbox/{name}", s.guard(s.fetch))
-	mux.HandleFunc("POST /api/upload", s.guard(s.upload))
+	mux.HandleFunc("GET /api/outbox/{name}", s.guard(s.full(s.fetch)))
+	mux.HandleFunc("POST /api/upload", s.guard(s.full(s.upload)))
 	mux.Handle("/", http.FileServerFS(s.o.UI))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -155,21 +170,38 @@ func reply(w http.ResponseWriter, status int, body map[string]any) {
 
 // signedIn reports whether the request carries a session that is good.
 func (s *Server) signedIn(r *http.Request) bool {
+	ok, _ := s.who(r)
+	return ok
+}
+
+// who reports whether the request is signed in, and whether as a viewer.
+func (s *Server) who(r *http.Request) (ok, viewer bool) {
 	if s.o.Open {
-		return true
+		return true, false
 	}
 	c, err := r.Cookie(cookieName)
 	if err != nil {
-		return false
+		return false, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	end, ok := s.sessions[c.Value]
-	if ok && time.Now().After(end) {
+	sess, ok := s.sessions[c.Value]
+	if ok && time.Now().After(sess.end) {
 		delete(s.sessions, c.Value)
 		ok = false
 	}
-	return ok
+	return ok, sess.viewer
+}
+
+// full lets through only a sign-in that may change things.
+func (s *Server) full(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, viewer := s.who(r); viewer {
+			reply(w, http.StatusForbidden, map[string]any{"error": "this sign-in may only look"})
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
@@ -185,9 +217,11 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 // session tells the page whether it is signed in, and what kind of
 // server this is.
 func (s *Server) session(w http.ResponseWriter, r *http.Request) {
-	body := map[string]any{"auth": s.signedIn(r), "remote": !s.o.Open}
-	if s.signedIn(r) {
+	ok, viewer := s.who(r)
+	body := map[string]any{"auth": ok, "remote": !s.o.Open}
+	if ok {
 		body["outbox"] = s.o.Outbox
+		body["viewer"] = viewer
 	}
 	reply(w, http.StatusOK, body)
 }
@@ -217,7 +251,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	if s.o.Check == nil || !s.o.Check(in.Password) {
+	full := s.o.Check != nil && s.o.Check(in.Password)
+	viewer := !full && s.o.CheckViewer != nil && s.o.CheckViewer(in.Password)
+	if !full && !viewer {
 		// Slow, so that guessing is; and counted, so that it stops.
 		time.Sleep(700 * time.Millisecond)
 		s.mu.Lock()
@@ -242,14 +278,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	id := hex.EncodeToString(raw)
 	s.mu.Lock()
 	delete(s.failures, who)
-	s.sessions[id] = time.Now().Add(sessionLife)
+	s.sessions[id] = session{end: time.Now().Add(sessionLife), viewer: viewer}
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: id, Path: "/", MaxAge: int(sessionLife.Seconds()),
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.o.Secure,
 	})
-	log.Printf("signed in: %s", who)
-	reply(w, http.StatusOK, map[string]any{"auth": true})
+	if viewer {
+		log.Printf("signed in to look only: %s", who)
+	} else {
+		log.Printf("signed in: %s", who)
+	}
+	reply(w, http.StatusOK, map[string]any{"auth": true, "viewer": viewer})
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -305,6 +345,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 // body as its arguments, and answers {"result": …} or {"error": "…"}.
 func (s *Server) call(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("method")
+	if _, viewer := s.who(r); viewer && !s.viewer[name] {
+		reply(w, http.StatusOK, map[string]any{"error": "viewer"})
+		return
+	}
 	if s.denied[name] {
 		reply(w, http.StatusOK, map[string]any{"error": "this cannot be done from a browser on another machine"})
 		return

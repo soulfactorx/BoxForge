@@ -22,6 +22,11 @@ export interface SetupStatus {
   total: number;
   log: string[] | null;
   flavors: { id: string; label: string; note: string }[] | null;
+  needsRelogin?: boolean;
+  /** Which installation this is: into WSL (Windows), or on Linux or macOS itself. */
+  kind?: "wsl" | "linux" | "macos";
+  /** The engine to use once it is in. */
+  engine?: string;
 }
 
 const mark: Record<Step["state"], string> = { todo: "○", active: "", done: "✔", error: "✖" };
@@ -50,7 +55,7 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
     if (!st?.installed || st.running || told.current) return;
     told.current = true;
     setSwitching("새 엔진에 연결하는 중…");
-    call("UseEngine", "wsl:BoxForge").then(
+    call("UseEngine", st.engine || "wsl:BoxForge").then(
       () => {
         setSwitching("");
         onInstalled();
@@ -62,10 +67,28 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
   const downloading = st?.running && st.steps.find((s) => s.id === "download")?.state === "active";
   return (
     <Dialog title="Docker Engine 설치" onClose={st?.running ? () => {} : onClose} wide>
-      <p className="muted">
-        이 PC에 BoxForge 전용 Docker Engine을 설치합니다. 설치하는 것은 모두 무료이고(WSL 2, 고른 Linux, Docker Engine · Compose · Buildx), 이미 쓰고
-        있는 WSL 배포판이나 다른 엔진은 건드리지 않습니다. 디스크 약 2GB와 인터넷 연결이 필요합니다.
-      </p>
+      {st?.kind === "linux" ? (
+        <p className="muted">
+          이 PC에 Docker Engine을 설치합니다(무료: Docker Engine · Compose · Buildx). 배포판의 패키지 관리자로 설치하고, 지금과 부팅할 때마다 켜지게 하며, 이 계정이
+          쓸 수 있게 docker 그룹에 넣습니다. 관리자 비밀번호를 한 번 묻습니다.
+        </p>
+      ) : st?.kind === "macos" ? (
+        <p className="muted">
+          macOS에는 컨테이너를 직접 돌리는 엔진이 없어서, 작은 Linux 가상 머신 안에 Docker를 넣어 주는 Colima(무료)를 Homebrew로 설치하고 켭니다. 디스크 약 2GB와
+          인터넷 연결이 필요합니다.
+        </p>
+      ) : (
+        <p className="muted">
+          이 PC에 BoxForge 전용 Docker Engine을 설치합니다. 설치하는 것은 모두 무료이고(WSL 2, 고른 Linux, Docker Engine · Compose · Buildx), 이미 쓰고
+          있는 WSL 배포판이나 다른 엔진은 건드리지 않습니다. 디스크 약 2GB와 인터넷 연결이 필요합니다.
+        </p>
+      )}
+      {st?.needsRelogin && !st.running && (
+        <p className="note-box">
+          설치는 끝났습니다. 이 계정이 docker 그룹에 들어간 것은 다음 로그인부터 적용되므로, <strong>한 번 로그아웃했다가 다시 로그인</strong>한 뒤 BoxForge를 열면
+          연결됩니다.
+        </p>
+      )}
       {st && !st.supported && <p className="warn">{st.reason}</p>}
       {st?.supported && (
         <ol className="setup-steps">
@@ -89,7 +112,7 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
           ))}
         </ol>
       )}
-      {st?.supported && !st.running && !st.installed && st.steps.find((s) => s.id === "distro")?.state !== "done" && (
+      {st?.supported && (st.kind ?? "wsl") === "wsl" && !st.running && !st.installed && st.steps.find((s) => s.id === "distro")?.state !== "done" && (
         <fieldset className="flavors">
           <legend>어떤 Linux에 설치할까요?</legend>
           {st.flavors?.map((f) => (
@@ -139,8 +162,8 @@ export default function SetupWizard({ onClose, onInstalled }: { onClose: () => v
         ) : (
           <button onClick={onClose}>닫기</button>
         )}
-        {st?.supported && !st.installed && (
-          <button className="primary" disabled={st.running || !flavor || (flavor === "custom" && !source.trim())} onClick={async () => {
+        {st?.supported && !st.installed && !st.needsRelogin && (
+          <button className="primary" disabled={st.running || ((st.kind ?? "wsl") === "wsl" && (!flavor || (flavor === "custom" && !source.trim())))} onClick={async () => {
               const net = await call<{ proxy: string }>("Network").catch(() => ({ proxy: "" }));
               call("SetupStart", { flavor, source, proxy: net.proxy });
             }}>

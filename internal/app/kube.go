@@ -123,8 +123,10 @@ func (a *App) KubeStart() error {
 	say := func(text string) { a.emit("kube", text) }
 	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
+	fresh := false
 	switch c := a.kubeContainer(); {
 	case c == nil:
+		fresh = true
 		img := kubeImage()
 		if !a.eng().Images().Exists(ctx, img) {
 			say("k3s 이미지를 내려받는 중 (약 300MB)")
@@ -159,6 +161,14 @@ func (a *App) KubeStart() error {
 		say("클러스터 컨테이너를 시작하는 중")
 		if err := a.eng().Containers().Start(ctx, c.ID); err != nil {
 			return err
+		}
+	}
+	if len(trustedCAs()) > 0 {
+		say("사내 인증서를 클러스터에 넣는 중")
+		// A cluster just made is restarted whatever the script says: a
+		// first try may have written the list as the cluster was reading it.
+		if err := a.kubeTrustNow(ctx, fresh); err != nil {
+			say("인증서를 넣지 못했습니다: " + err.Error())
 		}
 	}
 	say("Kubernetes가 준비되기를 기다리는 중")
@@ -366,4 +376,57 @@ func (a *App) KubeConfig() (string, error) {
 	).Replace(stdout)
 	// It holds the cluster's admin key: for this user only.
 	return file, os.WriteFile(file, []byte(text), 0o600)
+}
+
+// The cluster's list of certificate authorities, and the copy of it as it
+// came, which the user's certificates are added to each time.
+const (
+	kubeBundle      = "/etc/ssl/certs/ca-certificates.crt"
+	kubeTrustScript = `set -e
+b=` + kubeBundle + `
+[ -f "$b.boxforge-orig" ] || cp "$b" "$b.boxforge-orig"
+cat > /tmp/boxforge-ca.pem
+cat "$b.boxforge-orig" /tmp/boxforge-ca.pem > "$b.new"
+if cmp -s "$b.new" "$b"; then rm -f "$b.new"; echo same; else mv "$b.new" "$b"; echo changed; fi
+rm -f /tmp/boxforge-ca.pem
+`
+)
+
+// kubeTrust makes the cluster trust the certificates the user added: the
+// cluster fetches its images itself, and behind a company's inspecting
+// proxy it can't without them. The cluster restarts when the list changed,
+// which is when its image fetcher reads it.
+func (a *App) kubeTrust(ctx context.Context) error { return a.kubeTrustNow(ctx, false) }
+
+func (a *App) kubeTrustNow(ctx context.Context, restart bool) error {
+	cas := trustedCAs()
+	if len(cas) == 0 {
+		return nil
+	}
+	cs := a.eng().Containers()
+	// The container is up before k3s is: a moment for it to take commands.
+	var stdout, stderr string
+	var code int
+	var err error
+	for i := 0; i < 20; i++ {
+		stdout, stderr, code, err = cs.Output(ctx, kubeContainer, []string{"sh", "-c", kubeTrustScript}, cas)
+		if err == nil && code == 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("%s", strings.TrimSpace(stderr))
+	}
+	if restart || strings.Contains(stdout, "changed") {
+		return cs.Restart(ctx, kubeContainer)
+	}
+	return nil
 }

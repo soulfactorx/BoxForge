@@ -759,6 +759,28 @@ func (i images) Defaults(ctx context.Context, ref string) (engine.ImageDefaults,
 	return d, nil
 }
 
+func (i images) History(ctx context.Context, ref string) ([]engine.Layer, error) {
+	steps, err := i.cli.ImageHistory(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	list := make([]engine.Layer, 0, len(steps))
+	for _, s := range steps {
+		list = append(list, engine.Layer{Command: cleanStep(s.CreatedBy), Size: s.Size, Created: s.Created})
+	}
+	return list, nil
+}
+
+// cleanStep takes the shell dressing off a build step's command.
+func cleanStep(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	cmd = strings.TrimPrefix(cmd, "/bin/sh -c #(nop) ")
+	if rest, ok := strings.CutPrefix(cmd, "/bin/sh -c "); ok {
+		cmd = "RUN " + rest
+	}
+	return strings.TrimSpace(strings.TrimSuffix(cmd, "# buildkit"))
+}
+
 func (i images) Save(ctx context.Context, ref string) (io.ReadCloser, error) {
 	return i.cli.ImageSave(ctx, []string{ref})
 }

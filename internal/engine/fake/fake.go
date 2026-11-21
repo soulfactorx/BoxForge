@@ -444,6 +444,10 @@ func contains(list []string, s string) bool {
 	return false
 }
 
+func (i images) History(context.Context, string) ([]engine.Layer, error) {
+	return []engine.Layer{{Command: `CMD ["nginx"]`}, {Command: "RUN apk add nginx", Size: 12 << 20}, {Command: "ADD rootfs.tar.gz /", Size: 8 << 20}}, nil
+}
+
 func (i images) Defaults(context.Context, string) (engine.ImageDefaults, error) {
 	return engine.ImageDefaults{Ports: []engine.PortSpec{{Host: 80, Container: 80, Proto: "tcp"}}, Volumes: []string{"/data"}}, nil
 }

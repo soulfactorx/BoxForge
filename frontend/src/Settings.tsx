@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { call, openURL, type Run, remote, signOut as leaveServer } from "./bridge";
+import { choose, chosen, lang } from "./i18n";
+import { call, openURL, type Run, remote, signOut as leaveServer, viewer } from "./bridge";
 import { Dialog } from "./ui";
 
 export interface UpdateInfo {
@@ -84,7 +85,7 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
     setWorking("cert");
     if (await run(`# 인증서 ${file} 를 엔진이 믿는 목록에 추가, 엔진 재시작`, () => call("TrustCertificate", file))) {
       setCert(null);
-      setNote("인증서를 추가했습니다. 엔진이 다시 시작됐습니다.");
+      setNote("인증서를 추가했습니다.");
     }
     setWorking("");
   };
@@ -153,6 +154,19 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
             ))}
           </div>
         </div>
+        <div className="setting">
+          <span>
+            <strong>언어</strong>
+            <span className="sub">화면의 글을 어느 말로 보여줄지 고릅니다. 영어는 한국어 화면을 옮긴 것이라 어색한 곳이 있을 수 있습니다. 바꾸면 화면이 새로 열립니다.</span>
+          </span>
+          <div className="segmented" role="radiogroup" aria-label="언어" data-keep-text>
+            {(["", "ko", "en"] as const).map((l) => (
+              <button key={l} role="radio" aria-checked={chosen() === l} className={chosen() === l ? "on" : ""} onClick={() => choose(l)}>
+                {l === "" ? (lang() === "en" ? "Auto" : "PC 설정") : l === "ko" ? "한국어" : "English"}
+              </button>
+            ))}
+          </div>
+        </div>
         {tray?.available && (
           <label className="setting">
             <span>
@@ -180,6 +194,7 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
             지금 다른 기기의 브라우저로 서버의 BoxForge를 쓰고 있습니다. 파일을 저장하면 이 브라우저가 내려받고, 폴더 · 파일 경로를 적는 칸은 서버 쪽 경로입니다. 업데이트 뒤 "다시 시작"을 누르면 서버가 새 버전으로 다시 켜지고, 비밀번호를 한 번 다시
             넣어야 합니다. 컨테이너는 그대로 돕니다.
           </p>
+          {viewer() && <p className="note-box">보기 전용으로 로그인했습니다. 목록 · 로그 · 상태를 볼 수 있고, 시작 · 중지 · 삭제 같은 바꾸는 일과 파일 보기 · 터미널은 할 수 없습니다.</p>}
           <button onClick={leaveServer}>로그아웃</button>
         </div>
       )}
@@ -281,9 +296,12 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
         <div className="setting">
           <span>
             <strong>사내 인증서</strong>
-            <span className="sub">이미지를 받을 때 "certificate signed by unknown authority" 오류가 나면, IT 부서에서 받은 루트 인증서(.crt, .pem)를 추가합니다.</span>
+            <span className="sub">
+              이미지를 받을 때 "certificate signed by unknown authority" 오류가 나면, IT 부서에서 받은 루트 인증서(.crt, .pem)를 추가합니다. BoxForge가 설치한 WSL 엔진과
+              BoxForge의 Kubernetes 클러스터에 적용됩니다.{net && !net.canEngine && " 지금 엔진은 WSL 안의 엔진이 아니어서 Kubernetes 클러스터에만 적용됩니다."}
+            </span>
           </span>
-          <button disabled={!net?.canEngine} onClick={() => setCert("")}>
+          <button onClick={() => setCert("")}>
             인증서 추가
           </button>
         </div>
@@ -323,7 +341,7 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
 
       {cert !== null && (
         <Dialog title="사내 인증서 추가" onClose={() => setCert(null)}>
-          <p>엔진이 이 인증서로 서명된 서버를 믿게 됩니다. 추가한 뒤 엔진이 다시 시작되며, 실행 중인 컨테이너는 잠시 멈췄다 켜질 수 있습니다.</p>
+          <p>엔진과 Kubernetes 클러스터가 이 인증서로 서명된 서버를 믿게 됩니다. 추가한 뒤 다시 시작되므로, 실행 중인 컨테이너와 파드는 잠시 멈췄다 켜질 수 있습니다.</p>
           <form
             onSubmit={(e) => {
               e.preventDefault();

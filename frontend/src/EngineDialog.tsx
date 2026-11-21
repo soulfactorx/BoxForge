@@ -38,6 +38,10 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [canInstall, setCanInstall] = useState(false);
+  const [installKind, setInstallKind] = useState("wsl");
+  // On Linux and macOS the engine installed is the ordinary one: offering
+  // it makes sense only while no engine answers.
+  const [connected, setConnected] = useState(true);
   const [installing, setInstalling] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [remote, setRemote] = useState<string | null>(null);
@@ -85,7 +89,11 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
 
   useEffect(() => {
     load();
-    call<SetupStatus>("SetupStatus").then((s) => setCanInstall(s.supported), () => {});
+    call<SetupStatus>("SetupStatus").then((s) => {
+      setCanInstall(s.supported);
+      setInstallKind(s.kind ?? "wsl");
+    }, () => {});
+    call<{ connected: boolean }>("Engine").then((e) => setConnected(e.connected), () => {});
   }, []);
 
   const remove = async () => {
@@ -209,11 +217,17 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
           연결하지 못해 엔진을 바꾸지 않았습니다: {error}
         </p>
       )}
-      {canInstall && targets && !targets.some((t) => t.id === ownEngine) && (
+      {canInstall && targets && !targets.some((t) => t.id === ownEngine) && !(installKind !== "wsl" && connected) && (
         <div className="install-offer">
           <span>
             <strong>Docker Engine이 없나요?</strong>
-            <span className="sub">BoxForge가 무료 Docker Engine을 설치해 드립니다. WSL 설치부터 알아서 합니다.</span>
+            <span className="sub">
+              {installKind === "linux"
+                ? "BoxForge가 무료 Docker Engine을 이 PC에 설치해 드립니다. 관리자 비밀번호를 한 번 묻습니다."
+                : installKind === "macos"
+                  ? "BoxForge가 Colima(무료)를 설치하고 켜 드립니다. Homebrew를 씁니다."
+                  : "BoxForge가 무료 Docker Engine을 설치해 드립니다. WSL 설치부터 알아서 합니다."}
+            </span>
           </span>
           <button className="primary" disabled={busy} onClick={() => setInstalling(true)}>
             Docker Engine 설치

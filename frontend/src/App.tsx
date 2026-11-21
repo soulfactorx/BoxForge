@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Network, type Size, type Volume } from "./bridge";
+import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Network, type Size, type Volume, viewer } from "./bridge";
 import Networks from "./Networks";
 import Volumes from "./Volumes";
 import Builds from "./Builds";
@@ -259,6 +259,11 @@ export default function App() {
         <div className="brand">
           <img src="./icon.svg" alt="" />
           <span>BoxForge</span>
+          {viewer() && (
+            <span className="brand-version viewer-mark" data-testid="viewer-mark" title="보기 전용으로 로그인했습니다. 목록 · 로그 · 상태를 볼 수 있고 바꿀 수는 없습니다.">
+              보기 전용
+            </span>
+          )}
           {appVersion && (
             <span className="brand-version" data-testid="app-version" title="설정에서 업데이트를 확인할 수 있습니다">
               {/^\d/.test(appVersion) ? "v" + appVersion : appVersion}
@@ -383,7 +388,7 @@ export default function App() {
         {page === "images" && <Images
             images={images}
             containers={containers}
-            run={run}
+            run={run} showCli={showCli}
             onRun={(image) => setRunning({ image })}
             onOpen={(id) => setDetail({ id, tab: "overview" })}
           />}

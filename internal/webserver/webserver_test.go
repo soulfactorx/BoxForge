@@ -77,6 +77,31 @@ func TestSignIn(t *testing.T) {
 	}
 }
 
+func TestViewer(t *testing.T) {
+	ts := server(t, Options{
+		Check:         func(p string) bool { return p == "right-one" },
+		CheckViewer:   func(p string) bool { return p == "look-only" },
+		ViewerMethods: []string{"Hello"},
+		Inbox:         t.TempDir(), Outbox: t.TempDir(),
+	})
+	c := &http.Client{Jar: &cookies{}}
+	if code, body := post(t, c, ts.URL+"/api/login", `{"password":"look-only"}`); code != http.StatusOK || !strings.Contains(body, `"viewer":true`) {
+		t.Fatalf("the look-only password: %d %s", code, body)
+	}
+	if _, body := post(t, c, ts.URL+"/api/call/Hello", `["x"]`); !strings.Contains(body, "hello x") {
+		t.Errorf("a reading method: %s", body)
+	}
+	if _, body := post(t, c, ts.URL+"/api/call/Secret", `[]`); !strings.Contains(body, `"error":"viewer"`) {
+		t.Errorf("a method not for viewers answered: %s", body)
+	}
+	if code, _ := post(t, c, ts.URL+"/api/upload", "x", "X-File-Name", "a.boxforge"); code != http.StatusForbidden {
+		t.Errorf("an upload by a viewer: %d", code)
+	}
+	if res, _ := c.Get(ts.URL + "/api/outbox/a"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("a download by a viewer: %d", res.StatusCode)
+	}
+}
+
 func TestOutboxKeepsToItsFolder(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out")

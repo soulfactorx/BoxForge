@@ -4,7 +4,7 @@
 
 Docker를 쉽게, 눈으로 보면서 쓰기 위한 앱입니다. 데스크톱 앱(Windows · Linux · macOS)으로 쓰거나, 서버에 켜 두고 휴대폰 · 다른 PC의 브라우저로 씁니다.
 
-- **무료 엔진만 씁니다.** Docker Desktop이 필요 없습니다. Windows에 Docker Engine이 없으면 BoxForge가 설치해 줍니다.
+- **무료 엔진만 씁니다.** Docker Desktop이 필요 없습니다. Docker Engine이 없으면 BoxForge가 설치해 줍니다.
 - **쉬운 말로 안내합니다.** 버튼마다 무슨 일이 생기는지, 왜 멈췄는지 알려 줍니다.
 - **명령도 함께 보여 줍니다.** 화면에서 한 모든 일은 같은 일을 하는 `docker` 명령으로 하단에 나옵니다.
 - **Docker만이 아닙니다.** Podman, containerd(nerdctl), 다른 PC의 엔진(SSH), 연습용 Kubernetes도 같은 화면으로 다룹니다.
@@ -47,7 +47,10 @@ xattr -dr com.apple.quarantine /Applications/BoxForge.app
 ## 처음 켜면
 
 1. 홈 화면이 뜹니다. 엔진에 연결되어 있지 않으면 **"엔진 설치 · 선택"** 버튼이 보입니다.
-2. Windows에 Docker Engine이 없다면 "Docker Engine 설치"를 누릅니다. WSL 2 준비 → Linux 내려받기(Ubuntu · Debian · Alpine 중 선택) → Docker 설치까지 알아서 합니다. 관리자 권한을 한 번 묻고, Windows를 다시 시작해야 할 수 있습니다.
+2. Docker Engine이 없다면 "Docker Engine 설치"를 누릅니다.
+   - **Windows**: WSL 2 준비 → Linux 내려받기(Ubuntu · Debian · Alpine 중 선택) → Docker 설치까지 알아서 합니다. 관리자 권한을 한 번 묻고, Windows를 다시 시작해야 할 수 있습니다.
+   - **Linux**: 배포판의 패키지 관리자로 설치합니다. 관리자 비밀번호를 한 번 묻고, 끝난 뒤 한 번 로그아웃했다가 다시 로그인해야 할 수 있습니다.
+   - **macOS**: Homebrew로 Colima를 설치하고 켭니다. Homebrew가 먼저 있어야 합니다.
 3. 홈의 "바로 실행하기"에서 PostgreSQL이나 nginx를 눌러 첫 컨테이너를 실행해 보세요.
 
 이미 엔진이 있으면 그대로 연결됩니다. 여러 엔진이 있으면 사이드바의 엔진 카드에서 고릅니다.
@@ -56,7 +59,7 @@ xattr -dr com.apple.quarantine /Applications/BoxForge.app
 
 | 엔진 | 조건 |
 |---|---|
-| Docker Engine | 이 PC의 것, 또는 Windows의 WSL 배포판 안의 것. 없으면 BoxForge가 설치(Windows) |
+| Docker Engine | 이 PC의 것, 또는 Windows의 WSL 배포판 안의 것. 없으면 BoxForge가 설치 |
 | 다른 Docker 호환 엔진 | Kiri, Colima, Rancher Desktop 등 Docker context로 등록된 것 |
 | 다른 PC · 서버의 Docker | 엔진 선택 창에서 `user@host`를 추가. SSH 키 로그인이 되어 있어야 함 |
 | Podman (실험적) | 설치되어 있으면 목록에 나옴. 고르면 BoxForge가 Podman의 API를 켜서 연결 |
@@ -70,14 +73,14 @@ xattr -dr com.apple.quarantine /Applications/BoxForge.app
 |---|---|
 | 홈 | 실행 중인 것, 자주 쓰는 프로그램 바로 실행, 실패한 컨테이너와 이유, 디스크 정리, 용어 설명 |
 | 컨테이너 | 시작 · 중지 · 재시작 · 이름 변경 · 삭제, 실시간 로그, 터미널(앱 안 · 외부), CPU · 메모리 그래프, 안의 파일 보기, 멈춘 이유 설명, 설정 바꿔 다시 만들기, 다른 엔진으로 복사, 파일로 내보내기 · 가져오기 |
-| Compose | 프로젝트 올리기 · 내리기, 구조 그림, 서비스별 조작, 파일 편집과 적용 미리 보기, 로그 |
+| Compose | 프로젝트 올리기 · 내리기, 구조 그림과 그림에서 서비스 고치기 · 추가 · 삭제, 서비스별 조작, 파일 편집과 적용 미리 보기, 로그 |
 | 관계도 | 포트 · 컨테이너 · 네트워크 · 볼륨의 관계를 한 그림으로 |
-| 이미지 | 받기, 태그, 삭제, 정리, 바로 실행, 다른 엔진으로 복사 |
+| 이미지 | 받기, Docker Hub에서 찾기, 태그, 레지스트리에 올리기(push), 레이어 보기, 삭제, 정리, 바로 실행, 다른 엔진으로 복사 |
 | 볼륨 | 만들기, 삭제, 정리, 안에 든 파일 보기와 내려받기, 다른 엔진으로 복사 |
 | 네트워크 | 만들기, 컨테이너 연결 · 해제, 삭제 |
 | 빌드 | Dockerfile로 이미지 만들기, 단계별 진행, 설정 저장 |
 | Kubernetes | 컨테이너 하나로 도는 연습용 클러스터(k3s), 파드 · 워크로드 · 서비스, 파드 터미널, 서비스를 내 PC 포트로 연결, YAML 적용 |
-| 설정 | 테마, 트레이, 자동 업데이트, 엔진, 회사 네트워크(프록시 · 인증서), 레지스트리 로그인 |
+| 설정 | 언어(한국어 · English), 테마, 트레이, 자동 업데이트, 엔진, 회사 네트워크(프록시 · 인증서), 레지스트리 로그인 |
 
 - **찾기**: `Ctrl+K`를 누르면 어디서든 화면 · 컨테이너 · 이미지를 찾아 이동합니다. 인터넷에서 본 `docker run …` 명령을 붙여넣으면 실행 창에 풀어서 채워 줍니다.
 - **내보내기 · 가져오기**: 컨테이너를 이미지 · 볼륨 데이터 · 설정과 함께 `.boxforge` 파일 하나로 내보내 동료에게 주거나 다른 PC로 옮깁니다. Docker와 containerd 사이에서도 오갑니다.
@@ -87,14 +90,14 @@ xattr -dr com.apple.quarantine /Applications/BoxForge.app
 ## 알아 둘 것
 
 - **회사 PC**: BIOS에서 가상화가 꺼져 있거나 WSL이 정책으로 막혀 있으면 엔진을 설치할 수 없습니다. IT 부서에 "WSL 2 사용"을 요청해야 합니다.
-- **회사 프록시 · 사내 인증서**: 설정 → 회사 네트워크에서 넣습니다(BoxForge가 설치한 WSL 엔진에 적용). 프록시는 새로 만드는 Kubernetes 클러스터에도 전달되지만 인증서는 아직 아닙니다.
+- **회사 프록시 · 사내 인증서**: 설정 → 회사 네트워크에서 넣습니다. BoxForge가 설치한 WSL 엔진과 BoxForge의 Kubernetes 클러스터에 적용됩니다.
 - **비공개 레지스트리**: 설정 → 레지스트리 로그인. PC에 `docker` 명령이 있어야 합니다.
 - **Compose · 빌드**: PC(또는 엔진이 있는 WSL 배포판)의 `docker` 명령으로 실행합니다. BoxForge가 설치한 엔진에는 들어 있습니다.
 - **엔진 유지 (Windows)**: BoxForge가 설치한 엔진은 앱이 켜져 있는 동안 돕니다. 설정 → "앱을 닫아도 엔진 유지"를 켜면 앱을 닫아도 컨테이너가 계속 돕니다.
 - **트레이**: 창을 닫아도 트레이 아이콘으로 남아 계속 실행됩니다(설정 → 화면에서 끌 수 있음). GNOME은 "AppIndicator" 확장이 있어야 트레이가 보이며, 없으면 닫을 때 그냥 꺼집니다. macOS에는 트레이가 없습니다.
 - **내보낸 파일**: 환경변수(비밀번호 포함)와 볼륨 데이터가 그대로 들어갑니다. 건넬 때 주의하고, 모르는 사람이 준 파일은 가져오지 마세요.
-- **개인 정보**: 사용 정보를 어디에도 보내지 않습니다. 업데이트 확인 때만 GitHub에 접속합니다.
-- **확인이 덜 된 곳**: macOS 판, Podman · containerd(실험적), Windows · ARM용 서버. 문제가 있으면 알려 주세요.
+- **개인 정보**: 사용 정보를 어디에도 보내지 않습니다. 스스로 접속하는 곳은 업데이트 확인(GitHub)뿐이고, "Docker Hub에서 찾기"를 쓰면 그 검색어가 Docker Hub로 갑니다.
+- **확인이 덜 된 곳**: macOS 판과 macOS · Linux의 엔진 자동 설치, Podman · containerd(실험적), Windows · ARM용 서버, 영어 화면의 문구. 문제가 있으면 알려 주세요.
 
 문제가 있으면 [이슈](https://github.com/soulfactorx/BoxForge/issues)로 알려 주세요. 하단의 "기록"에 나오는 명령과 오류 문구를 함께 적어 주시면 빨리 찾을 수 있습니다.
 

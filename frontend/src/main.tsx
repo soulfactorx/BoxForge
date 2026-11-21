@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { inWindow, setServer } from "./bridge";
+import { start as startLanguage } from "./i18n";
 import Login from "./Login";
 import "./style.css";
 
@@ -28,6 +29,8 @@ function Root() {
   if (auth === null) return null;
   return auth ? <App /> : <Login onDone={ask} />;
 }
+
+startLanguage();
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -53,6 +53,9 @@ type Status struct {
 	Installed    bool     `json:"installed"`
 	Running      bool     `json:"running"`
 	NeedsRestart bool     `json:"needsRestart"` // Windows must restart before the next step
+	NeedsRelogin bool     `json:"needsRelogin"` // Linux: the user must sign in again to use the engine
+	Kind         string   `json:"kind"`         // wsl, linux, macos: which installation this is
+	Engine       string   `json:"engine"`       // the engine target to use once installed
 	Error        string   `json:"error"`
 	Steps        []Step   `json:"steps"`
 	Flavors      []Flavor `json:"flavors"`
@@ -558,13 +561,10 @@ func supported() (bool, string) {
 	if os.Getenv("BOXFORGE_WSL") != "" {
 		return true, ""
 	}
-	switch runtime.GOOS {
-	case "windows":
+	if runtime.GOOS == "windows" {
 		return true, ""
-	case "linux":
-		return false, "Linux에서는 터미널에서 두 줄이면 설치됩니다. 아래 안내를 따라 주세요."
 	}
-	return false, "이 운영체제에서의 자동 설치는 아직 만들지 않았습니다."
+	return nativeSupported()
 }
 
 // dataDir is where the distribution's disk and the download are kept.
@@ -642,11 +642,16 @@ func (in *Installer) Status() Status {
 		return in.snapshot()
 	}
 	ok, why := supported()
-	st := Status{Supported: ok, Reason: why, Steps: append([]Step{}, plan...), NeedsRestart: in.st.NeedsRestart, Error: in.st.Error, Log: in.st.Log, Flavors: flavors}
+	st := Status{Supported: ok, Reason: why, Steps: append([]Step{}, planFor()...), NeedsRestart: in.st.NeedsRestart, NeedsRelogin: in.st.NeedsRelogin, Error: in.st.Error, Log: in.st.Log, Flavors: flavors}
+	st.Kind, st.Engine = "wsl", EngineID
+	if n := native(); n != "" {
+		st.Kind, st.Engine, st.Flavors = n, NativeEngine(), nil
+		st.Installed = in.st.Installed
+	}
 	for i := range st.Steps {
 		st.Steps[i].State = "todo"
 	}
-	if ok {
+	if ok && native() == "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		// Only what can be seen without starting a stopped distribution.
@@ -721,7 +726,10 @@ func (in *Installer) Start(o Options) bool {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	in.cancel = cancel
-	in.st = Status{Supported: true, Running: true, Steps: append([]Step{}, plan...), Flavors: flavors}
+	in.st = Status{Supported: true, Running: true, Steps: append([]Step{}, planFor()...), Flavors: flavors, Kind: "wsl", Engine: EngineID}
+	if n := native(); n != "" {
+		in.st.Kind, in.st.Engine, in.st.Flavors = n, NativeEngine(), nil
+	}
 	for i := range in.st.Steps {
 		in.st.Steps[i].State = "todo"
 	}
@@ -729,13 +737,19 @@ func (in *Installer) Start(o Options) bool {
 
 	go func() {
 		defer cancel()
-		active, err := in.run(ctx, o)
+		var active string
+		var err error
+		if native() != "" {
+			active, err = in.runNative(ctx, o)
+		} else {
+			active, err = in.run(ctx, o)
+		}
 		in.update(func(st *Status) {
 			st.Running = false
 			st.Done, st.Total = 0, 0
 			switch {
 			case err == nil:
-				st.Installed = !st.NeedsRestart
+				st.Installed = !st.NeedsRestart && !st.NeedsRelogin
 			case ctx.Err() != nil:
 				st.Error = "설치를 취소했습니다. 다시 시작하면 끝난 단계는 건너뜁니다."
 			default:

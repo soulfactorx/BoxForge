@@ -88,6 +88,14 @@ type Image struct {
 	InUse   int      `json:"inUse"` // containers made from it; filled in by the hub
 }
 
+// Layer is one step of an image's making: the command that made it and
+// what it added. Size is 0 for steps that changed no files.
+type Layer struct {
+	Command string `json:"command"`
+	Size    int64  `json:"size"`
+	Created int64  `json:"created"`
+}
+
 // PullProgress is one step of an image download. Total is 0 while unknown.
 type PullProgress struct {
 	Status  string `json:"status"`
@@ -341,6 +349,8 @@ type ImageService interface {
 	Prune(ctx context.Context) (int64, error)
 	// Defaults returns the ports and data folders the image declares.
 	Defaults(ctx context.Context, ref string) (ImageDefaults, error)
+	// History returns the steps the image was built in, newest first.
+	History(ctx context.Context, ref string) ([]Layer, error)
 	// Save returns the image as a tar stream, as `docker save` writes it.
 	Save(ctx context.Context, ref string) (io.ReadCloser, error)
 	// Load takes in such a stream, as `docker load` does.

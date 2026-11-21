@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Avatar, splitRef } from "./brand";
 import { call, on, type Container, type Image, type PullState, type Run } from "./bridge";
 import { ago, bytes, isUp, shortId } from "./format";
-import { Dialog, Icon, IconButton, Progress } from "./ui";
+import { HubSearch, LayersDialog, PushDialog } from "./ImageExtras";
+import { Dialog, Icon, IconButton, Menu, Progress } from "./ui";
 
 interface Props {
   images: Image[];
   containers: Container[];
   run: Run;
+  showCli: (cmd: string) => void;
   onRun: (image: string) => void;
   onOpen: (containerId: string) => void;
 }
@@ -31,7 +33,10 @@ interface Row {
   users: Container[];
 }
 
-export default function Images({ images, containers, run, onRun, onOpen }: Props) {
+export default function Images({ images, containers, run, showCli, onRun, onOpen }: Props) {
+  const [layersOf, setLayersOf] = useState<string | null>(null);
+  const [pushing, setPushing] = useState<string[] | null>(null);
+  const [searching, setSearching] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<{ key: SortKey; down: boolean }>({ key: "name", down: false });
@@ -218,6 +223,9 @@ export default function Images({ images, containers, run, onRun, onOpen }: Props
         <button className="primary" type="submit" disabled={!ref.trim() || !!pull}>
           받기
         </button>
+        <button type="button" onClick={() => setSearching(ref.trim())}>
+          Docker Hub에서 찾기
+        </button>
       </form>
       {pull && (
         <div className="pull-progress" data-testid="pull-progress">
@@ -279,6 +287,12 @@ export default function Images({ images, containers, run, onRun, onOpen }: Props
                   <IconButton icon="tag" label="태그 추가" onClick={() => setTagging({ row: r, draft: "" })} />
                   {r.ref && <IconButton icon="send" label="다른 엔진으로 복사" onClick={() => openCopy(r)} />}
                   <IconButton icon="trash" label="삭제" tone="danger" onClick={() => setRemoving(r)} />
+                  <Menu
+                    items={[
+                      { label: "레이어 보기", onClick: () => setLayersOf(r.ref || r.im.id) },
+                      ...(r.ref ? [{ label: "레지스트리에 올리기 (push)", onClick: () => setPushing(r.im.tags) }] : []),
+                    ]}
+                  />
                 </td>
               </tr>
             ))}
@@ -320,6 +334,30 @@ export default function Images({ images, containers, run, onRun, onOpen }: Props
             )}
           </div>
         </Dialog>
+      )}
+
+      {layersOf && <LayersDialog image={layersOf} showCli={showCli} onClose={() => setLayersOf(null)} />}
+      {pushing && (
+        <PushDialog
+          tags={pushing}
+          run={run}
+          onClose={() => setPushing(null)}
+          onDone={(pushed) => {
+            setPushing(null);
+            setNote(`${pushed} 을(를) 레지스트리에 올렸습니다.`);
+          }}
+        />
+      )}
+      {searching !== null && (
+        <HubSearch
+          query={searching}
+          showCli={showCli}
+          onClose={() => setSearching(null)}
+          onPick={(name) => {
+            setRef(name);
+            setSearching(null);
+          }}
+        />
       )}
 
       {tagging && (

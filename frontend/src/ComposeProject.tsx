@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ServiceForm from "./ComposeEdit";
 import { call, openURL, type Container, type Run } from "./bridge";
 import { published } from "./Containers";
 import { ago, isUp, stateLabel, statusText } from "./format";
@@ -53,7 +54,7 @@ const changeText: Record<Change["action"], string> = {
 const BOX = { w: 250, h: 86, gapX: 90, gapY: 22 };
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
-function Graph({ services, onOpen }: { services: Service[]; onOpen: (id: string) => void }) {
+function Graph({ services, onOpen, onEdit }: { services: Service[]; onOpen: (id: string) => void; onEdit?: (name: string) => void }) {
   const [focus, setFocus] = useState<string | null>(null);
   const layout = useMemo(() => {
     const by = new Map(services.map((s) => [s.name, s]));
@@ -150,6 +151,31 @@ function Graph({ services, onOpen }: { services: Service[]; onOpen: (id: string)
               <text className="map-sub" x="14" y="76">
                 {s.volumes.length ? clip("볼륨 " + s.volumes.join(", "), 38) : ""}
               </text>
+              {onEdit && (
+                <g
+                  className="map-edit"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${s.name} 설정 고치기`}
+                  data-testid={`svc-edit-${s.name}`}
+                  transform={`translate(${BOX.w - 34},6)`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEdit(s.name);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onEdit(s.name);
+                    }
+                  }}
+                >
+                  <title>{s.name} 설정 고치기</title>
+                  <rect width="28" height="24" rx="6" />
+                  <path d="M9 16.5l1-3.5 6.5-6.5 2.5 2.5-6.5 6.5z M15 8l2.5 2.5" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </g>
+              )}
             </g>
           );
         })}
@@ -185,8 +211,14 @@ export function serviceLines(text: string) {
   return out;
 }
 
-function FileTab({ project, run, busy, act, onApplied }: { project: Project; run: Run; busy: boolean; act: Props["act"]; onApplied: () => void }) {
-  const [file, setFile] = useState(project.files[0] ?? "");
+interface Draft {
+  file: string;
+  text: string;
+  what: string;
+}
+
+function FileTab({ project, run, busy, act, onApplied, draft }: { project: Project; run: Run; busy: boolean; act: Props["act"]; onApplied: () => void; draft: Draft | null }) {
+  const [file, setFile] = useState(draft?.file ?? project.files[0] ?? "");
   const [saved, setSaved] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [error, setError] = useState("");
@@ -202,7 +234,8 @@ function FileTab({ project, run, busy, act, onApplied }: { project: Project; run
     call<string>("ComposeFile", file).then(
       (t) => {
         setSaved(t);
-        setText(t);
+        // A change made in the picture's form arrives as text not saved yet.
+        setText(draft && draft.file === file ? draft.text : t);
       },
       (e) => setError(e.message),
     );
@@ -294,6 +327,11 @@ function FileTab({ project, run, busy, act, onApplied }: { project: Project; run
             {saved === null ? "읽는 중…" : dirty ? "바뀜 · 아직 저장 안 함" : "저장됨"}
           </span>
         </div>
+        {draft && draft.file === file && text === draft.text && (
+          <p className="note-box" data-testid="draft-note">
+            그림에서 고친 내용({draft.what})을 파일의 글에 반영했습니다. 아직 저장하지 않았습니다. 아래에서 적용하면 일어날 일을 확인하고 저장하세요.
+          </p>
+        )}
         <textarea ref={box} className="editor" aria-label="compose 파일 내용" spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} />
         <div className="dialog-actions">
           <button disabled={!dirty} onClick={() => setText(saved ?? "")}>
@@ -450,6 +488,9 @@ function LogsTab({ project, showCli }: { project: Project; showCli: (cmd: string
 
 export default function ComposeProject({ project, run, showCli, busy, act, onDown, onOpen, onBack }: Props) {
   const [tab, setTab] = useState<Tab>("graph");
+  // A service being changed in the picture ("" for a new one), and what the form made of the file.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [config, setConfig] = useState<any>(null);
   const [round, setRound] = useState(0);
 
@@ -555,7 +596,13 @@ export default function ComposeProject({ project, run, showCli, busy, act, onDow
 
       {tab === "graph" && (
         <>
-          <Graph services={services} onOpen={onOpen} />
+          {project.files.length > 0 && (
+            <div className="graph-bar">
+              <button onClick={() => setEditing("")}>서비스 추가</button>
+              <span className="muted">상자의 연필을 누르면 그 서비스의 설정(이미지 · 포트 · 환경변수 · 저장 공간)을 고칩니다.</span>
+            </div>
+          )}
+          <Graph services={services} onOpen={onOpen} onEdit={project.files.length > 0 ? setEditing : undefined} />
           <p className="muted footnote">
             화살표는 서비스가 필요로 하는 대상을 가리킵니다. Compose는 화살표가 가리키는 쪽을 먼저 시작합니다.
             {services.every((s) => s.deps.length === 0) && " 이 프로젝트에는 서로 기다리는 관계(depends_on)가 없습니다."}
@@ -629,7 +676,33 @@ export default function ComposeProject({ project, run, showCli, busy, act, onDow
         </table>
       )}
 
-      {tab === "file" && <FileTab project={project} run={run} busy={busy} act={act} onApplied={() => setRound((n) => n + 1)} />}
+      {tab === "file" && (
+        <FileTab
+          project={project}
+          run={run}
+          busy={busy}
+          act={act}
+          draft={draft}
+          onApplied={() => {
+            setDraft(null);
+            setRound((n) => n + 1);
+          }}
+        />
+      )}
+      {editing !== null && (
+        <ServiceForm
+          file={project.files[0]}
+          name={editing}
+          others={services.map((s) => s.name).filter((n) => n !== editing)}
+          showCli={showCli}
+          onClose={() => setEditing(null)}
+          onDraft={(text, what) => {
+            setDraft({ file: project.files[0], text, what });
+            setEditing(null);
+            setTab("file");
+          }}
+        />
+      )}
       {tab === "logs" && <LogsTab project={project} showCli={showCli} />}
     </div>
   );

@@ -38,6 +38,7 @@ func main() {
 	keyFile := flag.String("key", "", "TLS key file")
 	setPassword := flag.Bool("set-password", false, "choose the password and exit")
 	newPassword := flag.Bool("new-password", false, "make up a new password, show it and exit")
+	setViewer := flag.Bool("set-viewer-password", false, "choose a second password that can look but change nothing, and exit (empty: remove it)")
 	insecure := flag.Bool("insecure-network", false, "allow listening on a network without TLS (a proxy in front provides it)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
@@ -60,6 +61,26 @@ func main() {
 			log.Fatal(err)
 		}
 		fmt.Println("비밀번호를 바꿨습니다.")
+		return
+	case *setViewer:
+		viewers := webserver.ViewerPasswordsIn(dir)
+		fmt.Print("보기 전용 비밀번호 (8자 이상, 비워 두면 없앰): ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if err := viewers.Clear(); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Println("보기 전용 비밀번호를 없앴습니다.")
+			return
+		}
+		if passwords.Check(line) {
+			log.Fatal("관리용 비밀번호와 같은 것은 쓸 수 없습니다.")
+		}
+		if err := viewers.Set(line); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("보기 전용 비밀번호를 정했습니다.")
 		return
 	case *newPassword:
 		pw, err := passwords.Generate()
@@ -130,6 +151,7 @@ func main() {
 	}
 	srv := webserver.New(a, webserver.Options{
 		UI: ui, Check: passwords.Check, Secure: secure, Outbox: outbox, Inbox: inbox,
+		CheckViewer: viewerCheck(dir), ViewerMethods: lookOnly,
 		// A window on the server's own screen is not for a browser elsewhere.
 		Denied: []string{"OpenTerminal", "CloseTo", "SetupStart"},
 	})
@@ -189,4 +211,30 @@ func served(err error) {
 		select {}
 	}
 	log.Fatal(err)
+}
+
+// viewerCheck is the check of the look-only password, nil when none is set.
+func viewerCheck(dir string) func(string) bool {
+	viewers := webserver.ViewerPasswordsIn(dir)
+	if env := os.Getenv("BOXFORGE_VIEWER_PASSWORD"); env != "" {
+		if err := viewers.Set(env); err != nil {
+			log.Fatal("BOXFORGE_VIEWER_PASSWORD: ", err)
+		}
+	}
+	if !viewers.Exists() {
+		return nil
+	}
+	return viewers.Check
+}
+
+// lookOnly is what a look-only sign-in may call: the methods that read
+// lists, states, logs and figures, and change nothing. Reading files out
+// of containers and volumes, terminals and the cluster's credentials are
+// left out on purpose.
+var lookOnly = []string{
+	"Engine", "Engines", "EngineLabel", "MemoryUsed", "Version", "CheckUpdate", "Setting", "Network", "Tray", "SetupStatus", "DockerCLI",
+	"Containers", "InspectContainer", "StartLogs", "StopLogs", "StartStats", "StopStats", "ContainerSizes",
+	"Images", "ImageDefaults", "ImageHistory", "SearchImages", "Volumes", "VolumeSizes", "Networks", "DiskUsage", "Registries",
+	"ComposeVersion", "ComposeLogs",
+	"KubeStatus", "KubeGet", "KubeDescribe", "KubeLogs", "KubeForwards",
 }

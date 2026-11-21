@@ -41,6 +41,20 @@ type Passwords struct{ file string }
 // PasswordsIn returns the password kept in dir.
 func PasswordsIn(dir string) Passwords { return Passwords{filepath.Join(dir, "server-password.json")} }
 
+// ViewerPasswordsIn returns the look-only password kept in dir.
+func ViewerPasswordsIn(dir string) Passwords {
+	return Passwords{filepath.Join(dir, "server-viewer-password.json")}
+}
+
+// Clear removes the password: nobody can sign in with it any more.
+func (p Passwords) Clear() error {
+	err := os.Remove(p.file)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 // Set stores a new password.
 func (p Passwords) Set(password string) error {
 	if len(password) < 8 {

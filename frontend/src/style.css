@@ -1075,3 +1075,30 @@ fieldset.plain legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
   .main { padding: 12px 16px 16px; }
   .statusbar { min-height: 30px; padding: 4px 12px; }
 }
+
+.layers { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; max-height: 52vh; overflow: auto; }
+.layers li { display: grid; grid-template-columns: 110px 76px minmax(0, 1fr); gap: 10px; align-items: center; font-size: 13px; }
+.layers li.empty { opacity: 0.6; }
+.layer-bar { height: 8px; border-radius: 4px; background: var(--hover); overflow: hidden; }
+.layer-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.layer-size { text-align: right; font-variant-numeric: tabular-nums; }
+.layers code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.push-log { max-height: 180px; min-height: 0; margin-top: 10px; }
+.hub-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 4px; max-height: 46vh; overflow: auto; }
+.hub-list button { width: 100%; height: auto; text-align: left; display: grid; gap: 2px; padding: 8px 10px; border: 1px solid transparent; background: none; border-radius: 8px; }
+.hub-list button:hover { background: var(--hover); border-color: var(--line); }
+.hub-name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.hub-name .muted { font-weight: 400; font-size: 12.5px; }
+.badge { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+@media (max-width: 760px) { .layers li { grid-template-columns: 60px 64px minmax(0, 1fr); } }
+
+.viewer-mark { color: var(--accent); border-color: var(--accent); }
+
+.graph-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.map-edit { cursor: pointer; }
+.map-edit rect { fill: var(--panel); stroke: var(--line); }
+.map-edit path { stroke: var(--muted); }
+.map-edit:hover rect, .map-edit:focus rect { fill: var(--hover); stroke: var(--accent); }
+.map-edit:hover path, .map-edit:focus path { stroke: var(--accent); }
+.run-form textarea.lines { min-height: 0; font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: 13px; resize: vertical; }
+.dialog-actions .spacer { flex: 1; }
