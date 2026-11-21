@@ -298,11 +298,24 @@ func (a *App) ComposeEdit(text string, e ServiceEdit) (string, error) {
 				drop(svc, key)
 				return
 			}
+			// The entries that stay keep their node, and with it the
+			// comment written beside them.
+			had := map[string]*yaml.Node{}
+			if old := get(svc, key); old != nil && old.Kind == yaml.SequenceNode {
+				for _, item := range old.Content {
+					if item.Kind == yaml.ScalarNode {
+						had[item.Value] = item
+					}
+				}
+			}
 			seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
 			for _, v := range values {
-				if quote {
+				switch {
+				case had[v] != nil:
+					seq.Content = append(seq.Content, had[v])
+				case quote:
 					seq.Content = append(seq.Content, quoted(v))
-				} else {
+				default:
 					seq.Content = append(seq.Content, scalar(v))
 				}
 			}

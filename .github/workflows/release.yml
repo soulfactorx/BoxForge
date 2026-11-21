@@ -154,8 +154,42 @@ jobs:
           path: out/*
           if-no-files-found: error
 
+  # Nothing is published that fails the screens' tests.
+  e2e:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            e2e/package-lock.json
+      - name: Build the UI
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Browser
+        working-directory: e2e
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Test the screens
+        working-directory: e2e
+        run: npx playwright test --trace off
+      - name: Screenshots of what failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failures
+          path: e2e/test-results
+          retention-days: 7
+
   publish:
-    needs: [plan, build]
+    needs: [plan, build, e2e]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

@@ -28,6 +28,20 @@ volumes:
   pgdata: {}
 `
 
+func TestComposeEditKeepsItemComments(t *testing.T) {
+	a := &App{}
+	in := "services:\n  web:\n    image: nginx\n    ports:\n      - \"8081:80\"          # this PC's 8081\n    restart: unless-stopped\n"
+	e, err := a.ComposeService(in, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Environment = []string{"MODE=prod"}
+	out, err := a.ComposeEdit(in, e)
+	if err != nil || !strings.Contains(out, "# this PC's 8081") || !strings.Contains(out, "MODE=prod") {
+		t.Errorf("a list left as it was lost its comment: %v\n%s", err, out)
+	}
+}
+
 func TestComposeEdit(t *testing.T) {
 	a := &App{}
 	web, err := a.ComposeService(sample, "web")

@@ -1,0 +1,12 @@
+{
+  "name": "boxforge-e2e",
+  "private": true,
+  "description": "BoxForge's screens, driven in a browser against a real Docker engine.",
+  "scripts": {
+    "test": "playwright test --trace off"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.10.0"
+  }
+}

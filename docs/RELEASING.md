@@ -7,8 +7,9 @@
 1. `wails.json`의 `info.productVersion`을 새 버전으로 올린다.
 2. `CHANGELOG.md` 맨 위에 그 버전의 절(`## 1.2.3`)을 쓴다. 사용자에게 보이는 글이므로 사용자의 말로, 바뀐 것만. 이 절이 없으면 릴리스가 실패한다.
 3. 검사: `cd frontend && npm run build`를 먼저 하고(Go 프로그램이 화면 파일을 안에 넣는다), `gofmt -l .`(출력 없어야 함), `go vet ./internal/... ./cmd/... ./frontend .`, `go test ./internal/...`.
-4. 커밋해서 `main`에 올린다.
-5. Actions의 "Release" 실행이 끝나면 릴리스 페이지에 아래 파일이 있는지 확인한다.
+4. 화면 테스트(`e2e/`)를 돌린다. 실제 Docker가 있어야 한다: `cd e2e && npm ci && npx playwright test`. Docker Hub에 닿지 않는 곳에서는 `E2E_ALPINE`, `E2E_REGISTRY`로 다른 이미지를 준다.
+5. 커밋해서 `main`에 올린다. 릴리스 작업도 화면 테스트를 다시 돌리며, 하나라도 실패하면 릴리스를 내지 않는다(실패한 화면의 스크린숏이 Actions의 결과물로 남는다).
+6. Actions의 "Release" 실행이 끝나면 릴리스 페이지에 아래 파일이 있는지 확인한다.
 
 | 파일 | 무엇 |
 |---|---|

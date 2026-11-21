@@ -176,6 +176,8 @@ nav { flex: 1; }
 .name-line .icon { width: 15px; height: 15px; }
 .hover-only { visibility: hidden; }
 tr:hover .hover-only, .hover-only:focus-within { visibility: visible; }
+/* Where there is no pointer to hover with (a phone), it is always there. */
+@media (hover: none) { .hover-only { visibility: visible; } }
 button.link.name { padding: 0; color: var(--text); text-align: left; }
 button.link.name:hover { color: var(--accent); }
 .footnote { color: var(--muted); font-size: 13px; margin: 10px 2px; }

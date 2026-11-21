@@ -75,7 +75,9 @@ export function PushDialog({ tags, run, onClose, onDone }: { tags: string[]; run
     [],
   );
   // "nginx" or "library/nginx" has no owner of the user's: it would go to Docker's own.
-  const repo = ref.split(":")[0];
+  // The tag is what follows the last ":" after the last "/": a registry's
+  // address ("localhost:5000/…") has a ":" of its own.
+  const repo = ref.replace(/:[^/:]*$/, "");
   const noOwner = !!ref && !repo.includes("/");
   const go = async () => {
     setBusy(true);

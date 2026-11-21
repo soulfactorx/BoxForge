@@ -290,7 +290,7 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
                   <Menu
                     items={[
                       { label: "레이어 보기", onClick: () => setLayersOf(r.ref || r.im.id) },
-                      ...(r.ref ? [{ label: "레지스트리에 올리기 (push)", onClick: () => setPushing(r.im.tags) }] : []),
+                      ...(r.ref ? [{ label: "레지스트리에 올리기 (push)", onClick: () => setPushing([r.ref, ...r.im.tags.filter((t) => t !== r.ref)]) }] : []),
                     ]}
                   />
                 </td>
