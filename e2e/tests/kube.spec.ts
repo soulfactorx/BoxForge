@@ -93,7 +93,7 @@ test("deploy with the helper: address, storage, settings, and the picture", asyn
   await page.getByRole("button", { name: "내 PC로 연결 (8080)" }).click();
   await expect(page.getByTestId("ingress-bfe2e-web").getByRole("link")).toHaveAttribute("href", "http://bfe2e-web.localhost:8080/");
   await expect
-    .poll(async () => (await request.get("http://127.0.0.1:8080/", { headers: { Host: "bfe2e-web.localhost" } }).catch(() => null))?.status(), { timeout: 60_000 })
+    .poll(async () => (await request.get("http://127.0.0.1:8080/", { headers: { Host: "bfe2e-web.localhost" } }).catch(() => null))?.status(), { timeout: 180_000 })
     .toBe(200);
 
   // The storage it asked for, in use by its pod.

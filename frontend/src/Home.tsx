@@ -54,7 +54,10 @@ export default function Home({ engine, containers, images, volumes, run, go, onR
     setClearing(false);
     if (await run(`docker rmi ${leftovers.join(" ")}`, () => call("RemoveLeftovers"))) {
       setNote(`BoxForge가 남긴 이미지 ${leftovers.length}개를 지웠습니다.`);
-      measure();
+      // All went. Not asked again now: the app's copy of the image list may
+      // not have caught up yet and would bring them back for a moment.
+      setLeftovers([]);
+      call<Usage>("DiskUsage").then(setUsage, () => {});
     }
   };
   const key = engine.connected ? mine.length + ":" + images.length + ":" + volumes.length : "";

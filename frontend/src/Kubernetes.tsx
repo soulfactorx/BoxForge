@@ -285,6 +285,8 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const shownData = useMemo(() => mine([...configs, ...secrets]).filter((c) => c.metadata.name !== "kube-root-ca.crt").sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [configs, secrets, showSystem]);
   const shownPvc = useMemo(() => mine(pvcs).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [pvcs, showSystem]);
   const traefik = forwards.find((f) => f.namespace === "kube-system" && f.service === "traefik" && f.port === 80);
+  // k3s installs its way in a minute or two after it first starts.
+  const gate = services.find((s) => s.metadata.namespace === "kube-system" && s.metadata.name === "traefik");
   const shownSvc = useMemo(() => mine(services).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [services, showSystem]);
   const warnings = useMemo(
     () =>
@@ -605,8 +607,11 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                     클러스터의 입구(Traefik, 80번)를 이 PC의 8080번 포트로 잇습니다. 그다음 <code>이름.localhost:8080</code> 으로 접속합니다.
                   </span>
                   <span>
-                    <button onClick={openAddress}>내 PC로 연결 (8080)</button>
+                    <button onClick={openAddress} disabled={!gate}>
+                      내 PC로 연결 (8080)
+                    </button>
                   </span>
+                  {!gate && <span className="sub">클러스터의 입구를 아직 준비하는 중입니다. 처음 켠 뒤 1~2분 걸립니다.</span>}
                 </>
               )}
             </div>
