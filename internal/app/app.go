@@ -215,6 +215,13 @@ func (a *App) UseEngine(id string) error {
 	a.cancel()
 	_ = a.rt.Close()
 	a.rt, a.target = rt, t
+	// What the page shows belongs to the engine just left. It is cleared
+	// now: should the new engine's lists fail to load, the page must show
+	// that, not the other engine's things as if they were this one's.
+	a.emit(hub.EventContainers, []engine.Container{})
+	a.emit(hub.EventImages, []engine.Image{})
+	a.emit(hub.EventVolumes, []engine.Volume{})
+	a.emit(hub.EventNetworks, []engine.Network{})
 	a.follow()
 	a.emu.Unlock()
 	a.keepAlive()
