@@ -79,7 +79,13 @@ func connect(t engines.Target) (engine.Runtime, error) {
 		return rt, err
 	case "ssh":
 		return docker.ConnectDialer(t.Dialer())
-	case "context", "podman":
+	case "podman":
+		host, err := engines.PodmanHost(t)
+		if err != nil {
+			return nil, err
+		}
+		return docker.Connect(host)
+	case "context":
 		return docker.Connect(t.Host)
 	}
 	return docker.Connect(engines.DefaultHost())
@@ -149,6 +155,7 @@ func (a *App) hangUp() {
 // Stop ends the mirroring and closes the engine connection.
 func Stop(a *App) {
 	a.hangUp()
+	engines.StopPodman()
 	a.emu.Lock()
 	defer a.emu.Unlock()
 	if a.cancel != nil {
@@ -233,7 +240,10 @@ func (a *App) docker(args ...string) (name string, full []string, env []string) 
 		// The command inside the distribution, beside its engine.
 		name, full = engines.InWSL(t.Distro, append([]string{tool}, args...)...)
 		return name, full, nil
-	case "context", "podman":
+	case "podman":
+		host, _ := engines.PodmanHost(t)
+		return "docker", args, []string{"DOCKER_HOST=" + host}
+	case "context":
 		return "docker", args, []string{"DOCKER_HOST=" + t.Host}
 	case "ssh":
 		// The docker command speaks SSH itself.

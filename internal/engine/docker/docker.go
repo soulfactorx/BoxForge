@@ -78,8 +78,17 @@ func (r *Runtime) Info(ctx context.Context) (engine.Info, error) {
 	if err != nil {
 		return engine.Info{}, err
 	}
+	// Podman answers this API too, and says so in its version.
+	kind := "docker"
+	if v, err := r.cli.ServerVersion(ctx); err == nil {
+		for _, c := range v.Components {
+			if strings.Contains(strings.ToLower(c.Name), "podman") {
+				kind = "podman"
+			}
+		}
+	}
 	return engine.Info{
-		Runtime:    "docker",
+		Runtime:    kind,
 		Name:       i.Name,
 		Version:    i.ServerVersion,
 		OS:         i.OperatingSystem,

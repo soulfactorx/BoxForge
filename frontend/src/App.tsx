@@ -212,7 +212,7 @@ export default function App() {
   // With containerd on its own the command is nerdctl, which takes the
   // docker command's words.
   const tool = useRef("docker");
-  tool.current = engine.info?.runtime === "containerd" ? "nerdctl" : "docker";
+  tool.current = engine.info?.runtime === "containerd" ? "nerdctl" : engine.info?.runtime === "podman" ? "podman" : "docker";
   const showCli = useCallback((shown: string) => {
     const command = tool.current === "docker" ? shown : shown.replace(/(^|[|;&(]\s*)docker /g, `$1${tool.current} `);
     setCopied("");

@@ -19,7 +19,10 @@ const hint: Record<Target["kind"], (t: Target) => string> = {
   wsl: (t) => `${t.distro} 배포판 안에 설치된 Docker Engine에 연결합니다. Docker가 없고 containerd(nerdctl)만 있으면 그것을 씁니다. 네트워크 포트를 열지 않습니다.`,
   containerd: () => "Docker 없이 containerd만 있는 환경입니다. nerdctl 명령으로 다룹니다. 실행 중인 컨테이너의 네트워크 바꾸기, 터미널 크기 맞춤 등 일부 기능은 되지 않습니다.",
   ssh: (t) => `다른 PC나 서버의 Docker Engine에 SSH로 연결합니다 (${t.host}). 비밀번호 없이 키로 로그인되어 있어야 합니다.`,
-  podman: (t) => `Podman의 Docker 호환 API에 연결합니다 (${t.host}). 일부 기능은 다르게 동작할 수 있습니다.`,
+  podman: (t) =>
+    t.host
+      ? `Podman의 Docker 호환 API에 연결합니다 (${t.host}). 일부 기능은 다르게 동작할 수 있습니다.`
+      : "설치된 Podman을 씁니다. Podman은 평소에 API를 켜 두지 않으므로, 고르면 BoxForge가 켜서 연결하고 BoxForge가 꺼질 때 함께 끕니다. 일부 기능은 다르게 동작할 수 있습니다.",
 };
 
 const install = [
@@ -148,7 +151,7 @@ export default function EngineDialog({ onClose, onSwitched }: { onClose: () => v
               : t.kind === "containerd"
                 ? "nerdctl info"
               : t.kind === "podman"
-                ? `docker -H ${t.host} info`
+                ? "podman info"
                 : "docker context use default",
       );
       onClose();

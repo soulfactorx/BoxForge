@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 
@@ -180,8 +182,16 @@ func Discover() []Target {
 			out = append(out, Target{ID: "containerd", Kind: "containerd", Label: "containerd (nerdctl, 실험적)"})
 		}
 	}
-	for i, sock := range podmanSockets() {
+	socks := podmanSockets()
+	for i, sock := range socks {
 		out = append(out, Target{ID: fmt.Sprintf("podman:%d", i), Kind: "podman", Label: "Podman (Docker 호환, 실험적)", Host: sock})
+	}
+	// Podman with no API switched on (it has no service running until
+	// asked): offered all the same, and its API started when chosen.
+	if len(socks) == 0 && runtime.GOOS != "windows" {
+		if _, err := exec.LookPath("podman"); err == nil {
+			out = append(out, Target{ID: "podman:own", Kind: "podman", Label: "Podman (Docker 호환, 실험적)"})
+		}
 	}
 	for _, addr := range load().Remotes {
 		out = append(out, Target{ID: "ssh:" + addr, Kind: "ssh", Label: "원격(SSH): " + addr, Host: addr})
@@ -382,4 +392,68 @@ func Save(id string) error {
 	c := load()
 	c.Engine = id
 	return store(c)
+}
+
+// The Podman API BoxForge started itself, when none was running.
+var ownPodman struct {
+	sync.Mutex
+	cmd  *exec.Cmd
+	host string
+}
+
+// PodmanHost returns the address of a Podman target's Docker-compatible
+// API. A target with none (Podman installed, its API not switched on) has
+// it started here: `podman system service`, on a socket of BoxForge's
+// own, for as long as BoxForge runs.
+func PodmanHost(t Target) (string, error) {
+	if t.Host != "" {
+		return t.Host, nil
+	}
+	ownPodman.Lock()
+	defer ownPodman.Unlock()
+	if ownPodman.cmd != nil && ownPodman.cmd.ProcessState == nil && ownPodman.host != "" {
+		return ownPodman.host, nil
+	}
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	sock := filepath.Join(dir, fmt.Sprintf("boxforge-podman-%d.sock", os.Getuid()))
+	_ = os.Remove(sock)
+	cmd := exec.Command("podman", "system", "service", "--time=0", "unix://"+sock)
+	clirunner.HideWindow(cmd)
+	tie(cmd)
+	var said bytes.Buffer
+	cmd.Stderr = &said
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	ended := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(ended)
+	}()
+	for i := 0; i < 100; i++ {
+		if st, err := os.Stat(sock); err == nil && st.Mode()&os.ModeSocket != 0 {
+			ownPodman.cmd, ownPodman.host = cmd, "unix://"+sock
+			return ownPodman.host, nil
+		}
+		select {
+		case <-ended:
+			return "", fmt.Errorf("podman could not start its API: %s", strings.TrimSpace(said.String()))
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	_ = cmd.Process.Kill()
+	return "", errors.New("podman did not open its API in time")
+}
+
+// StopPodman ends the Podman API BoxForge started, if it did.
+func StopPodman() {
+	ownPodman.Lock()
+	defer ownPodman.Unlock()
+	if ownPodman.cmd != nil && ownPodman.cmd.Process != nil {
+		_ = ownPodman.cmd.Process.Kill()
+	}
+	ownPodman.cmd, ownPodman.host = nil, ""
 }

@@ -63,7 +63,7 @@ sudo apt install libwebkit2gtk-4.1-0
 - **비공개 레지스트리**: 설정 → 레지스트리 로그인에서 로그인하면 받을 수 있습니다. PC에 `docker` 명령이 있어야 합니다.
 - **Compose · 빌드**: PC(또는 엔진이 있는 WSL 배포판)의 `docker` 명령으로 실행합니다. BoxForge가 설치한 엔진에는 들어 있습니다.
 - **엔진 유지**: BoxForge가 설치한 엔진(WSL)은 앱이 켜져 있는 동안 돕니다. 앱을 닫으면 잠시 뒤 컨테이너도 멈춥니다. 설정 → "앱을 닫아도 엔진 유지"를 켜면 계속 돕니다.
-- **다른 PC의 엔진 · Podman**: 엔진 선택 창에서 SSH 주소(user@host)를 추가하면 다른 PC나 서버의 Docker Engine을 다룰 수 있습니다(키로 로그인되어 있어야 함). Linux의 Podman 소켓은 자동으로 목록에 나옵니다. Docker 없이 containerd만 있는 환경은 `nerdctl`이 설치되어 있으면 엔진 목록에 "containerd"로 나옵니다(실험적, 일부 기능 제한).
+- **다른 PC의 엔진 · Podman**: 엔진 선택 창에서 SSH 주소(user@host)를 추가하면 다른 PC나 서버의 Docker Engine을 다룰 수 있습니다(키로 로그인되어 있어야 함). Podman이 설치되어 있으면 목록에 나오고, 고르면 BoxForge가 Podman의 API를 켜서 연결합니다(실험적). Docker 없이 containerd만 있는 환경은 `nerdctl`이 설치되어 있으면 엔진 목록에 "containerd"로 나옵니다(실험적, 일부 기능 제한).
 - **개인 정보**: 사용 정보를 어디에도 보내지 않습니다. 업데이트 확인 때만 GitHub에 접속합니다.
 - **macOS**: `BoxForge-macos.zip`을 받아 풀고 응용 프로그램 폴더로 옮깁니다. Apple에 등록된 서명이 없어 처음에는 열리지 않습니다: 앱을 우클릭 → "열기"를 누르거나, 터미널에서 `xattr -dr com.apple.quarantine /Applications/BoxForge.app`을 한 번 실행하세요. 엔진은 자동 설치되지 않으므로 [Colima](https://github.com/abiosoft/colima)를 씁니다(`brew install colima docker && colima start`). macOS 판은 아직 실제 Mac에서 충분히 써 보지 못했습니다.
 - **휴대폰 · 다른 PC에서 쓰기**: 엔진이 있는 기기에서 `BoxForge-server`를 켜 두면 웹 브라우저로 접속해 관리할 수 있습니다. 로그인한 사람은 그 기기를 마음대로 다룰 수 있으니 [docs/SERVER.md](docs/SERVER.md)를 먼저 읽어 주세요.
