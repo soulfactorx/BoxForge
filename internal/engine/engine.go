@@ -110,6 +110,9 @@ type PortSpec struct {
 	Host      uint16 `json:"host"`
 	Container uint16 `json:"container"`
 	Proto     string `json:"proto"` // tcp (default) or udp
+	// IP is the host address to listen on: "" for every one, "127.0.0.1"
+	// for this machine only.
+	IP string `json:"ip,omitempty"`
 }
 
 type MountSpec struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,6 +43,74 @@ type KubeState struct {
 	Ready   bool   `json:"ready"`   // and its node answers Ready
 	Version string `json:"version"`
 	Image   string `json:"image"` // what would be run
+	Port    int    `json:"port"`  // where this PC reaches its API server; 0 when not published
+	// Other Kubernetes clusters on the same engine (Kiri's own, one made by
+	// hand): separate from this one, each with its own memory and CPU.
+	Others []OtherCluster `json:"others"`
+}
+
+// OtherCluster is a k3s that BoxForge did not make.
+type OtherCluster struct {
+	Name    string `json:"name"`
+	Maker   string `json:"maker"` // "Kiri" when Kiri made it, else ""
+	Running bool   `json:"running"`
+	Port    int    `json:"port"`
+}
+
+// The API server's port in the cluster, and how many after the first
+// choice on this PC a start tries when that one is taken.
+const (
+	kubeAPIPort   = 6443
+	kubePortTries = 20
+)
+
+// apiPort is the port this PC reaches a cluster container's API server on.
+func apiPort(c engine.Container) int {
+	for _, p := range c.Ports {
+		if p.Private == kubeAPIPort && p.Public != 0 {
+			return int(p.Public)
+		}
+	}
+	return 0
+}
+
+// otherClusters lists the k3s containers on the engine that are not BoxForge's.
+func (a *App) otherClusters() []OtherCluster {
+	out := []OtherCluster{}
+	for _, c := range a.mirror().Containers() {
+		if c.Name == kubeContainer || !strings.Contains(c.Image, "rancher/k3s") {
+			continue
+		}
+		maker := ""
+		if c.Labels["dev.kiri.k8s"] != "" || c.Name == "kiri-k8s" {
+			maker = "Kiri"
+		}
+		out = append(out, OtherCluster{Name: c.Name, Maker: maker, Running: c.State == "running", Port: apiPort(c)})
+	}
+	return out
+}
+
+// freeKubePort picks the port the API server is published on: 6443, or
+// the first after it that no container on the engine publishes and no
+// program on this PC holds. Two clusters can't share one: another app's
+// (Kiri makes its own) may have it already.
+func (a *App) freeKubePort() (int, error) {
+	taken := map[int]bool{}
+	for _, c := range a.mirror().Containers() {
+		for _, p := range c.Ports {
+			taken[int(p.Public)] = true
+		}
+	}
+	for p := kubeAPIPort; p <= kubeAPIPort+kubePortTries; p++ {
+		if taken[p] {
+			continue
+		}
+		if ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p))); err == nil {
+			ln.Close()
+			return p, nil
+		}
+	}
+	return 0, fmt.Errorf("ports %d to %d are all in use, so the cluster's API server has none to take; stop what holds them, such as another Kubernetes", kubeAPIPort, kubeAPIPort+kubePortTries)
 }
 
 func (a *App) kubeContainer() *engine.Container {
@@ -101,12 +170,12 @@ func (a *App) nodeReady(ctx context.Context) (bool, string) {
 
 // KubeStatus says where the cluster stands.
 func (a *App) KubeStatus() KubeState {
-	st := KubeState{Image: kubeImage()}
+	st := KubeState{Image: kubeImage(), Others: a.otherClusters()}
 	c := a.kubeContainer()
 	if c == nil {
 		return st
 	}
-	st.Exists, st.Running = true, c.State == "running"
+	st.Exists, st.Running, st.Port = true, c.State == "running", apiPort(*c)
 	if st.Running {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -135,6 +204,13 @@ func (a *App) KubeStart() error {
 				return err
 			}
 		}
+		port, err := a.freeKubePort()
+		if err != nil {
+			return err
+		}
+		if port != kubeAPIPort {
+			say(fmt.Sprintf("%d번 포트를 다른 프로그램이 쓰고 있어서 %d번 포트를 씁니다", kubeAPIPort, port))
+		}
 		say("클러스터 컨테이너를 만드는 중")
 		env := []string{"K3S_KUBECONFIG_MODE=644"}
 		if proxy := engines.Setting("proxy.url"); proxy != "" {
@@ -146,12 +222,13 @@ func (a *App) KubeStart() error {
 			}
 			env = append(env, "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "NO_PROXY="+no)
 		}
-		_, err := a.eng().Containers().Run(ctx, engine.RunSpec{
+		_, err = a.eng().Containers().Run(ctx, engine.RunSpec{
 			Image: img, Name: kubeContainer, Command: []string{"server"},
 			// k3s runs containers of its own inside this one.
 			Privileged: true, Tmpfs: []string{"/run", "/var/run"},
-			Env:     env,
-			Ports:   []engine.PortSpec{{Host: 6443, Container: 6443}},
+			Env: env,
+			// This PC only: the API server is the cluster's admin door.
+			Ports:   []engine.PortSpec{{Host: uint16(port), Container: kubeAPIPort, IP: "127.0.0.1"}},
 			Mounts:  []engine.MountSpec{{Source: kubeVolume, Target: "/var/lib/rancher/k3s"}},
 			Restart: "unless-stopped",
 		})
@@ -444,7 +521,12 @@ func (a *App) KubeConfig() (string, error) {
 	// The names inside are k3s's "default": made BoxForge's own, so that
 	// merged with other kubeconfigs they clash with nothing.
 	file := filepath.Join(dir, "boxforge.yaml")
+	port := kubeAPIPort
+	if c := a.kubeContainer(); c != nil && apiPort(*c) != 0 {
+		port = apiPort(*c)
+	}
 	text := strings.NewReplacer(
+		fmt.Sprintf("127.0.0.1:%d", kubeAPIPort), fmt.Sprintf("127.0.0.1:%d", port),
 		"name: default", "name: boxforge", "cluster: default", "cluster: boxforge",
 		"user: default", "user: boxforge", "current-context: default", "current-context: boxforge",
 	).Replace(stdout)

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { go, open, sh } from "./helpers";
+import { ALPINE, go, open, sh } from "./helpers";
 
 // Kubernetes: a real k3s in a container on the engine. The cluster fetches
 // its images itself, so these name an image it can reach (E2E_KUBE_NGINX),
@@ -18,6 +18,7 @@ test.setTimeout(420_000);
 test.afterAll(() => {
   for (const what of ["deployment/bfe2e-web", "deployment/bfe2e-broken", "service/bfe2e-web", "ingress/bfe2e-web", "pvc/bfe2e-web-data", "secret/bfe2e-secret", "pvc/bfe2e-disk"]) kubectl(`delete ${what} --wait=false`);
   if (!had) sh("docker rm -f -v boxforge-k3s && docker volume rm boxforge-k3s", true);
+  sh("docker rm -f bfe2e-kiri-k8s bfe2e-port-holder", true);
 });
 
 async function kube(page: Page) {
@@ -39,6 +40,22 @@ async function kube(page: Page) {
   }
 }
 let preloaded = false;
+
+test("another app's cluster is named, and a taken 6443 moves this one to the next port, on this PC only", async ({ page }) => {
+  test.skip(had, "a cluster was already there");
+  // As Kiri leaves one: its own k3s, and something already on 6443.
+  const k3s = process.env.E2E_K3S || "rancher/k3s:v1.33.5-k3s1";
+  sh(`docker image inspect ${k3s} >/dev/null 2>&1 || docker pull -q ${k3s}`);
+  sh(`docker create --name bfe2e-kiri-k8s --label dev.kiri.k8s=1 ${k3s} server`);
+  sh(`docker run -d --name bfe2e-port-holder -p 127.0.0.1:6443:80 ${ALPINE} sleep 600`);
+  await open(page);
+  await go(page, "kube");
+  const others = page.getByTestId("kube-others");
+  await expect(others).toContainText("bfe2e-kiri-k8s");
+  await expect(others).toContainText("Kiri가 만든 것");
+  await kube(page);
+  expect(sh("docker port boxforge-k3s 6443")).toBe("127.0.0.1:6444");
+});
 
 test("a secret's keys show, its value never does", async ({ page, request }) => {
   await kube(page);

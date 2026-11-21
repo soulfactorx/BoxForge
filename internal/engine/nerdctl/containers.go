@@ -286,6 +286,9 @@ func runArgs(spec engine.RunSpec) []string {
 	}
 	for _, p := range spec.Ports {
 		m := fmt.Sprintf("%d:%d", p.Host, p.Container)
+		if p.IP != "" {
+			m = p.IP + ":" + m
+		}
 		if p.Proto != "" && p.Proto != "tcp" {
 			m += "/" + p.Proto
 		}

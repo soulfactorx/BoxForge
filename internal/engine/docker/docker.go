@@ -301,7 +301,7 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 			return "", err
 		}
 		exposed[port] = struct{}{}
-		bindings[port] = append(bindings[port], nat.PortBinding{HostPort: strconv.Itoa(int(p.Host))})
+		bindings[port] = append(bindings[port], nat.PortBinding{HostIP: p.IP, HostPort: strconv.Itoa(int(p.Host))})
 	}
 	binds := make([]string, 0, len(spec.Mounts))
 	for _, m := range spec.Mounts {

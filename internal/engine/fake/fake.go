@@ -266,7 +266,11 @@ func (c containers) Run(_ context.Context, spec engine.RunSpec) (string, error) 
 	}
 	ports := []engine.Port{}
 	for _, p := range spec.Ports {
-		ports = append(ports, engine.Port{IP: "0.0.0.0", Public: p.Host, Private: p.Container, Proto: "tcp"})
+		ip := p.IP
+		if ip == "" {
+			ip = "0.0.0.0"
+		}
+		ports = append(ports, engine.Port{IP: ip, Public: p.Host, Private: p.Container, Proto: "tcp"})
 	}
 	c.r.list = append(c.r.list, engine.Container{
 		ID: id, Name: name, Image: spec.Image, ImageID: "sha256:" + spec.Image, State: "running",

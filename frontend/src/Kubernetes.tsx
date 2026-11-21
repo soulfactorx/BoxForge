@@ -11,6 +11,8 @@ interface KubeState {
   ready: boolean;
   version: string;
   image: string;
+  port: number;
+  others: { name: string; maker: string; running: boolean; port: number }[];
 }
 
 type Tab = "flow" | "pods" | "workloads" | "services" | "ingresses" | "config" | "storage" | "events";
@@ -189,7 +191,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const start = async () => {
     setStarting("준비하는 중");
     setNote("");
-    await run("docker run -d --name boxforge-k3s --privileged -p 6443:6443 -v boxforge-k3s:/var/lib/rancher/k3s rancher/k3s server", () => call("KubeStart"));
+    await run("docker run -d --name boxforge-k3s --privileged -p 127.0.0.1:6443:6443 -v boxforge-k3s:/var/lib/rancher/k3s rancher/k3s server", () => call("KubeStart"));
     setStarting(null);
     setPull(null);
     refresh();
@@ -358,6 +360,20 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
         작은 클러스터(k3s)를 컨테이너 하나로 돌립니다.
       </p>
       {note && <p className="note">{note}</p>}
+      {state && state.others.length > 0 && (
+        <div className="note-box" data-testid="kube-others">
+          <strong>이 엔진에는 BoxForge 것이 아닌 Kubernetes 클러스터도 있습니다</strong>
+          {state.others.map((o) => (
+            <span key={o.name} className="block">
+              <code>{o.name}</code> {o.maker ? `(${o.maker}가 만든 것)` : ""} · {o.running ? "실행 중" : "꺼짐"}
+              {o.port ? ` · 포트 ${o.port}` : ""}
+            </span>
+          ))}
+          <span className="sub">
+            여기서 보이는 클러스터(boxforge-k3s)와는 따로 도는 별개의 클러스터입니다. 둘 다 켜 두면 메모리와 CPU를 두 배로 쓰고, 6443번 포트를 먼저 잡은 쪽이 가지며 나중에 켠 쪽은 다음 빈 포트를 씁니다. 하나만 쓴다면 다른 쪽은 그 프로그램에서 꺼 두세요.
+          </span>
+        </div>
+      )}
 
       {state && !ready && (
         <div className="kube-off">
@@ -387,7 +403,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               {!state.exists && (
                 <p className="muted">
                   <code>{state.image}</code> 이미지(약 300MB)로 <code>boxforge-k3s</code> 컨테이너를 만듭니다. 그 안에서 다시 컨테이너를 돌려야 해서
-                  모든 권한(privileged)으로 실행하며, PC의 6443번 포트를 씁니다.
+                  모든 권한(privileged)으로 실행하며, 이 PC에서만 닿는 6443번 포트를 씁니다(쓰이고 있으면 다음 빈 포트).
                 </p>
               )}
             </>
