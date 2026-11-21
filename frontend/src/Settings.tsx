@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { choose, chosen, lang } from "./i18n";
+import { pick } from "./PathPicker";
 import { call, openURL, type Run, remote, signOut as leaveServer, viewer } from "./bridge";
 import { Dialog } from "./ui";
 
@@ -91,12 +92,8 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
   };
 
   const browseCert = async () => {
-    try {
-      const file = await call<string>("PickCertificate");
-      if (file) setCert(file);
-    } catch {
-      // No file dialog in a browser: the path is typed instead.
-    }
+    const file = await pick("file", "인증서 파일 고르기", "PickCertificate", [".crt", ".pem", ".cer"]);
+    if (file) setCert(file);
   };
 
   const keep = async (on: boolean) => {

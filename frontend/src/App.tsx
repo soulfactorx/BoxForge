@@ -13,6 +13,7 @@ import type { RunInit } from "./recipes";
 import Settings, { type Theme, type UpdateInfo } from "./Settings";
 import Images from "./Images";
 import Kubernetes from "./Kubernetes";
+import PathPicker from "./PathPicker";
 import RunDialog from "./RunDialog";
 import Topology from "./Topology";
 import { bytes } from "./format";
@@ -51,6 +52,14 @@ const pageCommand: Record<Page, string> = {
 
 function gib(bytes: number) {
   return (bytes / 2 ** 30).toFixed(1) + " GB";
+}
+
+/** Adds, to an engine's message that says little to a beginner, what it means and what to do. */
+function friendly(message: string): string {
+  if (!/address already in use|port is already allocated/i.test(message)) return message;
+  const port = /(?:bind host port|Bind for) [^\s]*?:(\d+)/i.exec(message)?.[1];
+  const example = port ? `"${port}:80" → "${+port + 1}:80"` : `"8080:80" → "8081:80"`;
+  return `${message}\n\n→ 내 PC의 ${port ? port + "번 " : ""}포트를 이미 다른 프로그램이나 컨테이너가 쓰고 있습니다. 포트의 앞 숫자(내 PC 쪽)를 다른 값으로 바꿔 다시 실행하세요. 예: ${example}`;
 }
 
 export default function App() {
@@ -234,7 +243,7 @@ export default function App() {
         await action();
         return true;
       } catch (e: any) {
-        setError(e.message);
+        setError(friendly(e.message));
         return false;
       }
     },
@@ -429,6 +438,7 @@ export default function App() {
         />
       )}
 
+      <PathPicker />
       {closing && (
         <Dialog title="창을 닫으면 어떻게 할까요?" onClose={() => setClosing(false)}>
           <p>BoxForge는 창을 닫아도 작업 표시줄의 트레이 아이콘으로 남아 계속 실행될 수 있습니다. 트레이 아이콘을 누르면 창이 다시 열립니다.</p>

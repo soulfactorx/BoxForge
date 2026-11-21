@@ -1,3 +1,4 @@
+import { pick } from "./PathPicker";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, type Run } from "./bridge";
 import { shq } from "./format";
@@ -210,12 +211,8 @@ export default function Builds({ run, onRun }: { run: Run; onRun: (image: string
   };
 
   const browse = async () => {
-    try {
-      const dir = await call<string>("PickFolder");
-      if (dir) setContext(dir);
-    } catch {
-      // No folder dialog in a browser: the path is typed instead.
-    }
+    const dir = await pick("folder", "빌드할 폴더 고르기", "PickFolder");
+    if (dir) setContext(dir);
   };
 
   const edit = async () => {

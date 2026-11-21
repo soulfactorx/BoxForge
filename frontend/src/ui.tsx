@@ -22,6 +22,7 @@ const paths: Record<string, ReactNode> = {
   send: <path d="M4 10h11M11 5.500l4.500 4.500-4.500 4.500M4 4.500v11" />,
   map: <path d="M5.500 6.500h3v3h-3zM11.500 4h3v3h-3zM11.500 13h3v3h-3zM8.500 8h1.500v-2.500h1.500M8.500 8h1.500v6.500h1.500" />,
   minus: <path d="M4.500 10h11" />,
+  back: <path d="M12.5 5l-5 5 5 5" />,
   kube: <path d="M10 3l6 2.800 1.300 6.300-4.100 5H6.800l-4.100-5L4 5.800zM10 7.500v5M7.800 8.800l4.400 2.400M12.200 8.800l-4.400 2.400" />,
   home: <path d="M3.500 9.500L10 4l6.500 5.500M5.500 8.500V16h9V8.500M8.500 16v-4h3v4" />,
   gear: <path d="M10 12.500a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5zM10 3v2M10 15v2M3 10h2M15 10h2M5.050 5.050l1.400 1.400M13.550 13.550l1.400 1.400M5.050 14.950l1.400-1.400M13.550 6.450l1.400-1.400" />,
@@ -127,13 +128,18 @@ export function Menu({ items, label = "더보기" }: { items: MenuItem[]; label?
 }
 
 export function Dialog(props: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const overlay = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const key = (e: KeyboardEvent) => e.key === "Escape" && props.onClose();
+    // Of windows opened one over another, Escape closes only the one on top.
+    const key = (e: KeyboardEvent) => {
+      const all = document.querySelectorAll(".overlay");
+      if (e.key === "Escape" && all[all.length - 1] === overlay.current) props.onClose();
+    };
     document.addEventListener("keydown", key);
     return () => document.removeEventListener("keydown", key);
   });
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}>
+    <div className="overlay" ref={overlay} onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}>
       <div className={"dialog" + (props.wide ? " wide" : "")} role="dialog" aria-modal="true" aria-label={props.title}>
         <h2>{props.title}</h2>
         {props.children}

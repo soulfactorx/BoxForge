@@ -1,10 +1,11 @@
 import { lang, translate } from "./i18n";
+import { pick } from "./PathPicker";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, openURL, type Container, type Run } from "./bridge";
 import { published } from "./Containers";
 import { isUp, stateLabel } from "./format";
 import ComposeProject, { type Project } from "./ComposeProject";
-import { Dialog, IconButton } from "./ui";
+import { Dialog, IconButton, Progress } from "./ui";
 
 interface Props {
   containers: Container[];
@@ -21,6 +22,59 @@ const doing: Record<Action, string> = {
 const naming: Record<Action, string> = { up: "올리기", down: "내리기", stop: "중지", start: "시작", restart: "재시작", pull: "이미지 받기" };
 
 const dirname = (file: string) => file.replace(/[\\/][^\\/]*$/, "");
+
+// What Compose says of each thing it makes, and which words mean that
+// thing is done.
+const stepLine = /^\s*(Container|Network|Volume|Image)?\s*(\S+)\s+(Pulling|Pulled|Creating|Created|Starting|Started|Running|Recreate|Recreated|Stopping|Stopped|Removing|Removed|Waiting|Healthy|Built|Building|Error)\b/;
+const finished = new Set(["Pulled", "Created", "Started", "Running", "Recreated", "Stopped", "Removed", "Healthy", "Built"]);
+const doingNow: Record<string, string> = {
+  Pulling: "이미지를 내려받는 중",
+  Creating: "만드는 중",
+  Starting: "시작하는 중",
+  Recreate: "다시 만드는 중",
+  Stopping: "멈추는 중",
+  Removing: "지우는 중",
+  Waiting: "준비되기를 기다리는 중",
+  Building: "빌드하는 중",
+};
+
+/** Where a compose command stands: how many of its things are done, what it is on, how long it has taken. */
+function Progressing({ lines, busy }: { lines: string[]; busy: boolean }) {
+  const [started] = useState(() => Date.now());
+  const [now, setNow] = useState(Date.now());
+  const [ended, setEnded] = useState(0);
+  useEffect(() => {
+    if (!busy) return setEnded(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
+  const state = new Map<string, string>();
+  for (const l of lines) {
+    const m = stepLine.exec(l);
+    if (m) state.set((m[1] ?? "") + " " + m[2], m[3]);
+  }
+  const total = state.size;
+  const done = [...state.values()].filter((s) => finished.has(s)).length;
+  const current = [...state.entries()].reverse().find(([, s]) => !finished.has(s) && s !== "Error");
+  const failed = !busy && lines.some((l) => l.startsWith("✖"));
+  const seconds = Math.max(0, Math.round(((busy ? now : ended || now) - started) / 1000));
+  return (
+    <div className={"compose-progress" + (failed ? " failed" : !busy ? " ok" : "")} data-testid="compose-progress">
+      <span className="compose-progress-text">
+        {busy ? <span className="spinner" /> : <span className="setup-mark">{failed ? "✖" : "✔"}</span>}
+        <strong>{busy ? (current ? `${current[0].trim().split(" ").pop()} ${doingNow[current[1]] ?? current[1]}` : "준비하는 중") : failed ? "실패했습니다" : "끝났습니다"}</strong>
+        {total > 0 && (
+          <span className="muted">
+            {total}개 중 {done}개 완료
+          </span>
+        )}
+        <span className="muted">{seconds}초</span>
+      </span>
+      <Progress percent={!busy && !failed ? 100 : total > 0 ? Math.round((done * 100) / total) : -1} />
+      {busy && current?.[1] === "Pulling" && <span className="sub">이미지를 처음 받을 때는 크기에 따라 몇 분 걸릴 수 있습니다.</span>}
+    </div>
+  );
+}
 
 // A note in a compose file ("# …", which Compose skips), in the language
 // of the screens: the file is the user's to keep.
@@ -121,12 +175,32 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
   const [making, setMaking] = useState<{ dir: string; kind: string; text: string; error: string } | null>(null);
 
   const pickFolder = async () => {
-    try {
-      const dir = await call<string>("PickFolder");
-      if (dir && making) setMaking({ ...making, dir });
-    } catch {
-      // No folder dialog in a browser: the path is typed instead.
+    const dir = await pick("folder", "프로젝트 폴더 고르기", "PickFolder");
+    if (dir) setMaking((m) => m && { ...m, dir, error: "" });
+  };
+
+  // The ports the new file would take on this PC, and which are taken.
+  const wanted = useMemo(() => [...new Set([...(making?.text ?? "").matchAll(/^\s*-\s*["']?(?:[\d.]+:)?(\d+):\d+/gm)].map((m) => +m[1]))], [making?.text]);
+  const [taken, setTaken] = useState<number[]>([]);
+  useEffect(() => {
+    if (wanted.length === 0) return setTaken([]);
+    let stale = false;
+    call<number[]>("PortsInUse", wanted).then((t) => !stale && setTaken(t ?? []), () => {});
+    return () => {
+      stale = true;
+    };
+  }, [wanted.join()]);
+  // Moves each taken port to the next free one above it.
+  const freePorts = async () => {
+    if (!making) return;
+    let text = making.text;
+    for (const p of taken) {
+      const tries = Array.from({ length: 20 }, (_, i) => p + 1 + i).filter((n) => !wanted.includes(n));
+      const busyPorts = await call<number[]>("PortsInUse", tries).catch(() => [] as number[]);
+      const free = tries.find((n) => !busyPorts.includes(n));
+      if (free) text = text.replace(new RegExp(`(^\\s*-\\s*["']?(?:[\\d.]+:)?)${p}(:\\d+)`, "gm"), `$1${free}$2`);
     }
+    setMaking({ ...making, text });
   };
 
   const create = async () => {
@@ -206,12 +280,8 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
   };
 
   const browse = async () => {
-    try {
-      const file = await call<string>("PickComposeFile");
-      if (file) setOpening(file);
-    } catch {
-      // No file dialog in a browser: the path is typed instead.
-    }
+    const file = await pick("file", "Compose 파일 고르기", "PickComposeFile", [".yml", ".yaml"]);
+    if (file) setOpening(file);
   };
 
   const view = async (file: string) => {
@@ -263,6 +333,7 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
               </button>
             )}
           </div>
+          <Progressing key={output.title} lines={output.lines} busy={!!busy} />
           <pre ref={box} className="log-box">
             {output.lines.length ? output.lines.join("\n") : "…"}
           </pre>
@@ -395,6 +466,14 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
               compose.yaml
               <textarea className="editor starter" aria-label="새 compose 파일 내용" spellCheck={false} rows={14} value={making.text} onChange={(e) => setMaking({ ...making, text: e.target.value })} />
             </label>
+            {taken.length > 0 && (
+              <p className="warn" data-testid="ports-taken">
+                내 PC의 {taken.join(", ")}번 포트는 이미 다른 프로그램이나 컨테이너가 쓰고 있어서, 이대로 올리면 실패합니다.{" "}
+                <button type="button" className="link" onClick={freePorts}>
+                  비어 있는 포트로 바꾸기
+                </button>
+              </p>
+            )}
             {making.error && (
               <p className="warn" role="alert">
                 {making.error}
