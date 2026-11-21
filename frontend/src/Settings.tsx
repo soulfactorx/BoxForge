@@ -32,6 +32,29 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
   const [servers, setServers] = useState<string[]>([]);
   const [login, setLogin] = useState<{ server: string; user: string; password: string } | null>(null);
   const [note, setNote] = useState("");
+  const [restarting, setRestarting] = useState(false);
+  // The desktop app closes and opens again by itself. A server goes away
+  // for a moment: the page waits for it to answer again, then reloads.
+  const restartNow = async () => {
+    setRestarting(true);
+    try {
+      await call("Restart");
+    } catch (e: any) {
+      setRestarting(false);
+      setNote(`다시 시작하지 못했습니다: ${e.message}`);
+      return;
+    }
+    if (!remote()) return;
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        if ((await fetch("/api/session", { cache: "no-store" })).ok) break;
+      } catch {
+        // not back yet
+      }
+    }
+    location.reload();
+  };
   const [tray, setTray] = useState<{ available: boolean; close: boolean } | null>(null);
   const [net, setNet] = useState<{ proxy: string; noProxy: string; canEngine: boolean; keep: boolean } | null>(null);
   const [proxy, setProxy] = useState("");
@@ -154,8 +177,8 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
         <div className="panel" data-testid="server-panel">
           <h2>웹 서버</h2>
           <p className="muted">
-            지금 다른 기기의 브라우저로 서버의 BoxForge를 쓰고 있습니다. 파일을 저장하면 이 브라우저가 내려받고, 폴더 · 파일 경로를 적는 칸은 서버 쪽 경로입니다. 서버 프로그램은 스스로 업데이트하지 않으니 새 버전은 서버에서 파일을 바꿔
-            주세요.
+            지금 다른 기기의 브라우저로 서버의 BoxForge를 쓰고 있습니다. 파일을 저장하면 이 브라우저가 내려받고, 폴더 · 파일 경로를 적는 칸은 서버 쪽 경로입니다. 업데이트 뒤 "다시 시작"을 누르면 서버가 새 버전으로 다시 켜지고, 비밀번호를 한 번 다시
+            넣어야 합니다. 컨테이너는 그대로 돕니다.
           </p>
           <button onClick={leaveServer}>로그아웃</button>
         </div>
@@ -180,9 +203,9 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
             </span>
           </span>
           <span className="setting-actions">
-            {remote() ? null : update?.installed ? (
-              <button className="primary" onClick={() => call("Restart")}>
-                다시 시작
+            {update?.installed ? (
+              <button className="primary" disabled={restarting} onClick={restartNow}>
+                {restarting ? "다시 시작하는 중…" : "다시 시작"}
               </button>
             ) : update?.available ? (
               <button className="primary" disabled={!!updating} onClick={onInstall}>

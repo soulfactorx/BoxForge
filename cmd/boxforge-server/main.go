@@ -26,6 +26,7 @@ import (
 
 	"github.com/soulfactorx/boxforge/frontend"
 	"github.com/soulfactorx/boxforge/internal/app"
+	"github.com/soulfactorx/boxforge/internal/update"
 	"github.com/soulfactorx/boxforge/internal/version"
 	"github.com/soulfactorx/boxforge/internal/webserver"
 )
@@ -103,20 +104,39 @@ func main() {
 		log.Fatal(err)
 	}
 	app.SetRemote(outbox)
+	// The server updates itself with the server's program, and starts
+	// afresh as it was started: same arguments, same address.
+	update.Server = true
+	var hs *http.Server
+	app.SetRestart(func() error {
+		exe, err := update.Program()
+		if err != nil {
+			return err
+		}
+		go func() {
+			time.Sleep(500 * time.Millisecond) // let the answer to this very call go out
+			if hs != nil {
+				_ = hs.Close() // the port, free for the new one
+			}
+			if err := again(exe); err != nil {
+				log.Fatalf("could not start afresh: %v; start the server by hand", err)
+			}
+		}()
+		return nil
+	})
 	a, err := app.New()
 	if err != nil {
 		log.Fatal(err)
 	}
 	srv := webserver.New(a, webserver.Options{
 		UI: ui, Check: passwords.Check, Secure: secure, Outbox: outbox, Inbox: inbox,
-		// A window on the server's own screen, and replacing the server's
-		// program with the desktop one, are not for a browser elsewhere.
-		Denied: []string{"OpenTerminal", "Restart", "ApplyUpdate", "CloseTo", "SetupStart"},
+		// A window on the server's own screen is not for a browser elsewhere.
+		Denied: []string{"OpenTerminal", "CloseTo", "SetupStart"},
 	})
 	app.Start(a, srv.Emit)
 	defer app.Stop(a)
 
-	hs := &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 15 * time.Second}
+	hs = &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 15 * time.Second}
 	scheme := "http"
 	if secure {
 		scheme = "https"
@@ -129,7 +149,8 @@ func main() {
 		fmt.Printf("\n비밀번호: %s\n(처음 한 번만 보여 줍니다. 바꾸려면 -set-password, 잊었으면 -new-password)\n", fresh)
 	}
 	if *certFile != "" {
-		log.Fatal(hs.ListenAndServeTLS(*certFile, *keyFile))
+		served(hs.ListenAndServeTLS(*certFile, *keyFile))
+		return
 	}
 	if *useTLS {
 		cert, print, err := webserver.Certificate(dir)
@@ -138,9 +159,10 @@ func main() {
 		}
 		fmt.Printf("\n이 서버가 직접 만든 인증서를 씁니다. 브라우저가 처음에 경고를 보여 주면,\n인증서의 SHA-256 지문이 아래와 같은지 확인하고 계속하세요.\n  %s\n", print)
 		hs.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-		log.Fatal(hs.ListenAndServeTLS("", ""))
+		served(hs.ListenAndServeTLS("", ""))
+		return
 	}
-	log.Fatal(hs.ListenAndServe())
+	served(hs.ListenAndServe())
 }
 
 // addresses lists where the server can be reached, for telling the user.
@@ -158,4 +180,13 @@ func addresses(host, listen string) []string {
 		}
 	}
 	return out
+}
+
+// served waits after the server stops: closed on purpose (to start
+// afresh), the new program takes over from here; anything else is fatal.
+func served(err error) {
+	if err == http.ErrServerClosed {
+		select {}
+	}
+	log.Fatal(err)
 }

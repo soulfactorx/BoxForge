@@ -85,6 +85,13 @@ func (a *App) ApplyUpdate() error {
 	return nil
 }
 
+// restart, when set, is how this program starts itself afresh: the web
+// server has its own way (same arguments, same port).
+var restart func() error
+
+// SetRestart gives the app the program's own way to start afresh.
+func SetRestart(f func() error) { restart = f }
+
 // quit closes the app; the desktop shell sets it.
 var quit func()
 
@@ -94,6 +101,9 @@ func SetQuit(f func()) { quit = f }
 // Restart starts the program afresh (the new one, after an update) and
 // closes this one.
 func (a *App) Restart() error {
+	if restart != nil {
+		return restart()
+	}
 	exe, err := update.Program()
 	if err != nil {
 		return err

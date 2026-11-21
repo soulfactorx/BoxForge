@@ -40,8 +40,19 @@ type Release struct {
 	sums  string // download address of the checksum list
 }
 
+// Server is set by the web server: its program has a name of its own in
+// a release, and updates itself with that one, not the desktop app.
+var Server bool
+
 // AssetName is what this platform's program is called in a release.
 func AssetName() string {
+	if Server {
+		name := "BoxForge-server-" + runtime.GOOS + "-" + runtime.GOARCH
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		return name
+	}
 	switch runtime.GOOS {
 	case "windows":
 		return "BoxForge-windows-" + runtime.GOARCH + ".exe"

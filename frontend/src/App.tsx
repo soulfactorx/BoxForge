@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Network, type Size, type Volume, remote } from "./bridge";
+import { call, on, STREAM_OPEN, type Container, type EngineStatus, type Image, type Network, type Size, type Volume } from "./bridge";
 import Networks from "./Networks";
 import Volumes from "./Volumes";
 import Builds from "./Builds";
@@ -165,7 +165,6 @@ export default function App() {
   }, []);
 
   const installUpdate = useCallback(async () => {
-    if (remote()) return; // the server's program is replaced on the server
     setUpdating("내려받는 중…");
     try {
       await call("ApplyUpdate");
