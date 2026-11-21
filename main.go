@@ -55,12 +55,19 @@ func main() {
 		}
 	}
 	app.SetQuit(quit)
-	app.SetTray(startTray(show, quit), func() {
+	tray := startTray(show, quit)
+	// Started at sign-in: to the tray, with no window, when there is a tray.
+	hidden := false
+	for _, a := range os.Args[1:] {
+		hidden = hidden || (a == desktop.HiddenFlag && tray)
+	}
+	app.SetTray(tray, func() {
 		if c, ok := ctx.Load().(context.Context); ok {
 			runtime.WindowHide(c)
 		}
 	})
 	err = wails.Run(&options.App{
+		StartHidden: hidden,
 		// Opening BoxForge while it is running (in the tray, perhaps)
 		// brings its window back instead of starting another.
 		SingleInstanceLock: &options.SingleInstanceLock{

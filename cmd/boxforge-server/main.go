@@ -154,7 +154,7 @@ func main() {
 		UI: ui, Check: passwords.Check, Secure: secure, Outbox: outbox, Inbox: inbox,
 		CheckViewer: viewerCheck(dir), ViewerMethods: lookOnly,
 		// A window on the server's own screen is not for a browser elsewhere.
-		Denied: []string{"OpenTerminal", "CloseTo", "SetupStart"},
+		Denied: []string{"OpenTerminal", "CloseTo", "SetupStart", "SetSignIn"},
 	})
 	app.Start(a, srv.Emit)
 	defer app.Stop(a)

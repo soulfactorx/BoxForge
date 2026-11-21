@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { choose, chosen, lang } from "./i18n";
+import EngineResources from "./EngineResources";
 import { pick } from "./PathPicker";
 import { allowSystem, setAlerts } from "./Alerts";
 import { call, openURL, type Run, remote, signOut as leaveServer, viewer } from "./bridge";
@@ -37,6 +38,10 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
   const [note, setNote] = useState("");
   const [restarting, setRestarting] = useState(false);
   const [notify, setNotify] = useState({ on: true, system: "" });
+  const [atSignIn, setAtSignIn] = useState<{ supported: boolean; on: boolean } | null>(null);
+  useEffect(() => {
+    call<{ supported: boolean; on: boolean }>("SignIn").then(setAtSignIn, () => {});
+  }, []);
   useEffect(() => {
     call<string>("Setting", "notify.fail").then((v) => setNotify((n) => ({ ...n, on: v !== "off" })), () => {});
   }, []);
@@ -169,6 +174,24 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
             ))}
           </div>
         </div>
+        {atSignIn?.supported && (
+          <label className="setting">
+            <span>
+              <strong>로그인할 때 BoxForge 시작</strong>
+              <span className="sub">PC에 로그인하면 BoxForge가 창 없이 트레이에서 시작되고, 엔진도 함께 켜집니다. 컨테이너를 늘 켜 두는 경우에 좋습니다.</span>
+            </span>
+            <input
+              type="checkbox"
+              className="switch"
+              aria-label="로그인할 때 BoxForge 시작"
+              checked={atSignIn.on}
+              onChange={async (e) => {
+                const on = e.target.checked;
+                if (await run(on ? "# 로그인할 때 BoxForge 시작 (트레이로)" : "# 로그인할 때 시작하지 않음", () => call("SetSignIn", on))) setAtSignIn({ ...atSignIn, on });
+              }}
+            />
+          </label>
+        )}
         <label className="setting">
           <span>
             <strong>컨테이너가 실패하면 알림</strong>
@@ -294,6 +317,8 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
           <input type="checkbox" className="switch" aria-label="앱을 닫아도 엔진 유지" checked={!!net?.keep} onChange={(e) => keep(e.target.checked)} />
         </label>
       </div>
+
+      <EngineResources run={run} />
 
       <div className="panel" data-testid="network-panel">
         <h2>회사 네트워크</h2>

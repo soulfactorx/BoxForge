@@ -8,6 +8,8 @@ require (
 	github.com/docker/go-connections v0.8.2
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/wailsapp/wails/v2 v2.17.1
+	golang.org/x/sys v0.48.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -59,8 +61,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )
