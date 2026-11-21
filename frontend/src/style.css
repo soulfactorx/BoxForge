@@ -1133,3 +1133,10 @@ textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
 .compose-progress.ok .setup-mark { color: var(--ok); }
 .compose-progress.failed .setup-mark, .compose-progress.failed strong { color: #d64545; }
 .status-error { white-space: pre-wrap; }
+
+.project-title .state { white-space: nowrap; }
+@media (max-width: 760px) {
+  .project > header { flex-wrap: wrap; }
+  .project .actions { display: flex; flex-wrap: wrap; gap: 5px; }
+  .project .actions > * { margin-left: 0; }
+}

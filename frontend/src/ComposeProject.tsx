@@ -563,7 +563,13 @@ export default function ComposeProject({ project, run, showCli, busy, act, onDow
           {project.members.length}개 중 {up}개 실행
         </span>
         <span className="spacer" />
-        <IconButton icon="play" label="올리기 (파일대로 만들고 시작)" tone="go" disabled={busy} onClick={() => act(project, "up")} />
+        <IconButton
+          icon="play"
+          label={up === project.members.length && up > 0 ? "파일대로 다시 올리기 (바뀐 것만 다시 만듦, 모두 실행 중)" : "올리기 (파일대로 만들고 시작)"}
+          tone={up === project.members.length && up > 0 ? undefined : "go"}
+          disabled={busy}
+          onClick={() => act(project, "up")}
+        />
         <IconButton icon="restart" label="모두 재시작" disabled={busy || up === 0} onClick={() => act(project, "restart")} />
         <IconButton icon="stop" label="모두 중지 (컨테이너는 남김)" tone="danger" disabled={busy || up === 0} onClick={() => act(project, "stop")} />
         <IconButton icon="trash" label="내리기 (컨테이너와 네트워크 삭제)" tone="danger" disabled={busy} onClick={onDown} />

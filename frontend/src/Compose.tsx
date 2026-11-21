@@ -375,7 +375,13 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
                   <button onClick={() => setOpened(p.name)}>
                     자세히
                   </button>
-                  <IconButton icon="play" label="올리기 (파일대로 만들고 시작)" tone="go" disabled={off || !!busy} onClick={() => act(p, "up")} />
+                  <IconButton
+                    icon="play"
+                    label={up === p.members.length ? "모두 실행 중입니다 (파일을 고쳤다면 자세히 → 올리기로 적용)" : "올리기 (파일대로 만들고 시작)"}
+                    tone="go"
+                    disabled={off || !!busy || up === p.members.length}
+                    onClick={() => act(p, "up")}
+                  />
                   <IconButton icon="restart" label="재시작" disabled={off || !!busy || up === 0} onClick={() => act(p, "restart")} />
                   <IconButton icon="stop" label="중지 (컨테이너는 남김)" tone="danger" disabled={off || !!busy || up === 0} onClick={() => act(p, "stop")} />
                   <IconButton icon="download" label="이미지 새로 받기" disabled={off || !!busy} onClick={() => act(p, "pull")} />
