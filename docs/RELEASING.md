@@ -6,9 +6,20 @@
 
 1. `wails.json`의 `info.productVersion`을 새 버전으로 올린다.
 2. `CHANGELOG.md` 맨 위에 그 버전의 절(`## 1.2.3`)을 쓴다. 사용자에게 보이는 글이므로 사용자의 말로, 바뀐 것만. 이 절이 없으면 릴리스가 실패한다.
-3. 검사: `gofmt -l .`(출력 없어야 함), `go vet ./internal/... ./cmd/... .`, `go test ./internal/...`, `cd frontend && npm run build`.
+3. 검사: `cd frontend && npm run build`를 먼저 하고(Go 프로그램이 화면 파일을 안에 넣는다), `gofmt -l .`(출력 없어야 함), `go vet ./internal/... ./cmd/... ./frontend .`, `go test ./internal/...`.
 4. 커밋해서 `main`에 올린다.
-5. Actions의 "Release" 실행이 끝나면 릴리스 페이지에 `BoxForge-windows-amd64.exe`, `BoxForge-linux-amd64`, `checksums.txt`가 있는지 확인한다.
+5. Actions의 "Release" 실행이 끝나면 릴리스 페이지에 아래 파일이 있는지 확인한다.
+
+| 파일 | 무엇 |
+|---|---|
+| `BoxForge-windows-amd64.exe` | Windows 데스크톱 앱 |
+| `BoxForge-linux-amd64` | Linux 데스크톱 앱 |
+| `BoxForge-macos.zip` | macOS 앱(사람이 받는 것) |
+| `BoxForge-darwin-universal` | macOS 앱 안의 프로그램(앱이 자기를 업데이트할 때 받는 것) |
+| `BoxForge-server-linux-amd64`, `-linux-arm64`, `-windows-amd64.exe` | 웹 서버 |
+| `checksums.txt` | 위 파일들의 SHA-256 |
+
+데스크톱 앱은 각 OS의 실행기에서 `wails build`로, 웹 서버는 창 라이브러리가 필요 없어 Linux 실행기에서 세 가지 모두 빌드한다.
 
 버전을 올리지 않은 푸시는 릴리스를 만들지 않는다("already released"로 끝남). 태그는 직접 만들지 않는다.
 
@@ -27,4 +38,5 @@
 - 프로그램은 기본으로 서명되어 있지 않다. Windows는 처음 실행할 때 SmartScreen 경고를 보여준다(README에 안내 있음).
 - Windows 코드 서명 인증서(.pfx)가 생기면 저장소 Settings → Secrets and variables → Actions에 `WINDOWS_CERTIFICATE`(pfx 파일을 base64로 바꾼 글자)와 `WINDOWS_CERTIFICATE_PASSWORD`를 넣는다. 그 뒤의 릴리스부터 Windows 프로그램이 서명된다. 없으면 그 단계는 건너뛴다.
 - macOS 판은 임시(ad hoc) 서명만 되어 있다. Apple Developer ID 서명과 공증은 아직 없다.
-- macOS 릴리스에는 파일이 둘이다: 사람이 받는 `BoxForge-macos.zip`(앱)과 앱이 자기를 업데이트할 때 받는 `BoxForge-darwin-universal`(앱 안의 프로그램).
+- 데스크톱 앱과 웹 서버는 각자의 파일로 업데이트한다(`update.Server`). 서버 파일의 이름을 바꾸면 돌고 있는 서버들이 새 버전을 못 찾는다.
+- 한 번에 여러 버전을 연달아 올려도 된다. 릴리스 작업은 차례로 돌며 각 커밋의 버전을 낸다.

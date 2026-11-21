@@ -1,6 +1,8 @@
 # BoxForge
 
-Docker를 쉽게 쓰기 위한 데스크톱 앱. Go 백엔드(`internal/`) + React 화면(`frontend/src`), Wails v2로 묶는다. 설계는 `docs/DESIGN.md`.
+Docker를 쉽게 쓰기 위한 앱. Go 백엔드(`internal/`) + React 화면(`frontend/src`). 데스크톱은 Wails v2(`main.go`), 브라우저용은 웹 서버(`cmd/boxforge-server`)로 같은 화면을 낸다. 설계와 지금 있는 것 · 없는 것은 `docs/DESIGN.md`, 서버 사용법은 `docs/SERVER.md`.
+
+기능을 더하거나 바꾸면 `README.md`와 `docs/DESIGN.md`의 해당 부분도 함께 고친다(없는 기능을 있다고 적지 않는다).
 
 ## 일하는 방식
 
