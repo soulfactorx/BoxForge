@@ -7,7 +7,8 @@ import { go, open, sh } from "./helpers";
 //
 // A cluster that was there before the tests is left as it was; one the
 // tests made is removed at the end.
-test.describe.configure({ mode: "serial" });
+// No retries: a retry would start over with a new cluster, minutes for nothing.
+test.describe.configure({ mode: "serial", retries: 0 });
 const WEB = process.env.E2E_KUBE_NGINX ?? "nginx:alpine";
 const had = !sh("docker ps -aq --filter name=^boxforge-k3s$", true).startsWith("ERR") && sh("docker ps -aq --filter name=^boxforge-k3s$", true) !== "";
 const kubectl = (rest: string) => sh(`docker exec boxforge-k3s kubectl ${rest}`, true);
@@ -92,9 +93,26 @@ test("deploy with the helper: address, storage, settings, and the picture", asyn
   await expect(page.getByTestId("ingress-bfe2e-web")).toBeVisible();
   await page.getByRole("button", { name: "내 PC로 연결 (8080)" }).click();
   await expect(page.getByTestId("ingress-bfe2e-web").getByRole("link")).toHaveAttribute("href", "http://bfe2e-web.localhost:8080/");
-  await expect
-    .poll(async () => (await request.get("http://127.0.0.1:8080/", { headers: { Host: "bfe2e-web.localhost" } }).catch(() => null))?.status(), { timeout: 180_000 })
-    .toBe(200);
+  let last = "";
+  try {
+    await expect
+      .poll(
+        async () => {
+          const r = await request.get("http://127.0.0.1:8080/", { headers: { Host: "bfe2e-web.localhost" }, timeout: 10_000 }).catch((e) => (last = String(e), null));
+          if (r) last = `${r.status()} ${(await r.text()).slice(0, 200)}`;
+          return r?.status();
+        },
+        { timeout: 180_000 },
+      )
+      .toBe(200);
+  } catch (e) {
+    // What the cluster looked like, for a failure seen only in CI.
+    console.log("last answer:", last);
+    console.log(kubectl("get pods,svc,endpoints,ingress -A -o wide"));
+    console.log(kubectl("get events -A --field-selector type=Warning"));
+    console.log(sh("docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}'", true));
+    throw e;
+  }
 
   // The storage it asked for, in use by its pod.
   await page.getByRole("tab", { name: /저장소/ }).click();

@@ -286,7 +286,10 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const shownPvc = useMemo(() => mine(pvcs).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [pvcs, showSystem]);
   const traefik = forwards.find((f) => f.namespace === "kube-system" && f.service === "traefik" && f.port === 80);
   // k3s installs its way in a minute or two after it first starts.
-  const gate = services.find((s) => s.metadata.namespace === "kube-system" && s.metadata.name === "traefik");
+  // Ready when its service is there and one of its pods answers.
+  const gate =
+    services.some((s) => s.metadata.namespace === "kube-system" && s.metadata.name === "traefik") &&
+    pods.some((p) => p.metadata.namespace === "kube-system" && p.metadata.labels?.["app.kubernetes.io/name"] === "traefik" && podStatus(p).text === "Running");
   const shownSvc = useMemo(() => mine(services).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [services, showSystem]);
   const warnings = useMemo(
     () =>
