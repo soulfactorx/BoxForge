@@ -8,7 +8,8 @@ export const NGINX = "nginx:alpine";
 /** Runs a shell command; its output, or "ERR …" when it fails and quiet is set. */
 export function sh(cmd: string, quiet = false): string {
   try {
-    return execSync(cmd, { stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+    // Bounded: a command that hangs would stop the whole run, test timeouts and all.
+    return execSync(cmd, { stdio: ["ignore", "pipe", "pipe"], timeout: 180_000 }).toString().trim();
   } catch (e: any) {
     if (quiet) return "ERR " + String(e.stderr ?? e.message);
     throw new Error(`${cmd}\n${e.stderr ?? e.message}`);
