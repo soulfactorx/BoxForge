@@ -563,6 +563,7 @@
  "비워 두면 이미지에 정해진 것": "Empty for the image's own",
  "비워 두면 이미지에 정해진 대로 실행합니다": "Leave empty to run as the image defines",
  "비워 두면 폴더 안의 Dockerfile": "Leave empty to use the Dockerfile in the folder",
+ "비워 두면 흐리게 보이는 곳에 저장합니다.": "Left empty, it is saved where the grey text says.",
  "비정상": "Unhealthy",
  "빈 볼륨을 만듭니다. 컨테이너를 실행할 때 \"저장 공간\"에 이 이름을 적어 연결합니다.": "Creates an empty volume. When you run a container, enter this name under \"Storage\" to attach it.",
  "빈 파일입니다.": "This file is empty.",

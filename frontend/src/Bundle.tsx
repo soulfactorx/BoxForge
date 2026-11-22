@@ -72,10 +72,14 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
   const chosen = containers.filter((c) => ids.includes(c.id));
   const base = chosen.length === 1 ? chosen[0].name : chosen[0]?.project || "boxforge";
 
-  // Where to write: proposed at once, changed with the dialog.
+  // Where to write: proposed, but not written into the field. An answer
+  // that comes late would land in the middle of what is being typed there;
+  // the field left empty takes it.
+  const [suggested, setSuggested] = useState("");
   useEffect(() => {
-    if (!file) call<string>("PickExportFileDefault", base).then((d) => setFile((f) => f || d), () => {});
-  }, []);
+    call<string>("PickExportFileDefault", base).then(setSuggested, () => {});
+  }, [base]);
+  const where = file.trim() || suggested;
   const browse = async () => {
     try {
       const f = await call<string>("PickExportFile", base);
@@ -93,8 +97,8 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
     const names = chosen.map((c) => c.name).join(" ");
     // From a browser elsewhere the file is made on the server, named after
     // what was chosen, and fetched from there.
-    const target = remote() ? await call<string>("PickExportFileDefault", base) : file;
-    const ok = await run(`# ${names} 를 파일 하나로: docker commit → docker save, 볼륨은 tar 로 → ${remote() ? base + ".boxforge" : file}`, async () => {
+    const target = remote() ? await call<string>("PickExportFileDefault", base) : where;
+    const ok = await run(`# ${names} 를 파일 하나로: docker commit → docker save, 볼륨은 tar 로 → ${remote() ? base + ".boxforge" : target}`, async () => {
       try {
         await call("ExportBundle", key, ids, target, { changes, volumes });
       } catch (e: any) {
@@ -152,11 +156,12 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
       <label className="file-line" hidden={remote()}>
         저장할 파일
         <div className="pair">
-          <input className="field" aria-label="저장할 파일" value={file} disabled={busy} onChange={(e) => setFile(e.target.value)} />
+          <input className="field" aria-label="저장할 파일" value={file} placeholder={suggested} disabled={busy} onChange={(e) => setFile(e.target.value)} />
           <button type="button" disabled={busy} onClick={browse}>
             찾아보기
           </button>
         </div>
+        {!file.trim() && suggested && <span className="help">비워 두면 흐리게 보이는 곳에 저장합니다.</span>}
       </label>
       <p className="muted footnote">환경변수(비밀번호 포함)와 포트 설정도 함께 담깁니다. 내 PC의 폴더를 연결한 부분은 경로만 담기고 폴더의 내용은 담기지 않습니다.</p>
       <Steps steps={steps} busy={busy} />
@@ -169,7 +174,7 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
         <button onClick={onClose} disabled={busy}>
           취소
         </button>
-        <button className="primary" disabled={busy || ids.length === 0 || !file.trim()} onClick={go}>
+        <button className="primary" disabled={busy || ids.length === 0 || (!remote() && !where)} onClick={go}>
           {busy ? "내보내는 중…" : "내보내기"}
         </button>
       </div>

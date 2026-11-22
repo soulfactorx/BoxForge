@@ -15,7 +15,10 @@ test("export a container to a file, delete it, import it back with its data", as
   await page.locator("tr", { hasText: "bfe2e-box" }).getByRole("button", { name: "더보기" }).click();
   await page.getByRole("menuitem", { name: "파일로 내보내기" }).click();
   const dlg = page.getByRole("dialog");
+  // Typed at once: the proposed place, coming late, is only shown grey and never mixes in.
   await dlg.getByLabel("저장할 파일").fill(file);
+  await expect(dlg.getByLabel("저장할 파일")).toHaveAttribute("placeholder", /bfe2e-box\.boxforge$/);
+  await expect(dlg.getByLabel("저장할 파일")).toHaveValue(file);
   await dlg.getByRole("button", { name: "내보내기", exact: true }).click();
   await expect(page.getByText("파일로 내보냈습니다")).toBeVisible({ timeout: 90_000 });
   expect(existsSync(file) && statSync(file).size > 1e6).toBe(true);
