@@ -4,6 +4,7 @@ import { call, openURL, type Container, type Image, type Run, type Size, remote 
 import { ago, bytes, isUp, stateLabel, statusText } from "./format";
 import { ExportDialog, ImportDialog } from "./Bundle";
 import type { RunInit } from "./recipes";
+import { type Deploy, kubeName } from "./KubeExtras";
 import EngineCopy, { explain } from "./EngineCopy";
 import { Dialog, IconButton, Menu, type MenuItem } from "./ui";
 
@@ -40,6 +41,8 @@ interface Props {
   onOpen: (id: string, tab?: "overview" | "logs") => void;
   onNew: () => void;
   onRecreate: (init: RunInit) => void;
+  /** Opens Kubernetes' deploy form filled from a container. */
+  onKube?: (init: Partial<Deploy>) => void;
 }
 
 const healthText: Record<string, string> = { healthy: "정상", unhealthy: "이상", starting: "확인 중" };
@@ -129,6 +132,34 @@ function LimitDialog({ c, run, onClose }: { c: Container; run: Run; onClose: () 
   );
 }
 
+/**
+ * A container as Kubernetes' deploy form takes it: image, name, the port it
+ * serves, its environment, and a terminal kept open if it had one. Not its
+ * command (in Kubernetes that would replace the image's entrypoint) and not
+ * its data: a volume's content stays in the engine.
+ */
+function toDeploy(c: Container, s: RunInit): Partial<Deploy> {
+  return {
+    image: c.image,
+    name: kubeName(c.name),
+    port: (s.ports ?? []).map((p) => p.b).find((p) => /^\d+$/.test(p)) ?? "",
+    env: s.env ?? [],
+    keepOpen: !!s.interactive,
+  };
+}
+
+/** The ports a container was made to publish: host → container. */
+function bindings(info: any, c: Container): { a: string; b: string }[] {
+  const out: { a: string; b: string }[] = [];
+  for (const [key, list] of Object.entries<any>(info?.HostConfig?.PortBindings ?? {})) {
+    const [port, proto] = key.split("/");
+    if (proto && proto !== "tcp") continue; // the form makes TCP ports
+    for (const b of list ?? []) if (b?.HostPort) out.push({ a: b.HostPort, b: port });
+  }
+  if (out.length) return out;
+  return c.ports.filter((p) => p.public).map((p) => ({ a: String(p.public), b: String(p.private) }));
+}
+
 /** Reads a container's settings back into the form that made it. */
 async function settingsOf(c: Container): Promise<RunInit> {
   const info = JSON.parse(await call<string>("InspectContainer", c.id));
@@ -138,7 +169,9 @@ async function settingsOf(c: Container): Promise<RunInit> {
   return {
     image: c.image,
     name: c.name,
-    ports: c.ports.filter((p) => p.public).map((p) => ({ a: String(p.public), b: String(p.private) })),
+    // From its settings, not the list: a container just started may not
+    // show its published ports there yet.
+    ports: bindings(info, c),
     mounts: (info?.Mounts ?? []).filter((m: any) => m.Destination && (m.Name || m.Source)).map((m: any) => ({ a: m.Type === "volume" ? m.Name : m.Source, b: m.Destination })),
     env: env
       .filter((e) => !/^(PATH|HOSTNAME)=/.test(e))
@@ -151,7 +184,7 @@ async function settingsOf(c: Container): Promise<RunInit> {
   };
 }
 
-export default function Containers({ containers, sizes, images, run, onOpen, onNew, onRecreate }: Props) {
+export default function Containers({ containers, sizes, images, run, onOpen, onNew, onRecreate, onKube }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [showSystem, setShowSystem] = useState(false);
@@ -269,6 +302,7 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
     items.push({ label: "설정 바꿔 다시 만들기", onClick: () => settingsOf(c).then(onRecreate, () => {}) });
     items.push({ label: "다른 엔진으로 복사", onClick: () => setCopying(c) });
     items.push({ label: "파일로 내보내기", onClick: () => setExporting([c.id]) });
+    if (onKube) items.push({ label: "Kubernetes로 배포", onClick: () => settingsOf(c).then((s) => onKube(toDeploy(c, s)), () => {}) });
     if (isUp(c)) items.push({ label: "강제 종료", onClick: () => act(c, "kill"), danger: true });
     return items;
   };

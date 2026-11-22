@@ -66,3 +66,23 @@ func TestWaitedText(t *testing.T) {
 		}
 	}
 }
+
+func TestEditableYAML(t *testing.T) {
+	in := `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default","uid":"u","resourceVersion":"9","generation":2,"creationTimestamp":"2026-01-01T00:00:00Z","managedFields":[{}],
+"annotations":{"kubectl.kubernetes.io/last-applied-configuration":"{}","deployment.kubernetes.io/revision":"2"}},
+"spec":{"replicas":2,"template":{"metadata":{"creationTimestamp":null,"labels":{"app":"web"}},"spec":{"containers":[{"name":"web","image":"nginx"}]}}},"status":{"readyReplicas":2}}`
+	out, err := editableYAML(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"uid", "resourceVersion", "generation", "creationTimestamp", "managedFields", "annotations", "status", "readyReplicas"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("%s is left:\n%s", gone, out)
+		}
+	}
+	for _, kept := range []string{"apiVersion: apps/v1", "kind: Deployment", "name: web", "replicas: 2", "image: nginx", "app: web"} {
+		if !strings.Contains(out, kept) {
+			t.Errorf("%s is lost:\n%s", kept, out)
+		}
+	}
+}

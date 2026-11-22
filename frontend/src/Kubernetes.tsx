@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, type PullState, type Run } from "./bridge";
 import { ago } from "./format";
 import Terminal from "./Terminal";
-import { appliedDeployments, DataDialog, DeployDialog, DeployProgress, Flow, type Item, PvcDialog, podsOf, routes, useElapsed, whyPod } from "./KubeExtras";
+import { appliedDeployments, DataDialog, type Deploy, DeployDialog, DeployProgress, Flow, type Item, PvcDialog, podsOf, routes, useElapsed, whyPod } from "./KubeExtras";
 import { Dialog, IconButton, Menu, Progress } from "./ui";
 
 interface KubeState {
@@ -146,7 +146,7 @@ function useKept<T>(key: string, initial: T): [T, (v: T | ((old: T) => T)) => vo
   return [value, put];
 }
 
-export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: string) => void }) {
+export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken }: { run: Run; showCli: (cmd: string) => void; deployFrom?: Partial<Deploy> | null; onDeployFromTaken?: () => void }) {
   const [state, setState] = useState<KubeState | null>(null);
   const [starting, setStarting] = useState<string | null>(null); // what the start is doing
   const [bootLog, setBootLog] = useState<string[]>([]); // the cluster's own words while it starts
@@ -171,7 +171,21 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const tabRef = useRef<Tab>("flow");
   tabRef.current = tab;
   const [text, setText] = useState<{ title: string; body: string; reload?: () => Promise<string> } | null>(null);
-  const [applying, setApplying] = useState<string | null>(null);
+  const [applying, setApplyingText] = useState<string | null>(null);
+  // Whose YAML is in the dialog to be changed ("" for new).
+  const [editing, setEditing] = useState("");
+  const setApplying = (text: string | null) => {
+    if (text === null) setEditing("");
+    setApplyingText(text);
+  };
+  // Changing what is deployed: its YAML as it is now, to change and apply.
+  const edit = async (kind: string, namespace: string, name: string) => {
+    let yaml = "";
+    if (await run(kubectl(`get ${kind} ${name} -n ${namespace} -o yaml`), async () => (yaml = await call<string>("KubeYAML", kind, namespace, name)))) {
+      setEditing(name);
+      setApplyingText(yaml);
+    }
+  };
   const [shell, setShell] = useState<{ namespace: string; name: string } | null>(null);
   const [forwards, setForwards] = useState<Forward[]>([]);
   const [fwd, setFwd] = useState<{ namespace: string; name: string; ports: number[]; port: number; local: string } | null>(null);
@@ -305,22 +319,35 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const del = (kind: string, namespace: string, name: string, body: string) =>
     setConfirm({ title: `${name} 삭제`, body, command: kubectl(`delete ${kind} ${name} -n ${namespace}`), go: () => call("KubeDelete", kind, namespace, name) });
 
+  // A container to deploy, from the containers page: the form opens filled.
+  const [deployInit, setDeployInit] = useState<Partial<Deploy> | undefined>(undefined);
+  useEffect(() => {
+    if (!deployFrom || !state?.ready) return;
+    setDeployInit(deployFrom);
+    setDeploying(true);
+    onDeployFromTaken?.();
+  }, [deployFrom, state?.ready]);
+
   // Sending to the cluster: since when, for the seconds shown meanwhile.
   const [sendingSince, setSendingSince] = useKept<number | null>("sendingSince", null);
   const sent = useElapsed(sendingSince);
   // Deployments just applied, followed until their pods are ready.
   const [tracking, setTracking] = useKept<string[]>("tracking", []);
+  const [trackSince, setTrackSince] = useKept("trackSince", 0);
   useEffect(() => {
     if (tracking.length === 0) return;
     const t = setInterval(refresh, 2500);
     return () => clearInterval(t);
   }, [tracking.length]);
 
-  const deploy = async (yaml: string) => {
+  const deploy = async (yaml: string, image = "") => {
     let out = "";
     setWorking(true);
-    setSendingSince(Date.now());
-    const ok = await run(kubectl("apply -f app.yaml"), async () => (out = await call<string>("KubeApply", yaml)));
+    const sentAt = Date.now();
+    setSendingSince(sentAt);
+    // The engine's copy first, when asked: the cluster won't find it elsewhere.
+    const loaded = !image || (await run(`docker save ${image} | docker exec -i boxforge-k3s ctr -n k8s.io images import -`, () => call("KubeLoadImage", image)));
+    const ok = loaded && (await run(kubectl("apply -f app.yaml"), async () => (out = await call<string>("KubeApply", yaml))));
     setWorking(false);
     setSendingSince(null);
     if (ok) {
@@ -328,6 +355,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
       setMaking(null);
       setApplied(out.trim());
       setTracking(appliedDeployments(out));
+      setTrackSince(sentAt);
       setTab("flow");
       refresh();
     }
@@ -359,13 +387,15 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const apply = async () => {
     const yaml = applying ?? "";
     let out = "";
-    setSendingSince(Date.now());
+    const sentAt = Date.now();
+    setSendingSince(sentAt);
     const ok = await run(kubectl("apply -f app.yaml"), async () => (out = await call<string>("KubeApply", yaml)));
     setSendingSince(null);
     if (ok) {
       setApplying(null);
       setApplied(out.trim());
       setTracking(appliedDeployments(out));
+      setTrackSince(sentAt);
       refresh();
     }
   };
@@ -440,6 +470,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               onClick={() => {
                 // Its list of settings to pass in: read now, whatever tab is open.
                 for (const [kind, set] of [["configmaps", setConfigs], ["secrets", setSecrets]] as const) call<string>("KubeGet", kind).then((j) => set(JSON.parse(j).items ?? []), () => {});
+                setDeployInit(undefined);
                 setDeploying(true);
               }}
             >
@@ -529,6 +560,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
         <>
           {tracking.length > 0 && (
             <DeployProgress
+              since={trackSince}
               names={tracking}
               workloads={workloads}
               pods={pods}
@@ -657,6 +689,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                               <IconButton icon="plus" label="파드 하나 늘리기" onClick={() => act(`scale ${kind} ${name} -n ${namespace} --replicas=${want + 1}`, "KubeScale", kind, namespace, name, want + 1)} />
                             </>
                           )}
+                          <IconButton icon="edit" label="고치기 (YAML)" onClick={() => edit(kind, namespace, name)} />
                           <IconButton icon="restart" label="파드를 새로 바꾸기 (rollout restart)" onClick={() => act(`rollout restart ${kind} ${name} -n ${namespace}`, "KubeRestart", kind, namespace, name)} />
                           <IconButton icon="trash" label="삭제 (파드도 함께 사라짐)" tone="danger" onClick={() => del(kind, namespace, name, `${w.kind} ${name}와 그 파드 ${have}개를 지웁니다. 서비스 · 주소 · 저장소는 남습니다.`)} />
                         </td>
@@ -730,7 +763,10 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                             </button>
                           )}
                           {!(namespace === "default" && name === "kubernetes") && (
+                            <>
+                            <IconButton icon="edit" label="고치기 (YAML)" onClick={() => edit("service", namespace, name)} />
                             <IconButton icon="trash" label="삭제" tone="danger" onClick={() => del("service", namespace, name, `서비스 ${name}를 지웁니다. 파드는 그대로 돌지만, 이 이름으로 접속하던 곳은 더 닿지 않습니다.`)} />
+                            </>
                           )}
                         </td>
                       </tr>
@@ -817,6 +853,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                           ))}
                         </td>
                         <td className="actions">
+                          <IconButton icon="edit" label="고치기 (YAML)" onClick={() => edit("ingress", namespace, name)} />
                           <IconButton icon="trash" label="삭제" tone="danger" onClick={() => del("ingress", namespace, name, `주소 ${name}을 지웁니다. 앱은 그대로 돌지만 이 주소로는 더 열리지 않습니다.`)} />
                         </td>
                       </tr>
@@ -880,6 +917,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
                         <td className="muted nowrap">{since(c.metadata.creationTimestamp)}</td>
                         <td className="actions">
                           <button onClick={() => open(name, `describe ${kind} ${name} -n ${namespace}`, () => call<string>("KubeDescribe", kind, namespace, name))}>자세히</button>
+                          {!secret && <IconButton icon="edit" label="고치기 (YAML)" onClick={() => edit(kind, namespace, name)} />}
                           <IconButton icon="trash" label="삭제" tone="danger" onClick={() => del(kind, namespace, name, `${c.kind} ${name}의 값 ${keys.length}개를 지웁니다. 이것을 쓰는 앱은 다시 시작할 때 설정을 찾지 못합니다.`)} />
                         </td>
                       </tr>
@@ -1063,9 +1101,11 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
       )}
 
       {applying !== null && (
-        <Dialog title="YAML 적용" onClose={() => setApplying(null)} wide>
+        <Dialog title={editing ? `${editing} 고치기` : "YAML 적용"} onClose={() => setApplying(null)} wide>
           <p className="muted">
-            만들거나 바꿀 것을 YAML로 적습니다. 아래는 nginx 두 개를 띄우고 이름을 붙이는 예시입니다. 같은 이름이 이미 있으면 내용이 바뀝니다.
+            {editing
+              ? "지금 클러스터에 있는 그대로입니다. 고친 뒤 적용하면 지우지 않고 바뀝니다. 파드의 설정(이미지 · 환경변수 · 명령 등)을 바꾸면 새 파드로 하나씩 바뀝니다."
+              : "만들거나 바꿀 것을 YAML로 적습니다. 아래는 nginx 두 개를 띄우고 이름을 붙이는 예시입니다. 같은 이름이 이미 있으면 내용이 바뀝니다."}
           </p>
           <textarea className="editor" aria-label="적용할 YAML" spellCheck={false} value={applying} onChange={(e) => setApplying(e.target.value)} />
           <div className="dialog-actions">
@@ -1082,7 +1122,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
         </Dialog>
       )}
 
-      {deploying && <DeployDialog data={[...configs, ...secrets]} busy={working} busyText={`클러스터에 보내는 중입니다 (${sent}초). 느린 기계에서는 1분 넘게 걸리기도 합니다.`} onApply={(y) => deploy(y)} onYaml={(y) => (setDeploying(false), setApplying(y))} onClose={() => setDeploying(false)} />}
+      {deploying && <DeployDialog data={[...configs, ...secrets]} init={deployInit} busy={working} busyText={`클러스터에 보내는 중입니다 (${sent}초). 느린 기계에서는 1분 넘게 걸리기도 합니다.`} onApply={(y, d) => deploy(y, d.fromEngine ? d.image.trim() : "")} onYaml={(y) => (setDeploying(false), setApplying(y))} onClose={() => setDeploying(false)} />}
       {making === "data" && <DataDialog busy={working} onCreate={makeData} onClose={() => setMaking(null)} />}
       {making === "pvc" && <PvcDialog busy={working} onCreate={(y) => deploy(y)} onClose={() => setMaking(null)} />}
       {confirm && (

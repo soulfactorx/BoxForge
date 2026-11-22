@@ -13,6 +13,7 @@ import type { RunInit } from "./recipes";
 import Settings, { type Theme, type UpdateInfo } from "./Settings";
 import Images from "./Images";
 import Kubernetes from "./Kubernetes";
+import type { Deploy } from "./KubeExtras";
 import Alerts from "./Alerts";
 import PathPicker from "./PathPicker";
 import RunDialog from "./RunDialog";
@@ -79,6 +80,7 @@ export default function App() {
   const settled = useRef(false);
   const [detail, setDetail] = useState<{ id: string; tab: Tab } | null>(null);
   const [running, setRunning] = useState<RunInit | null>(null); // what the run dialog starts filled with
+  const [toKube, setToKube] = useState<Partial<Deploy> | null>(null); // a container, to be deployed to Kubernetes
   const [history, setHistory] = useState<{ cmd: string; at: number }[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [choosing, setChoosing] = useState(false);
@@ -406,6 +408,10 @@ export default function App() {
             onOpen={(id, tab = "overview") => setDetail({ id, tab })}
             onNew={() => setRunning({ image: "" })}
             onRecreate={(init) => setRunning(init)}
+            onKube={(init) => {
+              setToKube(init);
+              setPage("kube");
+            }}
           />
         )}
         {page === "images" && <Images
@@ -420,7 +426,7 @@ export default function App() {
         </div>
         {/* Kept alive while hidden: a build or a compose command goes on,
             and its form and output are still there on coming back. */}
-        {page === "kube" && <Kubernetes run={run} showCli={showCli} />}
+        {page === "kube" && <Kubernetes run={run} showCli={showCli} deployFrom={toKube} onDeployFromTaken={() => setToKube(null)} />}
         {page === "map" && (
           <Topology
             containers={containers}

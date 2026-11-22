@@ -108,9 +108,10 @@ export interface Deploy {
   mount: string;
   command: string; // run in place of the image's own ("" for its own), through sh -c
   keepOpen: boolean; // a terminal and input kept open: what a bare shell needs to stay up
+  fromEngine: boolean; // the engine's copy of the image is put into the cluster first
 }
 
-export const emptyDeploy: Deploy = { name: "", image: "", replicas: "1", port: "", env: [], from: "", reach: "inside", host: "", disk: "", mount: "/data", command: "", keepOpen: false };
+export const emptyDeploy: Deploy = { name: "", image: "", replicas: "1", port: "", env: [], from: "", reach: "inside", host: "", disk: "", mount: "/data", command: "", keepOpen: false, fromEngine: false };
 
 // Base images whose own command is only a shell, when the engine can't say.
 const shellImage = /^(?:docker\.io\/)?(?:library\/)?(alpine|ubuntu|debian|busybox|fedora|centos|rockylinux|almalinux|archlinux|amazonlinux|oraclelinux|opensuse\/\w+)(?::[^/]*)?$/;
@@ -139,6 +140,8 @@ export function deployYaml(d: Deploy): string {
     `        - name: ${name}`,
     `          image: ${q(d.image.trim())}`,
   ];
+  // Put in from the engine: not to be fetched from anywhere (":latest" would be).
+  if (d.fromEngine) lines.push("          imagePullPolicy: IfNotPresent");
   if (d.command.trim()) lines.push(`          command: ["sh", "-c", ${q(d.command.trim())}]`);
   else if (d.keepOpen) lines.push("          stdin: true", "          tty: true");
   if (port) lines.push("          ports:", `            - containerPort: ${port}`);
@@ -191,19 +194,32 @@ function pvcLines(name: string, gb: string) {
 export const pvcYaml = (name: string, gb: string) => pvcLines(name, gb).join("\n") + "\n";
 
 /** The deploy helper: a form for the usual case, and the YAML it makes. */
-export function DeployDialog(props: { data: Item[]; onApply: (yaml: string, d: Deploy) => void; onYaml: (yaml: string) => void; onClose: () => void; busy: boolean; busyText?: string }) {
-  const [d, setD] = useState<Deploy>(emptyDeploy);
+export function DeployDialog(props: { init?: Partial<Deploy>; data: Item[]; onApply: (yaml: string, d: Deploy) => void; onYaml: (yaml: string) => void; onClose: () => void; busy: boolean; busyText?: string }) {
+  const [d, setD] = useState<Deploy>({ ...emptyDeploy, ...props.init });
   const [show, setShow] = useState(false);
   const set = (patch: Partial<Deploy>) => setD((old) => ({ ...old, ...patch }));
   const yaml = useMemo(() => deployYaml(d), [d]);
   // An image that only runs a shell ends at once without a terminal: found
   // out (from the engine's copy, else by its name) and kept open.
   const [bare, setBare] = useState(false);
+  // The engine has the image: it can go into the cluster from here.
+  const [here, setHere] = useState(false);
   useEffect(() => {
     const image = d.image.trim();
-    if (!image) return setBare(false);
+    if (!image) {
+      setHere(false);
+      return setBare(false);
+    }
     let stale = false;
     const t = setTimeout(() => {
+      call<boolean>("ImageHere", image).then(
+        (yes) => {
+          if (stale) return;
+          setHere(!!yes);
+          set({ fromEngine: !!yes });
+        },
+        () => {},
+      );
       call<{ shell: boolean }>("ImageDefaults", image).then(
         (x) => !stale && found(!!x?.shell || looksBareShell(image)),
         () => !stale && found(looksBareShell(image)),
@@ -253,6 +269,15 @@ export function DeployDialog(props: { data: Item[]; onApply: (yaml: string, d: D
             <span className="help">앱이 기다리는 포트. 웹이 아니면 비워 둡니다.</span>
           </label>
         </div>
+        {here && (
+          <label className="check">
+            <input type="checkbox" checked={d.fromEngine} onChange={(e) => set({ fromEngine: e.target.checked })} />
+            <span>
+              이 PC(엔진)에 있는 이미지를 클러스터에 넣어서 쓰기
+              <span className="sub">클러스터는 이미지를 따로 받습니다. 이 PC에서 빌드만 한 이미지는 이것을 켜야 쓸 수 있고, 다른 이미지도 다시 받지 않아 빠릅니다.</span>
+            </span>
+          </label>
+        )}
         <label>
           실행할 명령
           <input aria-label="실행할 명령" placeholder="비워 두면 이미지에 정해진 것" value={d.command} onChange={(e) => set({ command: e.target.value })} />
@@ -534,7 +559,9 @@ const stepMeaning: Record<string, string> = {
   Provisioning: "저장 공간을 만드는 중",
 };
 
-const when = (e: Item) => Date.parse(e.lastTimestamp ?? e.eventTime ?? e.metadata.creationTimestamp) || 0;
+// When a step first happened: what orders them. A step repeated keeps its
+// first time, its last one moving on with each repeat.
+const began = (e: Item) => Date.parse(e.firstTimestamp ?? e.eventTime ?? e.metadata.creationTimestamp) || 0;
 
 /** The deployments named in `kubectl apply`'s answer ("deployment.apps/web created"). */
 export const appliedDeployments = (out: string) => [...out.matchAll(/^deployment\.apps\/(\S+) (?:created|configured)/gm)].map((m) => m[1]);
@@ -554,7 +581,7 @@ export function useElapsed(since: number | null) {
  * How a deployment just applied is coming up: each of its pods, and the
  * cluster's own steps (pod made, image being fetched, started) in plain words.
  */
-export function DeployProgress(props: { names: string[]; workloads: Item[]; pods: Item[]; events: Item[]; podTone: (p: Item) => "ok" | "wait" | "bad" | "done"; podText: (p: Item) => string; onClose: () => void }) {
+export function DeployProgress(props: { since: number; names: string[]; workloads: Item[]; pods: Item[]; events: Item[]; podTone: (p: Item) => "ok" | "wait" | "bad" | "done"; podText: (p: Item) => string; onClose: () => void }) {
   const rows = props.names.map((name) => {
     const w = props.workloads.find((x) => x.kind === "Deployment" && x.metadata.name === name && x.metadata.namespace === "default");
     const pods = w ? podsOf(w, props.pods) : [];
@@ -566,7 +593,10 @@ export function DeployProgress(props: { names: string[]; workloads: Item[]; pods
     };
     // The same step again and again (a container restarted over and over) once, with how often.
     const steps: (Item & { times: number })[] = [];
-    for (const e of props.events.filter(mine).sort((a, b) => when(a) - when(b))) {
+    // Only what began with this deployment: one of the same name before it
+    // (a failed try) left steps of its own. A little early, for clocks apart.
+    const fresh = (e: Item) => began(e) >= props.since - 5000;
+    for (const e of props.events.filter((e) => mine(e) && fresh(e)).sort((a, b) => began(a) - began(b))) {
       const prev = steps[steps.length - 1];
       if (prev && prev.reason === e.reason) prev.times += e.count ?? 1;
       else steps.push({ ...e, times: e.count ?? 1 });

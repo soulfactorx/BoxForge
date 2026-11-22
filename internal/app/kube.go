@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/soulfactorx/boxforge/internal/engine"
 	"github.com/soulfactorx/boxforge/internal/engines"
+	"gopkg.in/yaml.v3"
 )
 
 // Kubernetes here is k3s, a whole single-node cluster in one container on
@@ -831,4 +833,112 @@ func (a *App) kubeTrustNow(ctx context.Context, restart bool) error {
 		return cs.Restart(ctx, kubeContainer)
 	}
 	return nil
+}
+
+// The kinds whose YAML can be fetched to be changed. Not secrets: their
+// values are never sent to the screen.
+var kubeEditable = map[string]bool{
+	"deployment": true, "statefulset": true, "daemonset": true, "service": true,
+	"ingress": true, "configmap": true, "persistentvolumeclaim": true,
+}
+
+// KubeYAML returns one object as YAML to change and apply again: what the
+// cluster keeps about it for itself (status, ids, times, the copy apply
+// leaves in an annotation) taken out.
+func (a *App) KubeYAML(kind, namespace, name string) (string, error) {
+	if !kubeEditable[kind] {
+		return "", fmt.Errorf("%s can't be changed here", kind)
+	}
+	ref, err := kubeRef(kind, namespace, name)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := a.kubectl(ctx, nil, append([]string{"get", "-o", "json"}, ref...)...)
+	if err != nil {
+		return "", err
+	}
+	return editableYAML(out)
+}
+
+// editableYAML is an object's JSON as kubectl gives it, as YAML a person
+// would write.
+func editableYAML(object string) (string, error) {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(object), &obj); err != nil {
+		return "", err
+	}
+	delete(obj, "status")
+	if meta, ok := obj["metadata"].(map[string]any); ok {
+		for _, k := range []string{"uid", "resourceVersion", "generation", "creationTimestamp", "managedFields", "selfLink"} {
+			delete(meta, k)
+		}
+		if notes, ok := meta["annotations"].(map[string]any); ok {
+			delete(notes, "kubectl.kubernetes.io/last-applied-configuration")
+			delete(notes, "deployment.kubernetes.io/revision")
+			if len(notes) == 0 {
+				delete(meta, "annotations")
+			}
+		}
+	}
+	if spec, ok := obj["spec"].(map[string]any); ok {
+		if tpl, ok := spec["template"].(map[string]any); ok {
+			if meta, ok := tpl["metadata"].(map[string]any); ok {
+				delete(meta, "creationTimestamp")
+			}
+		}
+	}
+	b, err := yaml.Marshal(obj)
+	return string(b), err
+}
+
+// ImageHere reports whether the engine has the image.
+func (a *App) ImageHere(ref string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return a.eng().Images().Exists(ctx, strings.TrimSpace(ref))
+}
+
+// KubeLoadImage puts an image the engine has into the cluster's own store:
+// the cluster fetches its images itself and does not see the engine's, so
+// one built on this PC (and never pushed anywhere) can't be run otherwise.
+// It goes as `docker save` into the cluster's `ctr images import`.
+func (a *App) KubeLoadImage(ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.ContainsAny(ref, " \t\n") {
+		return fmt.Errorf("%q is not an image name", ref)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
+	defer cancel()
+	image, err := a.eng().Images().Save(ctx, ref)
+	if err != nil {
+		return err
+	}
+	defer image.Close()
+	p, err := a.eng().Containers().Pipe(ctx, kubeContainer, []string{"ctr", "-n", "k8s.io", "images", "import", "-"})
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+	said := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(io.LimitReader(p, 1<<20))
+		said <- string(b)
+	}()
+	if _, err := io.Copy(p, image); err != nil {
+		return err
+	}
+	if c, ok := p.(interface{ CloseWrite() error }); ok {
+		_ = c.CloseWrite()
+	}
+	select {
+	case out := <-said:
+		if strings.Contains(strings.ToLower(out), "ctr: ") {
+			return fmt.Errorf("%s", strings.TrimSpace(out))
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

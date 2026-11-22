@@ -213,6 +213,57 @@ test("an image that only runs a shell is kept open, and a command can be given",
   kubectl("delete deployment/bfe2e-shell --wait=false");
 });
 
+test("an image only the engine has goes into the cluster, and a deployment is changed by its YAML", async ({ page }) => {
+  await kube(page);
+  // Made here and never pushed anywhere: the cluster can't fetch it.
+  sh(`docker tag ${ALPINE} bfe2e-local/app:1`);
+  await page.getByRole("button", { name: "앱 배포" }).click();
+  const d = page.getByRole("dialog");
+  await d.getByLabel("이미지").fill("bfe2e-local/app:1");
+  await d.getByLabel("이름").fill("bfe2e-edit");
+  const put = d.getByLabel("이 PC(엔진)에 있는 이미지를 클러스터에 넣어서 쓰기");
+  await expect(put).toBeChecked();
+  await d.getByRole("button", { name: "만들어질 YAML 보기" }).click();
+  await expect(d.getByTestId("deploy-yaml")).toContainText("imagePullPolicy: IfNotPresent");
+  await d.getByRole("button", { name: "배포" }).click();
+  await expect(page.getByTestId("applied")).toContainText("deployment.apps/bfe2e-edit created", { timeout: 120_000 });
+  expect(sh("docker exec boxforge-k3s ctr -n k8s.io images ls -q")).toContain("bfe2e-local/app:1");
+
+  // Changed, not deleted: its YAML as it is, edited, applied.
+  await page.getByRole("tab", { name: /워크로드/ }).click();
+  await page.getByTestId("workload-bfe2e-edit").getByRole("button", { name: "고치기 (YAML)" }).click();
+  const edit = page.getByRole("dialog", { name: "bfe2e-edit 고치기" });
+  const box = edit.getByLabel("적용할 YAML");
+  await expect(box).toHaveValue(/replicas: 1/);
+  expect(await box.inputValue()).not.toContain("resourceVersion");
+  await box.fill((await box.inputValue()).replace("replicas: 1", "replicas: 2"));
+  await edit.getByRole("button", { name: "적용" }).click();
+  await expect(page.getByTestId("applied")).toContainText("deployment.apps/bfe2e-edit configured");
+  expect(kubectl("get deployment bfe2e-edit -o jsonpath={.spec.replicas}")).toBe("2");
+  kubectl("delete deployment/bfe2e-edit --wait=false");
+  sh("docker rmi bfe2e-local/app:1", true);
+});
+
+test("a running container is deployed to Kubernetes from its menu, the form filled", async ({ page }) => {
+  await kube(page);
+  sh(`docker run -dit --name bfe2e-kc -p 127.0.0.1:18089:80 -e MODE=prod ${ALPINE} sh`);
+  try {
+    await go(page, "containers");
+    await page.locator("tr", { hasText: "bfe2e-kc" }).getByRole("button", { name: "더보기" }).click();
+    await page.getByRole("menuitem", { name: "Kubernetes로 배포" }).click();
+    const d = page.getByRole("dialog", { name: "앱 배포" });
+    await expect(d.getByLabel("이미지")).toHaveValue(ALPINE);
+    await expect(d.getByLabel("이름", { exact: true })).toHaveValue("bfe2e-kc");
+    await expect(d.getByLabel("컨테이너 포트")).toHaveValue("80");
+    await expect(d.getByLabel("환경변수 1: 이름")).toHaveValue("MODE");
+    await expect(d.getByLabel("환경변수 1: 값")).toHaveValue("prod");
+    await expect(d.getByLabel("터미널을 연 채로 두기")).toBeChecked();
+    await d.getByRole("button", { name: "취소" }).click();
+  } finally {
+    sh("docker rm -f bfe2e-kc", true);
+  }
+});
+
 test("a stuck pod says why, and deleting asks first", async ({ page }) => {
   await kube(page);
   await page.getByRole("button", { name: "앱 배포" }).click();
