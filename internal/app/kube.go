@@ -30,9 +30,10 @@ import (
 // kept in the volume: what changed reaches clusters made before.
 //
 //	2: --disable-network-policy, --node-name, the API port on 127.0.0.1 only
+//	3: kube-proxy masquerade-all
 const (
 	kubeMadeLabel = "dev.boxforge.k3s"
-	kubeMade      = "2"
+	kubeMade      = "3"
 	kubeNode      = "boxforge"
 )
 
@@ -42,7 +43,14 @@ const (
 // the cluster from starting ("failed to find interface with specified node
 // ip"). It is also memory a small machine is short of. The node's name is
 // fixed so that a container made again is the same node.
-var kubeArgs = []string{"server", "--disable-network-policy", "--node-name", kubeNode}
+//
+// Traffic to a service's address is always masqueraded: a pod reaching
+// another pod on the same bridge through a service address (DNS itself,
+// at 10.43.0.10) gets its answer straight over the bridge, from the pod's
+// own address, and drops it, unless the engine's machine has the
+// br_netfilter kernel module loaded, which a container can't see to. Seen
+// as "no servers could be reached" for every name inside the cluster.
+var kubeArgs = []string{"server", "--disable-network-policy", "--node-name", kubeNode, "--kube-proxy-arg=masquerade-all=true"}
 
 // kubeContainer is the cluster's container, and kubeVolume its data.
 const (

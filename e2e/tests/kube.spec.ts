@@ -123,7 +123,7 @@ test("a cluster made by an older BoxForge is made again at its start, its data k
   await go(page, "kube");
   await expect(page.getByTestId("kube-state")).toContainText("꺼짐", { timeout: 60_000 });
   await kube(page);
-  expect(sh("docker inspect -f '{{index .Config.Labels \"dev.boxforge.k3s\"}} {{json .Config.Cmd}}' boxforge-k3s")).toBe('2 ["server","--disable-network-policy","--node-name","boxforge"]');
+  expect(sh("docker inspect -f '{{index .Config.Labels \"dev.boxforge.k3s\"}} {{json .Config.Cmd}}' boxforge-k3s")).toBe('3 ["server","--disable-network-policy","--node-name","boxforge","--kube-proxy-arg=masquerade-all=true"]');
   // What was in it is still there, on one node, the new one.
   expect(kubectl("get secret bfe2e-secret -o name")).toBe("secret/bfe2e-secret");
   await expect.poll(() => kubectl("get nodes -o jsonpath={.items[*].metadata.name}"), { timeout: 60_000 }).toBe("boxforge");
