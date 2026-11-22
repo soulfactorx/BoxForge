@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, type PullState, type Run } from "./bridge";
 import { ago } from "./format";
 import Terminal from "./Terminal";
-import { DataDialog, DeployDialog, Flow, type Item, PvcDialog, podsOf, routes, whyPod } from "./KubeExtras";
+import { appliedDeployments, DataDialog, DeployDialog, DeployProgress, Flow, type Item, PvcDialog, podsOf, routes, useElapsed, whyPod } from "./KubeExtras";
 import { Dialog, IconButton, Menu, Progress } from "./ui";
 
 interface KubeState {
@@ -123,6 +123,29 @@ function BootLog({ lines, open, onToggle }: { lines: string[]; open: boolean; on
   );
 }
 
+// What the screen knows, kept while it is not shown: leaving the page and
+// coming back finds the lists already read, a deployment still being sent,
+// and the one being followed. A cluster on a slow machine takes seconds to
+// list again, and a send that is under way goes on without the screen.
+const kept: Record<string, unknown> = {};
+const keptChanged = new EventTarget();
+
+/** useState, its value kept in `kept` across the page being left. */
+function useKept<T>(key: string, initial: T): [T, (v: T | ((old: T) => T)) => void] {
+  const [value, set] = useState<T>(() => (key in kept ? (kept[key] as T) : initial));
+  useEffect(() => {
+    const on = () => set(kept[key] as T);
+    keptChanged.addEventListener(key, on);
+    return () => keptChanged.removeEventListener(key, on);
+  }, [key]);
+  const put = (v: T | ((old: T) => T)) => {
+    const next = typeof v === "function" ? (v as (old: T) => T)((key in kept ? kept[key] : initial) as T) : v;
+    kept[key] = next;
+    keptChanged.dispatchEvent(new Event(key));
+  };
+  return [value, put];
+}
+
 export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: string) => void }) {
   const [state, setState] = useState<KubeState | null>(null);
   const [starting, setStarting] = useState<string | null>(null); // what the start is doing
@@ -131,14 +154,16 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const [pull, setPull] = useState<PullState | null>(null);
   const [tab, setTab] = useState<Tab>("flow");
   const [showSystem, setShowSystem] = useState(false);
-  const [pods, setPods] = useState<Item[]>([]);
-  const [workloads, setWorkloads] = useState<Item[]>([]);
-  const [services, setServices] = useState<Item[]>([]);
-  const [events, setEvents] = useState<Item[]>([]);
-  const [ingresses, setIngresses] = useState<Item[]>([]);
-  const [configs, setConfigs] = useState<Item[]>([]);
-  const [secrets, setSecrets] = useState<Item[]>([]);
-  const [pvcs, setPvcs] = useState<Item[]>([]);
+  const [pods, setPods] = useKept<Item[]>("pods", []);
+  const [workloads, setWorkloads] = useKept<Item[]>("workloads", []);
+  const [services, setServices] = useKept<Item[]>("services", []);
+  const [events, setEvents] = useKept<Item[]>("events", []);
+  const [ingresses, setIngresses] = useKept<Item[]>("ingresses", []);
+  const [configs, setConfigs] = useKept<Item[]>("configs", []);
+  const [secrets, setSecrets] = useKept<Item[]>("secrets", []);
+  const [pvcs, setPvcs] = useKept<Item[]>("pvcs", []);
+  // Whether the lists have been read once: until then "none" would be a guess.
+  const [loaded, setLoaded] = useKept("loaded", false);
   const [deploying, setDeploying] = useState(false);
   const [making, setMaking] = useState<"data" | "pvc" | null>(null);
   const [working, setWorking] = useState(false);
@@ -168,7 +193,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
     await run(`# localhost:${f.local} → ${f.service}:${f.port} 연결 끊기 (kubectl port-forward 를 Ctrl+C 로 끝내는 것과 같음)`, () => call("KubeForwardStop", f.id));
     loadForwards();
   };
-  const [applied, setApplied] = useState("");
+  const [applied, setApplied] = useKept("applied", "");
   const [removing, setRemoving] = useState(false);
   const [note, setNote] = useState("");
   const busy = useRef(false);
@@ -188,8 +213,13 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
     loadForwards();
     // The rest only while their tab is open: each is a command in the cluster.
     const t = tabRef.current;
+    let got = 0;
+    const count = (set: (items: Item[]) => void) => (items: Item[]) => {
+      got++;
+      set(items);
+    };
     await Promise.all([
-      list("pods", setPods),
+      list("pods", count(setPods)),
       list("workloads", setWorkloads),
       list("services", setServices),
       list("events", setEvents),
@@ -197,6 +227,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
       ...(t === "config" ? [list("configmaps", setConfigs), list("secrets", setSecrets)] : []),
       ...(t === "storage" ? [list("persistentvolumeclaims", setPvcs)] : []),
     ]);
+    if (got > 0) setLoaded(true);
     busy.current = false;
   };
 
@@ -259,6 +290,8 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
       setConfigs([]);
       setSecrets([]);
       setPvcs([]);
+      setLoaded(false);
+      setTracking([]);
     }
     refresh();
   };
@@ -272,15 +305,29 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const del = (kind: string, namespace: string, name: string, body: string) =>
     setConfirm({ title: `${name} 삭제`, body, command: kubectl(`delete ${kind} ${name} -n ${namespace}`), go: () => call("KubeDelete", kind, namespace, name) });
 
+  // Sending to the cluster: since when, for the seconds shown meanwhile.
+  const [sendingSince, setSendingSince] = useKept<number | null>("sendingSince", null);
+  const sent = useElapsed(sendingSince);
+  // Deployments just applied, followed until their pods are ready.
+  const [tracking, setTracking] = useKept<string[]>("tracking", []);
+  useEffect(() => {
+    if (tracking.length === 0) return;
+    const t = setInterval(refresh, 2500);
+    return () => clearInterval(t);
+  }, [tracking.length]);
+
   const deploy = async (yaml: string) => {
     let out = "";
     setWorking(true);
+    setSendingSince(Date.now());
     const ok = await run(kubectl("apply -f app.yaml"), async () => (out = await call<string>("KubeApply", yaml)));
     setWorking(false);
+    setSendingSince(null);
     if (ok) {
       setDeploying(false);
       setMaking(null);
       setApplied(out.trim());
+      setTracking(appliedDeployments(out));
       setTab("flow");
       refresh();
     }
@@ -312,9 +359,13 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
   const apply = async () => {
     const yaml = applying ?? "";
     let out = "";
-    if (await run(kubectl("apply -f app.yaml"), async () => (out = await call<string>("KubeApply", yaml)))) {
+    setSendingSince(Date.now());
+    const ok = await run(kubectl("apply -f app.yaml"), async () => (out = await call<string>("KubeApply", yaml)));
+    setSendingSince(null);
+    if (ok) {
       setApplying(null);
       setApplied(out.trim());
+      setTracking(appliedDeployments(out));
       refresh();
     }
   };
@@ -363,6 +414,8 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
     if (await run(kubectl("port-forward svc/traefik 8080:80 -n kube-system"), () => call("KubeForward", "kube-system", "traefik", 80, 8080))) loadForwards();
   };
 
+  // Until the lists have been read once, nothing is said to be missing.
+  const view: Tab | "loading" = loaded ? tab : "loading";
   return (
     <section>
       <header className="page-head">
@@ -474,10 +527,26 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
 
       {ready && (
         <>
+          {tracking.length > 0 && (
+            <DeployProgress
+              names={tracking}
+              workloads={workloads}
+              pods={pods}
+              events={events}
+              podTone={(p) => podStatus(p).tone}
+              podText={(p) => { const t = podStatus(p).text; return meaning[t] ? `${t} · ${meaning[t]}` : t; }}
+              onClose={() => setTracking([])}
+            />
+          )}
           {applied && (
             <pre className="note-box applied" data-testid="applied">
               {applied}
             </pre>
+          )}
+          {sendingSince !== null && !deploying && applying === null && (
+            <p className="note" role="status" data-testid="deploy-sending">
+              <span className="spinner" /> {`배포할 내용을 클러스터에 보내는 중입니다 (${sent}초). 끝나면 아래에 진행 상황이 나옵니다.`}
+            </p>
           )}
           <div className="tabs kube-tabs" role="tablist">
             {tabs.map(([id, label, n]) => (
@@ -487,7 +556,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
             ))}
           </div>
 
-          {tab === "pods" &&
+          {view === "pods" &&
             (shownPods.length === 0 ? (
               <p className="empty">파드가 없습니다. "앱 배포"로 앱을 띄워 보세요.</p>
             ) : (
@@ -544,7 +613,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </table>
             ))}
 
-          {tab === "workloads" &&
+          {view === "workloads" &&
             (shownWork.length === 0 ? (
               <p className="empty">워크로드(Deployment 등)가 없습니다.</p>
             ) : (
@@ -598,7 +667,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </table>
             ))}
 
-          {tab === "services" && forwards.length > 0 && (
+          {view === "services" && forwards.length > 0 && (
             <div className="note-box forwards" data-testid="forwards">
               <strong>내 PC로 연결된 포트</strong>
               {forwards.map((f) => (
@@ -618,7 +687,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               <span className="sub">BoxForge가 켜져 있는 동안만 이어집니다.</span>
             </div>
           )}
-          {tab === "services" &&
+          {view === "services" &&
             (shownSvc.length === 0 ? (
               <p className="empty">서비스가 없습니다.</p>
             ) : (
@@ -671,9 +740,14 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </table>
             ))}
 
-          {tab === "flow" && <Flow workloads={shownWork} services={shownSvc} ingresses={shownIng} pods={shownPods} events={events} podTone={(p) => podStatus(p).tone} />}
+          {view === "loading" && (
+            <p className="muted" role="status" data-testid="kube-loading">
+              <span className="spinner" /> 클러스터에서 목록을 읽는 중… 느린 기계에서는 시간이 걸립니다.
+            </p>
+          )}
+          {view === "flow" && <Flow workloads={shownWork} services={shownSvc} ingresses={shownIng} pods={shownPods} events={events} podTone={(p) => podStatus(p).tone} />}
 
-          {tab === "ingresses" && (
+          {view === "ingresses" && (
             <div className="note-box forwards" data-testid="address-box">
               {traefik ? (
                 <>
@@ -696,7 +770,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               )}
             </div>
           )}
-          {tab === "ingresses" &&
+          {view === "ingresses" &&
             (shownIng.length === 0 ? (
               <p className="empty">주소(Ingress)가 없습니다. "앱 배포"에서 접속 방법을 "주소로"로 고르면 만들어집니다.</p>
             ) : (
@@ -752,7 +826,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </table>
             ))}
 
-          {tab === "config" && (
+          {view === "config" && (
             <div className="kube-bar">
               <p className="muted">앱에 줄 설정을 모아 둡니다. ConfigMap은 보통 설정, Secret은 비밀번호 · 키입니다.</p>
               <span className="spacer" />
@@ -761,7 +835,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </button>
             </div>
           )}
-          {tab === "config" &&
+          {view === "config" &&
             (shownData.length === 0 ? (
               <p className="empty">설정값이 없습니다.</p>
             ) : (
@@ -815,7 +889,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </table>
             ))}
 
-          {tab === "storage" && (
+          {view === "storage" && (
             <div className="kube-bar">
               <p className="muted">파드가 지워져도 남는 저장 공간(PersistentVolumeClaim)입니다.</p>
               <span className="spacer" />
@@ -824,7 +898,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </button>
             </div>
           )}
-          {tab === "storage" &&
+          {view === "storage" &&
             (shownPvc.length === 0 ? (
               <p className="empty">저장소가 없습니다.</p>
             ) : (
@@ -873,7 +947,7 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               </table>
             ))}
 
-          {tab === "events" &&
+          {view === "events" &&
             (warnings.length === 0 ? (
               <p className="empty">경고가 없습니다.</p>
             ) : (
@@ -996,14 +1070,19 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
           <textarea className="editor" aria-label="적용할 YAML" spellCheck={false} value={applying} onChange={(e) => setApplying(e.target.value)} />
           <div className="dialog-actions">
             <button onClick={() => setApplying(null)}>취소</button>
-            <button className="primary" disabled={!applying.trim()} onClick={apply}>
-              적용
+            <button className="primary" disabled={!applying.trim() || sendingSince !== null} onClick={apply}>
+              {sendingSince !== null ? "적용하는 중…" : "적용"}
             </button>
           </div>
+          {sendingSince !== null && (
+            <p className="muted" role="status">
+              <span className="spinner" /> {`클러스터에 보내는 중입니다 (${sent}초). 느린 기계에서는 1분 넘게 걸리기도 합니다.`}
+            </p>
+          )}
         </Dialog>
       )}
 
-      {deploying && <DeployDialog data={[...configs, ...secrets]} busy={working} onApply={(y) => deploy(y)} onYaml={(y) => (setDeploying(false), setApplying(y))} onClose={() => setDeploying(false)} />}
+      {deploying && <DeployDialog data={[...configs, ...secrets]} busy={working} busyText={`클러스터에 보내는 중입니다 (${sent}초). 느린 기계에서는 1분 넘게 걸리기도 합니다.`} onApply={(y) => deploy(y)} onYaml={(y) => (setDeploying(false), setApplying(y))} onClose={() => setDeploying(false)} />}
       {making === "data" && <DataDialog busy={working} onCreate={makeData} onClose={() => setMaking(null)} />}
       {making === "pvc" && <PvcDialog busy={working} onCreate={(y) => deploy(y)} onClose={() => setMaking(null)} />}
       {confirm && (

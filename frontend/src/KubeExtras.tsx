@@ -1,7 +1,7 @@
 // Kubernetes, the parts beyond the plain lists: the deploy helper, making
 // settings (ConfigMap · Secret) and storage (PVC), why a pod is stuck, and
 // the picture of how a request reaches the pods.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { type Pair } from "./recipes";
 import { Pairs } from "./RunDialog";
 import { Dialog } from "./ui";
@@ -176,7 +176,7 @@ function pvcLines(name: string, gb: string) {
 export const pvcYaml = (name: string, gb: string) => pvcLines(name, gb).join("\n") + "\n";
 
 /** The deploy helper: a form for the usual case, and the YAML it makes. */
-export function DeployDialog(props: { data: Item[]; onApply: (yaml: string, d: Deploy) => void; onYaml: (yaml: string) => void; onClose: () => void; busy: boolean }) {
+export function DeployDialog(props: { data: Item[]; onApply: (yaml: string, d: Deploy) => void; onYaml: (yaml: string) => void; onClose: () => void; busy: boolean; busyText?: string }) {
   const [d, setD] = useState<Deploy>(emptyDeploy);
   const [show, setShow] = useState(false);
   const set = (patch: Partial<Deploy>) => setD({ ...d, ...patch });
@@ -288,6 +288,11 @@ export function DeployDialog(props: { data: Item[]; onApply: (yaml: string, d: D
             {props.busy ? "배포하는 중…" : "배포"}
           </button>
         </div>
+        {props.busy && props.busyText && (
+          <p className="muted" role="status" data-testid="deploy-sending">
+            <span className="spinner" /> {props.busyText}
+          </p>
+        )}
       </form>
     </Dialog>
   );
@@ -453,6 +458,101 @@ export function Flow(props: { workloads: Item[]; services: Item[]; ingresses: It
           <p className="flow-why">이 서비스가 보낼 파드가 없습니다. selector({Object.entries(s.spec?.selector ?? {}).map(([k, v]) => `${k}=${v}`).join(", ") || "없음"})가 워크로드의 라벨과 맞는지 확인하세요.</p>
         </div>
       ))}
+    </div>
+  );
+}
+
+// What the cluster's ordinary events mean, as a deployment comes up.
+const stepMeaning: Record<string, string> = {
+  ScalingReplicaSet: "파드를 몇 개 둘지 정함",
+  SuccessfulCreate: "파드를 만듦",
+  Scheduled: "파드를 놓을 자리를 정함",
+  Pulling: "이미지를 받는 중",
+  Pulled: "이미지를 받음",
+  Created: "컨테이너를 만듦",
+  Started: "컨테이너를 시작함",
+  Killing: "옛 컨테이너를 끝내는 중",
+  BackOff: "실패해서 잠시 기다렸다가 다시 해 봄",
+  Failed: "실패함",
+  FailedScheduling: "파드를 놓을 자리를 찾지 못함",
+  FailedMount: "저장소나 설정값을 붙이지 못함",
+  ProvisioningSucceeded: "저장 공간을 만듦",
+  WaitForFirstConsumer: "파드가 쓰기 시작하면 저장 공간을 만듦",
+  ExternalProvisioning: "저장 공간을 만드는 중",
+  Provisioning: "저장 공간을 만드는 중",
+};
+
+const when = (e: Item) => Date.parse(e.lastTimestamp ?? e.eventTime ?? e.metadata.creationTimestamp) || 0;
+
+/** The deployments named in `kubectl apply`'s answer ("deployment.apps/web created"). */
+export const appliedDeployments = (out: string) => [...out.matchAll(/^deployment\.apps\/(\S+) (?:created|configured)/gm)].map((m) => m[1]);
+
+/** Seconds since a moment, ticking: for "sending (12 s)". */
+export function useElapsed(since: number | null) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (since === null) return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [since]);
+  return since === null ? 0 : Math.floor((Date.now() - since) / 1000);
+}
+
+/**
+ * How a deployment just applied is coming up: each of its pods, and the
+ * cluster's own steps (pod made, image being fetched, started) in plain words.
+ */
+export function DeployProgress(props: { names: string[]; workloads: Item[]; pods: Item[]; events: Item[]; podTone: (p: Item) => "ok" | "wait" | "bad" | "done"; podText: (p: Item) => string; onClose: () => void }) {
+  const rows = props.names.map((name) => {
+    const w = props.workloads.find((x) => x.kind === "Deployment" && x.metadata.name === name && x.metadata.namespace === "default");
+    const pods = w ? podsOf(w, props.pods) : [];
+    const want = w?.spec?.replicas ?? 0;
+    const have = w?.status?.readyReplicas ?? 0;
+    const mine = (e: Item) => {
+      const o = e.involvedObject ?? {};
+      return e.metadata.namespace === "default" && ((o.kind === "Deployment" && o.name === name) || ((o.kind === "ReplicaSet" || o.kind === "Pod") && String(o.name).startsWith(name + "-")) || (o.kind === "PersistentVolumeClaim" && o.name === name + "-data"));
+    };
+    const steps = props.events.filter(mine).sort((a, b) => when(a) - when(b)).slice(-10);
+    const done = !!w && want > 0 && have >= want;
+    const stuck = pods.find((p) => props.podTone(p) === "bad");
+    return { name, w, pods, want, have, steps, done, stuck };
+  });
+  const allDone = rows.every((r) => r.done || (r.w && r.want === 0));
+  return (
+    <div className={"note-box deploy-progress" + (allDone ? " done" : "")} data-testid="deploy-progress" role="status">
+      {rows.map((r) => (
+        <div key={r.name} className="deploy-app">
+          <strong>
+            {r.name}{" "}
+            {r.done ? "배포가 끝났습니다" : !r.w ? "워크로드를 만드는 중…" : r.stuck ? "문제가 있습니다" : `배포하는 중… 파드 ${r.have} / ${r.want} 준비`}
+          </strong>
+          {r.pods.map((p) => (
+            <span key={p.metadata.name} className="block">
+              <span className={"state kube-" + props.podTone(p)}>
+                <span className="dot" />
+                {p.metadata.name}
+              </span>{" "}
+              <span className="muted">{props.podText(p)}</span>
+            </span>
+          ))}
+          {r.stuck && <span className="sub why">원인: {whyPod(r.stuck, props.events)}</span>}
+          {r.steps.length > 0 && (
+            <ol className="deploy-steps">
+              {r.steps.map((e) => (
+                <li key={e.metadata.name} className={e.type === "Warning" ? "warn" : ""}>
+                  <span>{stepMeaning[e.reason] ?? e.reason}</span>
+                  <span className="muted"> · {e.involvedObject?.kind} {e.message}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      ))}
+      <div>
+        <button type="button" onClick={props.onClose}>
+          {allDone ? "닫기" : "그만 보기 (배포는 계속됨)"}
+        </button>
+      </div>
     </div>
   );
 }

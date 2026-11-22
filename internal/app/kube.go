@@ -267,6 +267,10 @@ func (a *App) kubeReady(id string) (bool, string) {
 	return ready, version
 }
 
+// kubeSlow bounds what is sent to the cluster (apply, create). A small
+// machine's cluster can take minutes to take it in; a minute was not enough.
+const kubeSlow = 5 * time.Minute
+
 // How long a cluster may take from its container's start to a Ready node.
 // A slow machine (a small VM) can take many minutes; the start waits as
 // long as the container keeps running, up to this.
@@ -571,7 +575,7 @@ func (a *App) KubeGet(kind string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("unknown kind %q", kind)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	out, err := a.kubectl(ctx, nil, "get", resource, "-A", "-o", "json")
 	if err != nil || kind != "secrets" {
@@ -640,7 +644,7 @@ func (a *App) KubeCreateData(kind, namespace, name string, data map[string]strin
 		obj["kind"], obj["data"] = "ConfigMap", data
 	}
 	b, _ := json.Marshal(obj)
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), kubeSlow)
 	defer cancel()
 	_, err := a.kubectl(ctx, b, "create", "-f", "-")
 	return err
@@ -735,7 +739,7 @@ func (a *App) KubeApply(yaml string) (string, error) {
 	if strings.TrimSpace(yaml) == "" {
 		return "", fmt.Errorf("the YAML is empty")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), kubeSlow)
 	defer cancel()
 	return a.kubectl(ctx, []byte(yaml), "apply", "-f", "-")
 }

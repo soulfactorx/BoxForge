@@ -144,6 +144,13 @@ test("deploy with the helper: address, storage, settings, and the picture", asyn
   for (const want of ["kind: Deployment", "kind: Service", "kind: Ingress", "kind: PersistentVolumeClaim", "secretRef: { name: bfe2e-secret }", 'host: "bfe2e-web.localhost"']) expect(yaml).toContain(want);
   await d.getByRole("button", { name: "배포" }).click();
   await expect(page.getByTestId("applied")).toContainText("deployment.apps/bfe2e-web created");
+  // How it comes up, step by step, until all its pods are ready.
+  const progress = page.getByTestId("deploy-progress");
+  await expect(progress).toContainText("bfe2e-web");
+  await expect(progress).toContainText("이미지를 받", { timeout: 120_000 });
+  await expect(progress).toContainText("bfe2e-web 배포가 끝났습니다", { timeout: 180_000 });
+  await progress.getByRole("button", { name: "닫기" }).click();
+  await expect(progress).toHaveCount(0);
 
   // The picture: address → service → workload → a running pod.
   const flow = page.getByTestId("flow-bfe2e-web");
@@ -191,6 +198,15 @@ test("a stuck pod says why, and deleting asks first", async ({ page }) => {
   await d.getByLabel("이미지").fill("bfe2e.invalid/no-such-image:1");
   await d.getByLabel("이름").fill("bfe2e-broken");
   await d.getByRole("button", { name: "배포" }).click();
+  const progress = page.getByTestId("deploy-progress");
+  await expect(progress).toContainText("bfe2e-broken");
+  // Left while it goes on, and come back: still followed, the lists not emptied.
+  await go(page, "home");
+  await go(page, "kube");
+  await expect(progress).toContainText("bfe2e-broken");
+  await expect(page.getByTestId("kube-loading")).toHaveCount(0);
+  await expect(progress).toContainText("파드를 몇 개 둘지 정함", { timeout: 60_000 });
+  await expect(progress.getByRole("button", { name: "그만 보기 (배포는 계속됨)" })).toBeVisible();
   await expect(page.getByTestId("flow-bfe2e-broken")).toContainText("원인:", { timeout: 120_000 });
 
   await page.getByRole("tab", { name: /파드/ }).click();
