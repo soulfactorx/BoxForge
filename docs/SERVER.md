@@ -113,3 +113,51 @@ sudo systemctl enable --now boxforge
 ```
 
 비밀번호는 서비스로 등록하기 전에, 같은 사용자로 `boxforge-server -set-password`를 한 번 실행해 정해 두세요.
+
+## 계속 켜 두기 (Alpine 등 OpenRC)
+
+Alpine은 systemd 대신 OpenRC를 씁니다. 아래는 사용자 `me`, 서버 파일 `/opt/boxforge/boxforge-server`인 경우입니다. 자동 업데이트를 쓰려면 서버 파일이 있는 폴더가 그 사용자의 것이어야 합니다.
+
+```bash
+sudo mkdir -p /opt/boxforge
+sudo mv boxforge-server /opt/boxforge/
+sudo chown -R me:me /opt/boxforge
+sudo addgroup me docker
+```
+
+`/etc/init.d/boxforge` 파일을 만듭니다.
+
+```sh
+#!/sbin/openrc-run
+name="BoxForge server"
+command="/opt/boxforge/boxforge-server"
+command_args="-listen :8088 -tls"
+command_user="me:me"
+supervisor="supervise-daemon"
+respawn_delay=5
+output_log="/var/log/boxforge.log"
+error_log="/var/log/boxforge.log"
+# 비밀번호와 설정은 이 사용자의 ~/.config/BoxForge 에 있습니다.
+export HOME="/home/me"
+
+depend() {
+	need net
+	after docker
+}
+
+start_pre() {
+	checkpath -f -o me:me /var/log/boxforge.log
+}
+```
+
+```bash
+sudo chmod +x /etc/init.d/boxforge
+sudo rc-update add docker default
+sudo rc-update add boxforge default
+sudo rc-service boxforge start
+```
+
+- 상태 보기: `rc-service boxforge status`, 로그: `tail -f /var/log/boxforge.log`
+- 끄기 · 다시 켜기: `rc-service boxforge stop`, `rc-service boxforge restart`
+- `supervise-daemon`이 서버가 죽으면 5초 뒤 다시 켭니다. 설정 → 업데이트의 "다시 시작"은 같은 프로세스가 새 파일로 바뀌는 방식이라 그대로 동작합니다.
+- 비밀번호는 등록 전에 같은 사용자로 한 번 정해 둡니다: `su me -c '/opt/boxforge/boxforge-server -set-password'`
