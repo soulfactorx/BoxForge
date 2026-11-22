@@ -607,15 +607,17 @@ export function useElapsed(since: number | null) {
  * How a deployment just applied is coming up: each of its pods, and the
  * cluster's own steps (pod made, image being fetched, started) in plain words.
  */
-export function DeployProgress(props: { onLoad?: (name: string) => void; since: number; names: string[]; workloads: Item[]; pods: Item[]; events: Item[]; podTone: (p: Item) => "ok" | "wait" | "bad" | "done"; podText: (p: Item) => string; onClose: () => void }) {
-  const rows = props.names.map((name) => {
-    const w = props.workloads.find((x) => x.kind === "Deployment" && x.metadata.name === name && x.metadata.namespace === "default");
+export function DeployProgress(props: { onLoad?: (namespace: string, name: string) => void; since: number; names: string[]; workloads: Item[]; pods: Item[]; events: Item[]; podTone: (p: Item) => "ok" | "wait" | "bad" | "done"; podText: (p: Item) => string; onClose: () => void }) {
+  const rows = props.names.map((entry) => {
+    // "name" in the default namespace, or "namespace/name" (a Compose project's own).
+    const [ns, name] = entry.includes("/") ? entry.split("/", 2) : ["default", entry];
+    const w = props.workloads.find((x) => x.kind === "Deployment" && x.metadata.name === name && x.metadata.namespace === ns);
     const pods = w ? podsOf(w, props.pods) : [];
     const want = w?.spec?.replicas ?? 0;
     const have = w?.status?.readyReplicas ?? 0;
     const mine = (e: Item) => {
       const o = e.involvedObject ?? {};
-      return e.metadata.namespace === "default" && ((o.kind === "Deployment" && o.name === name) || ((o.kind === "ReplicaSet" || o.kind === "Pod") && String(o.name).startsWith(name + "-")) || (o.kind === "PersistentVolumeClaim" && o.name === name + "-data"));
+      return e.metadata.namespace === ns && ((o.kind === "Deployment" && o.name === name) || ((o.kind === "ReplicaSet" || o.kind === "Pod") && String(o.name).startsWith(name + "-")) || (o.kind === "PersistentVolumeClaim" && o.name === name + "-data"));
     };
     // The same step again and again (a container restarted over and over) once, with how often.
     const steps: (Item & { times: number })[] = [];
@@ -630,13 +632,13 @@ export function DeployProgress(props: { onLoad?: (name: string) => void; since: 
     steps.splice(0, Math.max(0, steps.length - 10));
     const done = !!w && want > 0 && have >= want;
     const stuck = pods.find((p) => props.podTone(p) === "bad");
-    return { name, w, pods, want, have, steps, done, stuck };
+    return { entry, ns, name, w, pods, want, have, steps, done, stuck };
   });
   const allDone = rows.every((r) => r.done || (r.w && r.want === 0));
   return (
     <div className={"note-box deploy-progress" + (allDone ? " done" : "")} data-testid="deploy-progress" role="status">
       {rows.map((r) => (
-        <div key={r.name} className="deploy-app">
+        <div key={r.entry} className="deploy-app">
           <strong>
             {r.name}{" "}
             {r.done ? "배포가 끝났습니다" : !r.w ? "워크로드를 만드는 중…" : r.stuck ? "문제가 있습니다" : `배포하는 중… 파드 ${r.have} / ${r.want} 준비`}
@@ -651,7 +653,7 @@ export function DeployProgress(props: { onLoad?: (name: string) => void; since: 
             </span>
           ))}
           {r.stuck && <span className="sub why">원인: {whyPod(r.stuck, props.events)}</span>}
-          {r.stuck && cantFetch(r.stuck) && props.onLoad && <LoadOffer image={r.w?.spec?.template?.spec?.containers?.[0]?.image ?? ""} onLoad={() => props.onLoad!(r.name)} />}
+          {r.stuck && cantFetch(r.stuck) && props.onLoad && <LoadOffer image={r.w?.spec?.template?.spec?.containers?.[0]?.image ?? ""} onLoad={() => props.onLoad!(r.ns, r.name)} />}
           {r.steps.length > 0 && (
             <ol className="deploy-steps">
               {r.steps.map((e) => (

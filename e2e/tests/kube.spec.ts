@@ -1,4 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ALPINE, go, open, sh } from "./helpers";
 
 // Kubernetes: a real k3s in a container on the engine. The cluster fetches
@@ -354,4 +357,62 @@ test("a stopped cluster shows the last lines it wrote", async ({ page }) => {
   await expect(page.getByTestId("kube-state")).toContainText("꺼짐", { timeout: 120_000 });
   await expect(page.getByText("꺼지기 전에 남긴 로그")).toBeVisible();
   await expect(page.getByTestId("kube-boot-log")).toContainText(/(info|warning|error): /);
+});
+
+test("a Compose project is moved to Kubernetes as a whole, in a namespace of its own", async ({ page }) => {
+  const dir = mkdtempSync(join(tmpdir(), "bfe2e-kmove-"));
+  writeFileSync(
+    join(dir, "compose.yaml"),
+    `services:
+  web:
+    image: ${ALPINE}
+    tty: true
+    ports: ["127.0.0.1:18090:80"]
+    environment:
+      MODE: prod
+    depends_on: [db]
+    volumes:
+      - ./site:/srv/site
+  db:
+    image: ${ALPINE}
+    tty: true
+    expose: ["5432"]
+    volumes:
+      - dbdata:/var/lib/data
+volumes:
+  dbdata:
+`,
+  );
+  sh(`docker compose -p bfe2e-kmove -f ${join(dir, "compose.yaml")} up -d`);
+  try {
+    await kube(page);
+    await go(page, "compose");
+    await page.locator(".project", { hasText: "bfe2e-kmove" }).getByRole("button", { name: "자세히" }).first().click();
+    await page.getByRole("button", { name: "Kubernetes로 옮기기" }).click();
+    const d = page.getByRole("dialog", { name: "bfe2e-kmove 를 Kubernetes로 옮기기" });
+    await expect(d.getByTestId("compose-kube")).toContainText("네임스페이스 bfe2e-kmove에 서비스 2개(db, web)");
+    const notes = d.getByTestId("compose-kube-notes");
+    await expect(notes).toContainText("/srv/site"); // a folder of this PC: left out, and said so
+    await expect(notes).toContainText("데이터는 옮겨지지 않습니다");
+    await expect(notes).toContainText("depends_on");
+    await d.getByRole("button", { name: "만들어질 YAML 보기 · 고치기" }).click();
+    await expect(d.getByLabel("옮길 YAML")).toHaveValue(/kind: PersistentVolumeClaim/);
+    await d.getByRole("button", { name: "Kubernetes에 배포" }).click();
+
+    await expect(page.getByTestId("applied")).toContainText("namespace/bfe2e-kmove created", { timeout: 120_000 });
+    const progress = page.getByTestId("deploy-progress");
+    await expect(progress).toContainText("db");
+    await expect(progress).toContainText("web");
+    expect(kubectl("get deploy,svc,pvc -n bfe2e-kmove -o name")).toMatch(/deployment.apps\/db[\s\S]*deployment.apps\/web[\s\S]*service\/db[\s\S]*service\/web[\s\S]*persistentvolumeclaim\/dbdata/);
+    expect(kubectl("get deploy web -n bfe2e-kmove -o jsonpath={.spec.template.spec.containers[0].env[0].value}")).toBe("prod");
+    if (!process.env.E2E_KUBE_NO_PODS) {
+      await expect(progress).toContainText("web 배포가 끝났습니다", { timeout: 180_000 });
+      await expect(progress).toContainText("db 배포가 끝났습니다", { timeout: 180_000 });
+      // Found by name, as in Compose.
+      expect(kubectl("exec -n bfe2e-kmove deploy/web -- nslookup db")).toContain("db.bfe2e-kmove");
+    }
+  } finally {
+    kubectl("delete namespace bfe2e-kmove --wait=false");
+    sh(`docker compose -p bfe2e-kmove -f ${join(dir, "compose.yaml")} down -v`, true);
+  }
 });

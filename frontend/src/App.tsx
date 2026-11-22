@@ -12,7 +12,7 @@ import Palette from "./Palette";
 import type { RunInit } from "./recipes";
 import Settings, { type Theme, type UpdateInfo } from "./Settings";
 import Images from "./Images";
-import Kubernetes from "./Kubernetes";
+import Kubernetes, { type KubeMove } from "./Kubernetes";
 import type { Deploy } from "./KubeExtras";
 import Alerts from "./Alerts";
 import PathPicker from "./PathPicker";
@@ -80,7 +80,7 @@ export default function App() {
   const settled = useRef(false);
   const [detail, setDetail] = useState<{ id: string; tab: Tab } | null>(null);
   const [running, setRunning] = useState<RunInit | null>(null); // what the run dialog starts filled with
-  const [toKube, setToKube] = useState<Partial<Deploy> | null>(null); // a container, to be deployed to Kubernetes
+  const [toKube, setToKube] = useState<Partial<Deploy> | KubeMove | null>(null); // a container, to be deployed to Kubernetes
   const [history, setHistory] = useState<{ cmd: string; at: number }[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [choosing, setChoosing] = useState(false);
@@ -422,7 +422,16 @@ export default function App() {
             onOpen={(id) => setDetail({ id, tab: "overview" })}
           />}
         <div hidden={page !== "compose"}>
-          <Compose containers={containers} run={run} showCli={showCli} onOpen={(id) => setDetail({ id, tab: "overview" })} />
+          <Compose
+            containers={containers}
+            run={run}
+            showCli={showCli}
+            onOpen={(id) => setDetail({ id, tab: "overview" })}
+            onKube={(m) => {
+              setToKube(m);
+              setPage("kube");
+            }}
+          />
         </div>
         {/* Kept alive while hidden: a build or a compose command goes on,
             and its form and output are still there on coming back. */}

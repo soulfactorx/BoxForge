@@ -378,7 +378,9 @@ func (a *App) KubeStart() error {
 			say(fmt.Sprintf("Kubernetes가 준비되기를 기다리는 중: 노드를 준비하는 중 (%s)", waited))
 		}
 		// A container that ended won't get ready: no point waiting it out.
-		if c := a.kubeContainer(); c == nil || c.State == "exited" || c.State == "dead" {
+		// Asked of the engine itself: the app's list follows it a moment
+		// later, and right after a start may still say it isn't running.
+		if a.kubeEnded(ctx) {
 			return fmt.Errorf("the cluster's container stopped while starting; its log above says why")
 		}
 		if time.Now().After(deadline) {
@@ -406,6 +408,25 @@ func (a *App) dropOldNodes(ctx context.Context) {
 			_, _ = a.kubectl(ctx, nil, "delete", "node", n, "--wait=false")
 		}
 	}
+}
+
+// kubeEnded reports whether the cluster's container has stopped, as the
+// engine sees it now. Not knowing is not having stopped.
+func (a *App) kubeEnded(ctx context.Context) bool {
+	raw, err := a.eng().Containers().Inspect(ctx, kubeContainer)
+	if err != nil {
+		return false
+	}
+	var c struct {
+		State struct {
+			Status  string
+			Running bool
+		}
+	}
+	if json.Unmarshal(raw, &c) != nil {
+		return false
+	}
+	return !c.State.Running && (c.State.Status == "exited" || c.State.Status == "dead")
 }
 
 // waitedText is a time waited, in seconds, or minutes and seconds.

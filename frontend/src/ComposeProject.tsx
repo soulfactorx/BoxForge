@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ServiceForm from "./ComposeEdit";
+import ComposeKube from "./ComposeKube";
+import type { KubeMove } from "./Kubernetes";
 import { call, openURL, type Container, type Run } from "./bridge";
 import { published } from "./Containers";
 import { ago, isUp, stateLabel, statusText } from "./format";
@@ -39,6 +41,8 @@ interface Props {
   onDown: () => void;
   onOpen: (containerId: string) => void;
   onBack: () => void;
+  /** Moves the project to Kubernetes (opens that page, applies it there). */
+  onKube?: (m: KubeMove) => void;
 }
 
 const changeText: Record<Change["action"], string> = {
@@ -587,7 +591,8 @@ function LogsTab({ project, showCli }: { project: Project; showCli: (cmd: string
 
 // ---- the page
 
-export default function ComposeProject({ project, run, showCli, busy, act, onDown, onOpen, onBack }: Props) {
+export default function ComposeProject({ project, run, showCli, busy, act, onDown, onOpen, onBack, onKube }: Props) {
+  const [moving, setMoving] = useState(false);
   const [tab, setTab] = useState<Tab>("graph");
   // A service being changed in the picture ("" for a new one), and what the form made of the file.
   const [editing, setEditing] = useState<string | null>(null);
@@ -701,7 +706,24 @@ export default function ComposeProject({ project, run, showCli, busy, act, onDow
         <IconButton icon="restart" label="모두 재시작" disabled={busy || up === 0} onClick={() => act(project, "restart")} />
         <IconButton icon="stop" label="모두 중지 (컨테이너는 남김)" tone="danger" disabled={busy || up === 0} onClick={() => act(project, "stop")} />
         <IconButton icon="trash" label="내리기 (컨테이너와 네트워크 삭제)" tone="danger" disabled={busy} onClick={onDown} />
+        {onKube && project.files.length > 0 && (
+          <button type="button" onClick={() => setMoving(true)}>
+            Kubernetes로 옮기기
+          </button>
+        )}
       </header>
+      {moving && onKube && (
+        <ComposeKube
+          project={project.name}
+          files={project.files}
+          showCli={showCli}
+          onClose={() => setMoving(false)}
+          onMove={(m) => {
+            setMoving(false);
+            onKube(m);
+          }}
+        />
+      )}
       <dl className="project-meta">
         <div>
           <dt>파일</dt>

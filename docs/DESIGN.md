@@ -193,7 +193,9 @@ Docker가 어려운 이유는 대개 (a) 용어, (b) 플래그가 많은 `run`, 
 - **켜는 동안의 로그**: 켜기를 누르면 클러스터 컨테이너의 로그를 `kube-log` 이벤트로 화면에 보낸다(k3s · kubelet 줄은 "수준: 내용"으로 줄여서). 기다리는 동안 지난 시간과 단계(API 서버 시작 / 노드 준비)도 보인다. 느린 기계를 위해 컨테이너가 살아 있는 동안 25분까지 기다리고, 컨테이너가 멈추면 바로 멈췄다고 알린다. 화면을 떠났다 와도 "아직 시작하는 중"과 로그(`KubeLogTail`)가 보이고, 꺼진 클러스터는 꺼지기 전의 마지막 로그를 보인다.
 - **사내 인증서**: 클러스터는 이미지를 스스로 받으므로, 사용자가 추가한 인증서를 클러스터 컨테이너의 인증서 목록에 더하고(원래 목록의 사본에 매번 다시 더한다) 목록이 바뀌었으면 클러스터를 다시 시작한다.
 
-BoxForge가 만든 클러스터만 다룬다. 임의의 kubeconfig, Compose 프로젝트 → 매니페스트 변환은 없다(컨테이너 하나씩은 위의 "컨테이너에서 배포"). 만드는 것은 모두 `default` 네임스페이스에 둔다.
+- **Compose 프로젝트 옮기기**: 프로젝트 화면의 "Kubernetes로 옮기기"는 `docker compose config`(Compose 자신이 정리한 설정)를 읽어 매니페스트를 만든다(`kube_compose.go`). 프로젝트마다 네임스페이스 하나(서비스끼리 Compose에서처럼 이름으로 찾게), 서비스마다 Deployment(entrypoint → `command`, command → `args`, environment, tty · stdin_open, working_dir, deploy.replicas)와 포트가 있으면 같은 이름의 Service(ports의 target과 expose), 이름 붙은 볼륨마다 PVC(1Gi), 이름 없는 볼륨 · tmpfs는 emptyDir. 옮기지 못하는 것(이 PC의 폴더, 값 없는 환경변수, TCP 아닌 포트, depends_on, healthcheck, privileged 등)은 YAML에 넣지 않고 "옮기면서 달라지는 것"으로 알린다. 빌드하는 이미지(`프로젝트-서비스`)는 엔진의 것을 클러스터에 넣는다(`IfNotPresent`). 볼륨의 데이터는 옮기지 않는다. 적용과 진행은 Kubernetes 화면에서 하며, 진행은 네임스페이스를 따라간다.
+
+BoxForge가 만든 클러스터만 다룬다. 임의의 kubeconfig는 없다. 만드는 것은 모두 `default` 네임스페이스에 둔다.
 
 ---
 

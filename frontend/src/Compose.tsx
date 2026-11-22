@@ -1,3 +1,4 @@
+import type { KubeMove } from "./Kubernetes";
 import { lang, translate } from "./i18n";
 import { pick } from "./PathPicker";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,6 +13,7 @@ interface Props {
   run: Run;
   showCli: (cmd: string) => void;
   onOpen: (containerId: string) => void;
+  onKube?: (m: KubeMove) => void;
 }
 
 type Action = "up" | "down" | "stop" | "start" | "restart" | "pull";
@@ -164,7 +166,7 @@ volumes:
   },
 ];
 
-export default function Compose({ containers, run, showCli, onOpen }: Props) {
+export default function Compose({ containers, run, showCli, onOpen, onKube }: Props) {
   const [opened, setOpened] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const [missing, setMissing] = useState("");
@@ -350,6 +352,7 @@ export default function Compose({ containers, run, showCli, onOpen }: Props) {
           onDown={() => setDowning(projects.find((p) => p.name === opened)!)}
           onOpen={onOpen}
           onBack={() => setOpened(null)}
+          onKube={onKube}
         />
       ) : projects.length === 0 ? (
         <p className="empty">Compose 프로젝트가 없습니다. "Compose 파일 열기"로 compose.yaml을 골라 올려 보세요.</p>

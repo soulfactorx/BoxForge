@@ -146,7 +146,25 @@ function useKept<T>(key: string, initial: T): [T, (v: T | ((old: T) => T)) => vo
   return [value, put];
 }
 
-export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken }: { run: Run; showCli: (cmd: string) => void; deployFrom?: Partial<Deploy> | null; onDeployFromTaken?: () => void }) {
+/** A Compose project made into Kubernetes objects, to be applied. */
+export interface KubeMove {
+  namespace: string;
+  yaml: string;
+  load: string[]; // the engine's images to put into the cluster first
+  deployments: string[];
+}
+
+export default function Kubernetes({
+  run,
+  showCli,
+  deployFrom,
+  onDeployFromTaken,
+}: {
+  run: Run;
+  showCli: (cmd: string) => void;
+  deployFrom?: Partial<Deploy> | KubeMove | null;
+  onDeployFromTaken?: () => void;
+}) {
   const [state, setState] = useState<KubeState | null>(null);
   const [starting, setStarting] = useState<string | null>(null); // what the start is doing
   const [bootLog, setBootLog] = useState<string[]>([]); // the cluster's own words while it starts
@@ -323,8 +341,14 @@ export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken
   const [deployInit, setDeployInit] = useState<Partial<Deploy> | undefined>(undefined);
   useEffect(() => {
     if (!deployFrom || !state?.ready) return;
-    setDeployInit(deployFrom);
-    setDeploying(true);
+    if ("yaml" in deployFrom) {
+      // A whole project: applied at once, its deployments followed.
+      const m = deployFrom as KubeMove;
+      deploy(m.yaml, m.load, m.deployments.map((d) => `${m.namespace}/${d}`));
+    } else {
+      setDeployInit(deployFrom);
+      setDeploying(true);
+    }
     onDeployFromTaken?.();
   }, [deployFrom, state?.ready]);
 
@@ -340,13 +364,16 @@ export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken
     return () => clearInterval(t);
   }, [tracking.length]);
 
-  const deploy = async (yaml: string, image = "") => {
+  const deploy = async (yaml: string, images: string[] = [], follow?: string[]) => {
     let out = "";
     setWorking(true);
     const sentAt = Date.now();
     setSendingSince(sentAt);
-    // The engine's copy first, when asked: the cluster won't find it elsewhere.
-    const loaded = !image || (await run(`docker save ${image} | docker exec -i boxforge-k3s ctr -n k8s.io images import -`, () => call("KubeLoadImage", image)));
+    // The engine's copies first, when asked: the cluster won't find them elsewhere.
+    let loaded = true;
+    for (const image of images) {
+      loaded = loaded && (await run(`docker save ${image} | docker exec -i boxforge-k3s ctr -n k8s.io images import -`, () => call("KubeLoadImage", image)));
+    }
     const ok = loaded && (await run(kubectl("apply -f app.yaml"), async () => (out = await call<string>("KubeApply", yaml))));
     setWorking(false);
     setSendingSince(null);
@@ -354,7 +381,7 @@ export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken
       setDeploying(false);
       setMaking(null);
       setApplied(out.trim());
-      setTracking(appliedDeployments(out));
+      setTracking(follow ?? appliedDeployments(out));
       setTrackSince(sentAt);
       setTab("flow");
       refresh();
@@ -490,6 +517,13 @@ export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken
         작은 클러스터(k3s)를 컨테이너 하나로 돌립니다.
       </p>
       {note && <p className="note">{note}</p>}
+      {deployFrom && state && !state.ready && (
+        <p className="note" role="status" data-testid="kube-pending">
+          {"yaml" in deployFrom
+            ? `Kubernetes가 준비되면 ${(deployFrom as KubeMove).namespace} 프로젝트를 배포합니다. 아래에서 켜 주세요.`
+            : "Kubernetes가 준비되면 앱 배포 창이 열립니다. 아래에서 켜 주세요."}
+        </p>
+      )}
       {state && state.others.length > 0 && (
         <div className="note-box" data-testid="kube-others">
           <strong>이 엔진에는 BoxForge 것이 아닌 Kubernetes 클러스터도 있습니다</strong>
@@ -561,9 +595,9 @@ export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken
           {tracking.length > 0 && (
             <DeployProgress
               since={trackSince}
-              onLoad={async (name) => {
+              onLoad={async (namespace, name) => {
                 const at = Date.now();
-                if (await run(`docker save IMAGE | docker exec -i boxforge-k3s ctr -n k8s.io images import - && ${kubectl(`rollout restart deployment ${name}`)}`, () => call("KubeLoadFor", "default", name))) {
+                if (await run(`docker save IMAGE | docker exec -i boxforge-k3s ctr -n k8s.io images import - && ${kubectl(`rollout restart deployment ${name} -n ${namespace}`)}`, () => call("KubeLoadFor", namespace, name))) {
                   setTrackSince(at);
                   refresh();
                 }
@@ -1129,7 +1163,7 @@ export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken
         </Dialog>
       )}
 
-      {deploying && <DeployDialog data={[...configs, ...secrets]} init={deployInit} busy={working} busyText={`클러스터에 보내는 중입니다 (${sent}초). 느린 기계에서는 1분 넘게 걸리기도 합니다.`} onApply={(y, d) => deploy(y, d.fromEngine ? d.image.trim() : "")} onYaml={(y) => (setDeploying(false), setApplying(y))} onClose={() => setDeploying(false)} />}
+      {deploying && <DeployDialog data={[...configs, ...secrets]} init={deployInit} busy={working} busyText={`클러스터에 보내는 중입니다 (${sent}초). 느린 기계에서는 1분 넘게 걸리기도 합니다.`} onApply={(y, d) => deploy(y, d.fromEngine ? [d.image.trim()] : [])} onYaml={(y) => (setDeploying(false), setApplying(y))} onClose={() => setDeploying(false)} />}
       {making === "data" && <DataDialog busy={working} onCreate={makeData} onClose={() => setMaking(null)} />}
       {making === "pvc" && <PvcDialog busy={working} onCreate={(y) => deploy(y)} onClose={() => setMaking(null)} />}
       {confirm && (
