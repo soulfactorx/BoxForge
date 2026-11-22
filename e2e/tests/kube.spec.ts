@@ -32,6 +32,13 @@ async function kube(page: Page) {
       await start.click();
       // What the cluster says while it comes up is shown as it comes.
       await expect(page.getByTestId("kube-boot-log")).toContainText(/(info|warning|error): /, { timeout: 240_000 });
+      // Left and come back while it starts: still shown as starting, log and all.
+      await page.reload();
+      await go(page, "kube");
+      if (!(await state.innerText()).includes("준비됨")) {
+        await expect(page.getByText("클러스터가 아직 시작하는 중입니다")).toBeVisible();
+        await expect(page.getByTestId("kube-boot-log")).toContainText(/(info|warning|error): /);
+      }
     }
     await expect(state).toContainText("준비됨", { timeout: 300_000 });
   }
@@ -187,4 +194,13 @@ test("storage made on its own waits for a pod, and its delete warns of the data"
   await expect(page.getByRole("dialog")).toContainText("데이터를 모두 지웁니다");
   await page.getByRole("dialog").getByRole("button", { name: "삭제" }).click();
   await expect(row).toBeHidden();
+});
+
+test("a stopped cluster shows the last lines it wrote", async ({ page }) => {
+  test.skip(had, "a cluster was already there: it is left running");
+  await kube(page);
+  await page.getByRole("button", { name: "끄기" }).click();
+  await expect(page.getByTestId("kube-state")).toContainText("꺼짐", { timeout: 120_000 });
+  await expect(page.getByText("꺼지기 전에 남긴 로그")).toBeVisible();
+  await expect(page.getByTestId("kube-boot-log")).toContainText(/(info|warning|error): /);
 });

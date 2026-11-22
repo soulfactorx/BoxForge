@@ -214,6 +214,23 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
     };
   }, []);
 
+  // Up but not ready, with no start of ours following it (the screen was
+  // left, or the start gave up waiting): the log is read every few seconds.
+  const booting = !!state?.running && !state.ready && !starting;
+  useEffect(() => {
+    if (!booting) return;
+    const read = () => call<string[]>("KubeLogTail", 100).then(setBootLog, () => {});
+    read();
+    const t = setInterval(read, 3000);
+    return () => clearInterval(t);
+  }, [booting]);
+
+  // Stopped (by hand, or it ended while starting): its last words, read once.
+  const stopped = !!state?.exists && !state.running && !starting;
+  useEffect(() => {
+    if (stopped) call<string[]>("KubeLogTail", 100).then(setBootLog, () => {});
+  }, [stopped]);
+
   const start = async () => {
     setStarting("준비하는 중");
     setBootLog([]);
@@ -421,6 +438,14 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               <p className="muted">처음에는 이미지를 받느라 몇 분 걸릴 수 있습니다. 그다음부터는 수십 초면 켜집니다.</p>
               <BootLog lines={bootLog} open={showLog} onToggle={() => setShowLog(!showLog)} />
             </>
+          ) : state.running ? (
+            <>
+              <p role="status">
+                <span className="spinner" /> 클러스터가 아직 시작하는 중입니다…
+              </p>
+              <p className="muted">느린 PC나 작은 가상 머신에서는 10분 넘게 걸리기도 합니다. 다 되면 이 화면이 저절로 바뀝니다.</p>
+              <BootLog lines={bootLog} open={showLog} onToggle={() => setShowLog(!showLog)} />
+            </>
           ) : (
             <>
               <p>
@@ -429,7 +454,12 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
               <button className="primary" onClick={start} data-testid="kube-start">
                 Kubernetes 켜기
               </button>
-              {bootLog.length > 0 && <BootLog lines={bootLog} open={showLog} onToggle={() => setShowLog(!showLog)} />}
+              {bootLog.length > 0 && (
+                <>
+                  <p className="muted">아래는 클러스터 컨테이너가 꺼지기 전에 남긴 로그입니다. 켜는 중에 꺼졌다면 끝부분에 이유가 있습니다.</p>
+                  <BootLog lines={bootLog} open={showLog} onToggle={() => setShowLog(!showLog)} />
+                </>
+              )}
               {!state.exists && (
                 <p className="muted">
                   <code>{state.image}</code> 이미지(약 300MB)로 <code>boxforge-k3s</code> 컨테이너를 만듭니다. 그 안에서 다시 컨테이너를 돌려야 해서

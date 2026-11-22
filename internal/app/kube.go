@@ -186,7 +186,9 @@ func (a *App) KubeStatus() KubeState {
 }
 
 // How long a cluster may take from its container's start to a Ready node.
-const kubeBoot = 3 * time.Minute
+// A slow machine (a small VM) can take many minutes; the start waits as
+// long as the container keeps running, up to this.
+const kubeBoot = 25 * time.Minute
 
 // KubeStart makes the cluster if there is none, starts it, and waits for
 // its node. What it is doing arrives as "kube" events (plain text).
@@ -265,14 +267,18 @@ func (a *App) KubeStart() error {
 		if ready {
 			return nil
 		}
-		waited := int(time.Since(begun).Seconds())
+		waited := waitedText(time.Since(begun))
 		if version == "" {
-			say(fmt.Sprintf("Kubernetes가 준비되기를 기다리는 중: API 서버를 시작하는 중 (%d초)", waited))
+			say(fmt.Sprintf("Kubernetes가 준비되기를 기다리는 중: API 서버를 시작하는 중 (%s)", waited))
 		} else {
-			say(fmt.Sprintf("Kubernetes가 준비되기를 기다리는 중: 노드를 준비하는 중 (%d초)", waited))
+			say(fmt.Sprintf("Kubernetes가 준비되기를 기다리는 중: 노드를 준비하는 중 (%s)", waited))
+		}
+		// A container that ended won't get ready: no point waiting it out.
+		if c := a.kubeContainer(); c == nil || c.State == "exited" || c.State == "dead" {
+			return fmt.Errorf("the cluster's container stopped while starting; its log above says why")
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("the cluster did not become ready in time; its container's log says why")
+			return fmt.Errorf("the cluster did not become ready in %d minutes; it may still be starting, and the screen changes by itself when it is", int(kubeBoot.Minutes()))
 		}
 		select {
 		case <-ctx.Done():
@@ -280,6 +286,38 @@ func (a *App) KubeStart() error {
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// waitedText is a time waited, in seconds, or minutes and seconds.
+func waitedText(d time.Duration) string {
+	s := int(d.Seconds())
+	if s < 60 {
+		return fmt.Sprintf("%d초", s)
+	}
+	return fmt.Sprintf("%d분 %d초", s/60, s%60)
+}
+
+// KubeLogTail returns the last lines the cluster's container wrote, made
+// short as during a start: for a cluster still coming up after the screen
+// was left, or one that failed to.
+func (a *App) KubeLogTail(lines int) ([]string, error) {
+	if lines < 1 || lines > 500 {
+		lines = 100
+	}
+	if a.kubeContainer() == nil {
+		return []string{}, nil
+	}
+	// The log is followed: what has been written arrives at once, then
+	// the wait for more is cut short.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	w := &lineBatch{}
+	_ = a.eng().Containers().Logs(ctx, kubeContainer, lines, w)
+	out := w.take()
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
 }
 
 // kubeBootLog sends the cluster container's log lines to the screen as

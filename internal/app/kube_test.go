@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHideSecrets(t *testing.T) {
@@ -55,5 +56,13 @@ func TestShortLog(t *testing.T) {
 	b.Write([]byte("o\"\n"))
 	if got := b.take(); len(got) != 2 || got[1] != "warning: two" {
 		t.Fatalf("lines: %q", got)
+	}
+}
+
+func TestWaitedText(t *testing.T) {
+	for d, want := range map[time.Duration]string{45 * time.Second: "45초", 200 * time.Second: "3분 20초"} {
+		if got := waitedText(d); got != want {
+			t.Errorf("%v: %q, want %q", d, got, want)
+		}
 	}
 }
