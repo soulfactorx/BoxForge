@@ -5,6 +5,10 @@
 //	boxforge-server                       # this machine only (127.0.0.1:8088)
 //	boxforge-server -listen :8088 -tls    # the network, over TLS
 //	boxforge-server -set-password         # choose the password
+//	boxforge-server -daemon -listen :8088 -tls   # in the background, now
+//	boxforge-server -stop | -status
+//	sudo boxforge-server -install         # a service that starts with the machine
+//	sudo boxforge-server -uninstall
 //
 // Whoever signs in controls the engine, which is as good as being root
 // on this machine: see docs/SERVER.md before opening it to a network.
@@ -21,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,9 +46,30 @@ func main() {
 	setViewer := flag.Bool("set-viewer-password", false, "choose a second password that can look but change nothing, and exit (empty: remove it)")
 	insecure := flag.Bool("insecure-network", false, "allow listening on a network without TLS (a proxy in front provides it)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	daemon := flag.Bool("daemon", false, "run in the background (with the other options given), its output in server.log; -stop ends it")
+	stop := flag.Bool("stop", false, "end the server -daemon started")
+	status := flag.Bool("status", false, "say whether the server runs (in the background or as a service)")
+	doInstall := flag.Bool("install", false, "as root: put the program in "+installDir+" and make it a service (systemd or OpenRC) that starts with the machine, then start it; without -listen it serves every network over TLS on 8088")
+	doUninstall := flag.Bool("uninstall", false, "as root: stop and remove the service (the program and settings stay)")
+	runAs := flag.String("user", "", "with -install: the user the service runs as (default: the one who ran sudo)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version.Version)
+		return
+	}
+	if *doInstall || *doUninstall {
+		var err error
+		if *doInstall {
+			set := map[string]string{}
+			flag.Visit(func(f *flag.Flag) { set[f.Name] = f.Value.String() })
+			err = install(*runAs, set)
+		} else {
+			err = uninstall()
+		}
+		if err != nil {
+			log.SetFlags(0)
+			log.Fatal(err)
+		}
 		return
 	}
 
@@ -53,6 +79,22 @@ func main() {
 	}
 	dir := filepath.Join(cfg, "BoxForge")
 	passwords := webserver.PasswordsIn(dir)
+	if *daemon || *stop || *status {
+		log.SetFlags(0)
+		switch {
+		case *stop:
+			if err := stopDaemon(dir); err != nil {
+				log.Fatal(err)
+			}
+		case *status:
+			showStatus(dir)
+		default:
+			if err := startDaemon(dir, withoutFlag(os.Args[1:], "daemon")); err != nil {
+				log.Fatal(err)
+			}
+		}
+		return
+	}
 	switch {
 	case *setPassword:
 		fmt.Print("새 비밀번호 (8자 이상): ")
@@ -117,7 +159,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// One for each user: a folder another user (root, trying it out once)
+	// left in a shared /tmp can't be written to.
 	tmp := filepath.Join(os.TempDir(), "boxforge-server")
+	if uid := os.Getuid(); uid >= 0 {
+		tmp += "-" + strconv.Itoa(uid)
+	}
 	outbox, inbox := filepath.Join(tmp, "out"), filepath.Join(tmp, "in")
 	// What an earlier run left to be fetched or sent is not kept.
 	_ = os.RemoveAll(tmp)
@@ -158,6 +205,7 @@ func main() {
 	})
 	app.Start(a, srv.Emit)
 	defer app.Stop(a)
+	notePid(dir)
 
 	hs = &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 15 * time.Second}
 	scheme := "http"
@@ -186,6 +234,19 @@ func main() {
 		return
 	}
 	served(hs.ListenAndServe())
+}
+
+// withoutFlag is the arguments with -name (or --name, -name=…) taken out.
+func withoutFlag(args []string, name string) []string {
+	out := []string{}
+	for _, a := range args {
+		bare := strings.TrimLeft(a, "-")
+		if strings.HasPrefix(a, "-") && (bare == name || strings.HasPrefix(bare, name+"=")) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // addresses lists where the server can be reached, for telling the user.

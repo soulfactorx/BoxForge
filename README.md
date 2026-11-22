@@ -41,7 +41,9 @@ xattr -dr com.apple.quarantine /Applications/BoxForge.app
 **서버**: 창이 없는 기기(집 서버, NAS, 라즈베리 파이, Alpine 등)에서는 서버용 파일을 켜 두고 브라우저로 접속합니다. 다른 라이브러리가 필요 없습니다. 로그인한 사람은 그 기기를 마음대로 다룰 수 있으니 [docs/SERVER.md](docs/SERVER.md)를 먼저 읽어 주세요.
 
 ```bash
-./BoxForge-server-linux-amd64 -listen :8088 -tls
+./BoxForge-server-linux-amd64 -listen :8088 -tls          # 지금 이 터미널에서
+./BoxForge-server-linux-amd64 -daemon -listen :8088 -tls  # 백그라운드로 (-stop 으로 끄기)
+sudo ./BoxForge-server-linux-amd64 -install               # 서비스로 설치: 컴퓨터를 켤 때마다 시작
 ```
 
 ## 처음 켜면

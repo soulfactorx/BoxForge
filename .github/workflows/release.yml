@@ -181,6 +181,9 @@ jobs:
       - name: Test the screens
         working-directory: e2e
         run: npx playwright test --trace off
+        env:
+          # The runner can take a real service: the server's -install is tried.
+          E2E_INSTALL: "1"
       - name: Screenshots of what failed
         if: failure()
         uses: actions/upload-artifact@v4

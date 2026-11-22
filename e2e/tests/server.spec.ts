@@ -61,3 +61,33 @@ test("the sign-in page on a phone", async ({ page }) => {
   await expect(page.getByTestId("nav-containers")).toBeVisible();
   await expect(page.getByTestId("app-version")).toBeVisible();
 });
+
+test("-daemon runs it in the background, -status sees it, -stop ends it", async ({ request }) => {
+  const bin = join(__dirname, "..", ".bin", "boxforge-server");
+  const env = { ...process.env, XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), "bfe2e-daemon-")) };
+  const run = (...args: string[]) => execFileSync(bin, args, { env, encoding: "utf8" });
+  const started = run("-daemon", "-listen", "127.0.0.1:34199", "-tls");
+  expect(started).toContain("백그라운드에서 실행했습니다");
+  expect(started).toContain("https://127.0.0.1:34199");
+  expect(started).toMatch(/비밀번호: \S+/);
+  expect((await request.get("https://127.0.0.1:34199/")).status()).toBe(200);
+  expect(run("-status")).toContain("실행 중 (-daemon");
+  expect(() => run("-daemon", "-listen", "127.0.0.1:34199", "-tls")).toThrow(/이미 실행 중/);
+  expect(run("-stop")).toContain("서버를 껐습니다");
+  await expect(request.get("https://127.0.0.1:34199/", { timeout: 3000 })).rejects.toThrow();
+});
+
+test("-install makes it a service that runs, -uninstall takes it away", async ({ request }) => {
+  // It really installs one (sudo, systemd or OpenRC): only where asked to (CI).
+  test.skip(!process.env.E2E_INSTALL, "set E2E_INSTALL=1 to install a real service");
+  const bin = join(__dirname, "..", ".bin", "boxforge-server");
+  const out = execFileSync("sudo", [bin, "-install", "-listen", "127.0.0.1:34200", "-tls"], { encoding: "utf8" });
+  expect(out).toContain("설치했습니다");
+  try {
+    await expect.poll(async () => (await request.get("https://127.0.0.1:34200/").catch(() => null))?.status(), { timeout: 30_000 }).toBe(200);
+    expect(execFileSync("/opt/boxforge/boxforge-server", ["-status"], { encoding: "utf8" })).toMatch(/서비스\((systemd|openrc)\): (active|.*started)/);
+  } finally {
+    expect(execFileSync("sudo", ["/opt/boxforge/boxforge-server", "-uninstall"], { encoding: "utf8" })).toContain("서비스를 지웠습니다");
+  }
+  await expect(request.get("https://127.0.0.1:34200/", { timeout: 3000 })).rejects.toThrow();
+});

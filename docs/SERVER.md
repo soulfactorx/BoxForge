@@ -49,6 +49,11 @@ chmod +x BoxForge-server-linux-amd64
 | `-new-password` | 비밀번호를 새로 만들어 보여 줍니다(잊었을 때). |
 | `-set-viewer-password` | 보기 전용 비밀번호를 정합니다(비워 두면 없앰). |
 | `-insecure-network` | 암호화 없이 네트워크에 엽니다. 앞단의 프록시나 VPN이 암호화를 맡을 때만. |
+| `-daemon` | 지금 바로 백그라운드에서 실행합니다(함께 준 옵션으로). 터미널을 닫아도 계속 돕니다. 출력은 `~/.config/BoxForge/server.log`. |
+| `-stop` · `-status` | `-daemon`으로 실행한 서버를 끕니다 · 실행 중인지 봅니다(서비스로 설치했으면 그 상태도). |
+| `-install` | 관리자 권한(sudo)으로: 서비스로 설치하고 바로 켭니다. 컴퓨터를 다시 켜도 저절로 시작합니다. 아래 "한 번에 설치". |
+| `-uninstall` | 관리자 권한으로: 서비스를 끄고 지웁니다(프로그램과 비밀번호 · 설정은 남음). |
+| `-user 이름` | `-install`과 함께: 서비스를 실행할 사용자(기본은 sudo를 실행한 사용자). |
 
 환경변수 `BOXFORGE_PASSWORD`로도 비밀번호를 정할 수 있습니다(8자 이상).
 
@@ -90,6 +95,28 @@ chmod +x BoxForge-server-linux-amd64
 - 다시 켜지면 로그인이 풀리므로 비밀번호를 한 번 다시 넣습니다. 컨테이너는 영향받지 않습니다.
 - 서버 파일이 있는 폴더에 쓸 수 있어야 합니다. `/usr/local/bin`처럼 관리자만 쓸 수 있는 곳에 두고 일반 사용자로 실행하면 받지 못합니다. 그럴 때는 파일을 직접 바꿉니다: 서버를 끄고, 릴리스에서 같은 이름의 파일을 받아 덮어쓰고(`chmod +x`), 다시 켭니다.
 - 받는 파일은 릴리스의 체크섬과 맞는지 확인한 뒤에만 바꿉니다.
+
+## 한 번에 설치 (Linux: systemd · OpenRC)
+
+```bash
+sudo ./BoxForge-server-linux-amd64 -install
+```
+
+이것 하나로:
+
+- 프로그램을 `/opt/boxforge/boxforge-server`에 두고, 서비스를 실행할 사용자의 것으로 합니다(자동 업데이트가 파일을 바꿀 수 있게).
+- 그 사용자를 `docker` 그룹에 넣습니다.
+- 비밀번호(처음이면 새로 만들어 보여 줌)와 TLS 인증서를 준비하고 지문을 보여 줍니다.
+- systemd가 있으면 `/etc/systemd/system/boxforge.service`, OpenRC(Alpine)면 `/etc/init.d/boxforge`를 만들어 등록하고 켭니다. 서버가 죽으면 5초 뒤 다시 켜집니다.
+- 접속할 주소를 보여 줍니다.
+
+`-listen`을 주지 않으면 모든 네트워크에 TLS로 엽니다(`-listen :8088 -tls`). 다른 주소나 인증서를 쓰려면 `-install`과 함께 주세요: `sudo ./boxforge-server -install -listen :9443 -cert c.pem -key k.pem`. 서비스를 실행할 사용자는 sudo를 실행한 사용자이고, `-user 이름`으로 바꿀 수 있습니다(root로 로그인한 Alpine이라면 root).
+
+지우기: `sudo /opt/boxforge/boxforge-server -uninstall`
+
+설치 없이 지금만 켜 두려면 `-daemon`을 씁니다: `./boxforge-server -daemon -listen :8088 -tls`, 끄기는 `-stop`.
+
+아래는 손으로 등록하는 방법입니다(`-install`이 하는 일과 같음).
 
 ## 계속 켜 두기 (Linux, systemd)
 
