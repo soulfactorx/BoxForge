@@ -199,6 +199,8 @@ test("an image that only runs a shell is kept open, and a command can be given",
   await d.getByLabel("이름").fill("bfe2e-shell");
   await expect(d.getByTestId("bare-shell")).toBeVisible();
   await expect(d.getByLabel("터미널을 연 채로 두기")).toBeChecked();
+  // Fetched from a registry: the cluster fetches it too, nothing is copied by default.
+  await expect(d.getByLabel("이 PC(엔진)에 있는 이미지를 클러스터에 넣어서 쓰기")).not.toBeChecked();
   await d.getByRole("button", { name: "만들어질 YAML 보기" }).click();
   await expect(d.getByTestId("deploy-yaml")).toContainText("tty: true");
   await d.getByLabel("실행할 명령").fill("sleep infinity");
@@ -216,13 +218,16 @@ test("an image that only runs a shell is kept open, and a command can be given",
 test("an image only the engine has goes into the cluster, and a deployment is changed by its YAML", async ({ page }) => {
   await kube(page);
   // Made here and never pushed anywhere: the cluster can't fetch it.
-  sh(`docker tag ${ALPINE} bfe2e-local/app:1`);
+  sh(`docker create --name bfe2e-mk ${ALPINE} true`);
+  sh(`docker commit bfe2e-mk bfe2e-local/app:1`);
+  sh(`docker rm bfe2e-mk`);
   await page.getByRole("button", { name: "앱 배포" }).click();
   const d = page.getByRole("dialog");
   await d.getByLabel("이미지").fill("bfe2e-local/app:1");
   await d.getByLabel("이름").fill("bfe2e-edit");
   const put = d.getByLabel("이 PC(엔진)에 있는 이미지를 클러스터에 넣어서 쓰기");
-  await expect(put).toBeChecked();
+  await expect(put).not.toBeChecked(); // offered, not done unasked: copying is slow on a small machine
+  await put.check();
   await d.getByRole("button", { name: "만들어질 YAML 보기" }).click();
   await expect(d.getByTestId("deploy-yaml")).toContainText("imagePullPolicy: IfNotPresent");
   await d.getByRole("button", { name: "배포" }).click();
@@ -242,6 +247,28 @@ test("an image only the engine has goes into the cluster, and a deployment is ch
   expect(kubectl("get deployment bfe2e-edit -o jsonpath={.spec.replicas}")).toBe("2");
   kubectl("delete deployment/bfe2e-edit --wait=false");
   sh("docker rmi bfe2e-local/app:1", true);
+});
+
+test("an image the cluster can't fetch is put in from the engine when the progress offers it", async ({ page }) => {
+  test.skip(!!process.env.E2E_KUBE_NO_PODS, "pods can't run in a cluster here");
+  await kube(page);
+  sh(`docker create --name bfe2e-mk2 ${ALPINE}`);
+  sh(`docker commit bfe2e-mk2 bfe2e-local/offer:1`);
+  sh(`docker rm bfe2e-mk2`);
+  try {
+    await page.getByRole("button", { name: "앱 배포" }).click();
+    const d = page.getByRole("dialog");
+    await d.getByLabel("이미지").fill("bfe2e-local/offer:1");
+    await d.getByLabel("이름", { exact: true }).fill("bfe2e-offer");
+    await expect(d.getByLabel("이 PC(엔진)에 있는 이미지를 클러스터에 넣어서 쓰기")).not.toBeChecked();
+    await d.getByRole("button", { name: "배포" }).click();
+    const progress = page.getByTestId("deploy-progress");
+    await progress.getByRole("button", { name: "이 PC의 이미지를 클러스터에 넣고 다시 해 보기" }).click({ timeout: 120_000 });
+    await expect(progress).toContainText("bfe2e-offer 배포가 끝났습니다", { timeout: 180_000 });
+  } finally {
+    kubectl("delete deployment/bfe2e-offer --wait=false");
+    sh("docker rmi bfe2e-local/offer:1", true);
+  }
 });
 
 test("a running container is deployed to Kubernetes from its menu, the form filled", async ({ page }) => {

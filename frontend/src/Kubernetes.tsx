@@ -561,6 +561,13 @@ export default function Kubernetes({ run, showCli, deployFrom, onDeployFromTaken
           {tracking.length > 0 && (
             <DeployProgress
               since={trackSince}
+              onLoad={async (name) => {
+                const at = Date.now();
+                if (await run(`docker save IMAGE | docker exec -i boxforge-k3s ctr -n k8s.io images import - && ${kubectl(`rollout restart deployment ${name}`)}`, () => call("KubeLoadFor", "default", name))) {
+                  setTrackSince(at);
+                  refresh();
+                }
+              }}
               names={tracking}
               workloads={workloads}
               pods={pods}

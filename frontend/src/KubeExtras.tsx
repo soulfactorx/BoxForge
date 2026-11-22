@@ -212,17 +212,23 @@ export function DeployDialog(props: { init?: Partial<Deploy>; data: Item[]; onAp
     }
     let stale = false;
     const t = setTimeout(() => {
-      call<boolean>("ImageHere", image).then(
-        (yes) => {
-          if (stale) return;
-          setHere(!!yes);
-          set({ fromEngine: !!yes });
-        },
-        () => {},
-      );
+      // The engine's own description: there only when the engine has it.
       call<{ shell: boolean }>("ImageDefaults", image).then(
-        (x) => !stale && found(!!x?.shell || looksBareShell(image)),
-        () => !stale && found(looksBareShell(image)),
+        (x) => {
+          if (stale) return;
+          setHere(true);
+          // Not by default: most images the cluster fetches itself, and
+          // copying one through is slow on a small machine. One it can't
+          // fetch is offered again on the deployment's progress.
+          set({ fromEngine: false });
+          found(!!x?.shell || looksBareShell(image));
+        },
+        () => {
+          if (stale) return;
+          setHere(false);
+          set({ fromEngine: false });
+          found(looksBareShell(image));
+        },
       );
     }, 400);
     const found = (yes: boolean) => {
@@ -563,6 +569,26 @@ const stepMeaning: Record<string, string> = {
 // first time, its last one moving on with each repeat.
 const began = (e: Item) => Date.parse(e.firstTimestamp ?? e.eventTime ?? e.metadata.creationTimestamp) || 0;
 
+// The cluster couldn't fetch the pod's image.
+const cantFetch = (p: Item) => [...(p.status?.containerStatuses ?? []), ...(p.status?.initContainerStatuses ?? [])].some((c: any) => ["ErrImagePull", "ImagePullBackOff"].includes(c.state?.waiting?.reason));
+
+/** The way out for an image the cluster can't fetch, offered when the engine has it. */
+function LoadOffer(props: { image: string; onLoad: () => void }) {
+  const [here, setHere] = useState(false);
+  useEffect(() => {
+    if (props.image) call("ImageDefaults", props.image).then(() => setHere(true), () => setHere(false));
+  }, [props.image]);
+  if (!here) return null;
+  return (
+    <span className="block" data-testid="load-offer">
+      <span className="muted">{`이 PC(엔진)에는 ${props.image} 이미지가 있습니다. 이 PC에서 만든 이미지라면 클러스터가 받아 올 곳이 없습니다. `}</span>
+      <button type="button" onClick={props.onLoad}>
+        이 PC의 이미지를 클러스터에 넣고 다시 해 보기
+      </button>
+    </span>
+  );
+}
+
 /** The deployments named in `kubectl apply`'s answer ("deployment.apps/web created"). */
 export const appliedDeployments = (out: string) => [...out.matchAll(/^deployment\.apps\/(\S+) (?:created|configured)/gm)].map((m) => m[1]);
 
@@ -581,7 +607,7 @@ export function useElapsed(since: number | null) {
  * How a deployment just applied is coming up: each of its pods, and the
  * cluster's own steps (pod made, image being fetched, started) in plain words.
  */
-export function DeployProgress(props: { since: number; names: string[]; workloads: Item[]; pods: Item[]; events: Item[]; podTone: (p: Item) => "ok" | "wait" | "bad" | "done"; podText: (p: Item) => string; onClose: () => void }) {
+export function DeployProgress(props: { onLoad?: (name: string) => void; since: number; names: string[]; workloads: Item[]; pods: Item[]; events: Item[]; podTone: (p: Item) => "ok" | "wait" | "bad" | "done"; podText: (p: Item) => string; onClose: () => void }) {
   const rows = props.names.map((name) => {
     const w = props.workloads.find((x) => x.kind === "Deployment" && x.metadata.name === name && x.metadata.namespace === "default");
     const pods = w ? podsOf(w, props.pods) : [];
@@ -625,6 +651,7 @@ export function DeployProgress(props: { since: number; names: string[]; workload
             </span>
           ))}
           {r.stuck && <span className="sub why">원인: {whyPod(r.stuck, props.events)}</span>}
+          {r.stuck && cantFetch(r.stuck) && props.onLoad && <LoadOffer image={r.w?.spec?.template?.spec?.containers?.[0]?.image ?? ""} onLoad={() => props.onLoad!(r.name)} />}
           {r.steps.length > 0 && (
             <ol className="deploy-steps">
               {r.steps.map((e) => (

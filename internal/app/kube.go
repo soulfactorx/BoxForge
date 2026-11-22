@@ -893,13 +893,6 @@ func editableYAML(object string) (string, error) {
 	return string(b), err
 }
 
-// ImageHere reports whether the engine has the image.
-func (a *App) ImageHere(ref string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	return a.eng().Images().Exists(ctx, strings.TrimSpace(ref))
-}
-
 // KubeLoadImage puts an image the engine has into the cluster's own store:
 // the cluster fetches its images itself and does not see the engine's, so
 // one built on this PC (and never pushed anywhere) can't be run otherwise.
@@ -941,4 +934,56 @@ func (a *App) KubeLoadImage(ref string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// KubeLoadFor is the way out for a deployment whose image the cluster
+// can't fetch (built on this PC, never pushed): each of its images the
+// engine has goes into the cluster, and the deployment is told to use what
+// is there, which starts its pods afresh.
+func (a *App) KubeLoadFor(namespace, name string) (string, error) {
+	ref, err := kubeRef("deployment", namespace, name)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := a.kubectl(ctx, nil, append([]string{"get", "-o", "json"}, ref...)...)
+	if err != nil {
+		return "", err
+	}
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct{ Name, Image string }
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &d); err != nil {
+		return "", err
+	}
+	var loaded, patch []string
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if !a.eng().Images().Exists(ctx, c.Image) {
+			continue
+		}
+		if err := a.KubeLoadImage(c.Image); err != nil {
+			return "", err
+		}
+		loaded = append(loaded, c.Image)
+		patch = append(patch, fmt.Sprintf(`{"name":%q,"imagePullPolicy":"IfNotPresent"}`, c.Name))
+	}
+	if len(loaded) == 0 {
+		return "", fmt.Errorf("the engine doesn't have this deployment's image either; build or pull it first")
+	}
+	p := `{"spec":{"template":{"spec":{"containers":[` + strings.Join(patch, ",") + `]}}}}`
+	if _, err := a.kubectl(ctx, nil, append([]string{"patch", "--type", "strategic", "-p", p}, ref...)...); err != nil {
+		return "", err
+	}
+	// New pods now, not at the end of the old ones' wait to fetch again.
+	if _, err := a.kubectl(ctx, nil, append([]string{"rollout", "restart"}, ref...)...); err != nil {
+		return "", err
+	}
+	return strings.Join(loaded, ", "), nil
 }
