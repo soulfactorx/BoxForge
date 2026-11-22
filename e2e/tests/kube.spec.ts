@@ -409,7 +409,8 @@ volumes:
       await expect(progress).toContainText("web 배포가 끝났습니다", { timeout: 180_000 });
       await expect(progress).toContainText("db 배포가 끝났습니다", { timeout: 180_000 });
       // Found by name, as in Compose.
-      expect(kubectl("exec -n bfe2e-kmove deploy/web -- nslookup db")).toContain("db.bfe2e-kmove");
+      // (BusyBox's nslookup answers, then ends with 1 for the IPv6 half: its words are what count.)
+      expect(kubectl(`exec -n bfe2e-kmove deploy/web -- sh -c "nslookup db 2>&1; true"`)).toContain("db.bfe2e-kmove.svc.cluster.local");
     }
   } finally {
     kubectl("delete namespace bfe2e-kmove --wait=false");

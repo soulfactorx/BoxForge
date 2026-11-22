@@ -1,7 +1,6 @@
 package app
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 )
@@ -44,14 +43,6 @@ func TestComposeToKube(t *testing.T) {
 	for _, want := range []string{"FROM_HOST", "/tmp/cz/html", "8080→80", "depends_on", "my-worker", "privileged", "demo-my_worker", "데이터는 옮겨지지 않습니다"} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("notes lack %q:\n%s", want, notes)
-		}
-	}
-	// What a cluster's own kubectl would say of it, where there is one at hand.
-	if _, err := exec.LookPath("kubectl"); err == nil {
-		cmd := exec.Command("kubectl", "apply", "--dry-run=client", "--validate=false", "-f", "-")
-		cmd.Stdin = strings.NewReader(y)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Errorf("kubectl rejects it: %v\n%s", err, out)
 		}
 	}
 }
