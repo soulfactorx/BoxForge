@@ -202,7 +202,8 @@ export default function Kubernetes({ run, showCli }: { run: Run; showCli: (cmd: 
 
   useEffect(() => {
     refresh();
-    const timer = setInterval(refresh, 3000);
+    // Each round is several kubectl commands in the cluster: not too often.
+    const timer = setInterval(refresh, 5000);
     const off = [
       on("kube", (t: string) => setStarting(t)),
       on("pull", (p: PullState) => setPull(p.done ? null : p)),

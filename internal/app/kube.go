@@ -164,9 +164,15 @@ func (a *App) kubectl(ctx context.Context, stdin []byte, args ...string) (string
 
 // nodeReady asks the cluster whether its node is Ready, and its version.
 func (a *App) nodeReady(ctx context.Context) (bool, string) {
+	ready, version, _ := a.nodeState(ctx)
+	return ready, version
+}
+
+// nodeState is nodeReady, and whether the cluster answered at all.
+func (a *App) nodeState(ctx context.Context) (ready bool, version string, known bool) {
 	out, err := a.kubectl(ctx, nil, "get", "nodes", "-o", "json")
 	if err != nil {
-		return false, ""
+		return false, "", false
 	}
 	var list struct {
 		Items []struct {
@@ -177,18 +183,18 @@ func (a *App) nodeReady(ctx context.Context) (bool, string) {
 		}
 	}
 	if json.Unmarshal([]byte(out), &list) != nil || len(list.Items) == 0 {
-		return false, ""
+		return false, "", false
 	}
 	// Any node that is Ready: one an older cluster left behind never will be.
-	version := list.Items[0].Status.NodeInfo.KubeletVersion
+	version = list.Items[0].Status.NodeInfo.KubeletVersion
 	for _, n := range list.Items {
 		for _, c := range n.Status.Conditions {
 			if c.Type == "Ready" && c.Status == "True" {
-				return true, n.Status.NodeInfo.KubeletVersion
+				return true, n.Status.NodeInfo.KubeletVersion, true
 			}
 		}
 	}
-	return false, version
+	return false, version, true
 }
 
 // KubeStatus says where the cluster stands.
@@ -200,11 +206,65 @@ func (a *App) KubeStatus() KubeState {
 	}
 	st.Exists, st.Running, st.Port = true, c.State == "running", apiPort(*c)
 	if st.Running {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		st.Ready, st.Version = a.nodeReady(ctx)
+		st.Ready, st.Version = a.kubeReady(c.ID)
+	} else {
+		readiness.forget()
 	}
 	return st
+}
+
+// readiness is the last answer to "is the node Ready?". Asking runs
+// kubectl in the cluster, which on a slow machine takes seconds and now and
+// then gets no answer in time: a cluster found Ready is not asked again for
+// a while, and a question that got no answer doesn't make it "starting".
+var readiness readyMemo
+
+type readyMemo struct {
+	sync.Mutex
+	id      string // the container it was asked of
+	ready   bool
+	version string
+	at      time.Time // when it was last found Ready
+}
+
+func (r *readyMemo) forget() {
+	r.Lock()
+	r.id, r.ready = "", false
+	r.Unlock()
+}
+
+const (
+	readyFresh = 15 * time.Second // a Ready answer is used this long without asking
+	readyTrust = 2 * time.Minute  // and this long when asking gets no answer
+)
+
+func (a *App) kubeReady(id string) (bool, string) {
+	r := &readiness
+	r.Lock()
+	if r.id == id && r.ready && time.Since(r.at) < readyFresh {
+		defer r.Unlock()
+		return true, r.version
+	}
+	r.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ready, version, known := a.nodeState(ctx)
+
+	r.Lock()
+	defer r.Unlock()
+	if !known {
+		// No answer: what was known a moment ago still holds.
+		if r.id == id && r.ready && time.Since(r.at) < readyTrust {
+			return true, r.version
+		}
+		return false, version
+	}
+	r.id, r.ready, r.version = id, ready, version
+	if ready {
+		r.at = time.Now()
+	}
+	return ready, version
 }
 
 // How long a cluster may take from its container's start to a Ready node.
@@ -298,6 +358,11 @@ func (a *App) KubeStart() error {
 		stop()
 		if ready {
 			a.dropOldNodes(ctx)
+			if c := a.kubeContainer(); c != nil {
+				readiness.Lock()
+				readiness.id, readiness.ready, readiness.version, readiness.at = c.ID, true, version, time.Now()
+				readiness.Unlock()
+			}
 			return nil
 		}
 		waited := waitedText(time.Since(begun))

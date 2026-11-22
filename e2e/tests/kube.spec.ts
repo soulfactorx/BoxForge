@@ -91,6 +91,23 @@ test("a secret's keys show, its value never does", async ({ page, request }) => 
   expect(kubectl("get secret bfe2e-secret -o jsonpath={.metadata.annotations}")).not.toContain("hunter2");
 });
 
+test("a ready cluster stays ready on the screen when asking it gets no answer for a while", async ({ page }) => {
+  await kube(page);
+  // As on a slow machine, where kubectl now and then doesn't answer in time.
+  sh("docker exec boxforge-k3s mv /bin/kubectl /bin/kubectl.off");
+  try {
+    await page.waitForTimeout(20_000); // past the time a Ready answer is reused
+    await expect(page.getByTestId("kube-state")).toContainText("준비됨");
+    await go(page, "home");
+    await go(page, "kube");
+    await page.waitForTimeout(6_000);
+    await expect(page.getByTestId("kube-state")).toContainText("준비됨");
+    await expect(page.getByText("클러스터가 아직 시작하는 중입니다")).toHaveCount(0);
+  } finally {
+    sh("docker exec boxforge-k3s mv /bin/kubectl.off /bin/kubectl");
+  }
+});
+
 test("a cluster made by an older BoxForge is made again at its start, its data kept", async ({ page }) => {
   test.skip(had, "a cluster was already there");
   const k3s = process.env.E2E_K3S || "rancher/k3s:v1.33.5-k3s1";
