@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/soulfactorx/boxforge/internal/update"
 )
 
 // daemonEnv marks the server -daemon started: it writes its process number.
@@ -50,7 +52,9 @@ func startDaemon(dir string, args []string) error {
 	if pid := runningPid(dir); pid != 0 {
 		return fmt.Errorf("이미 실행 중입니다 (프로세스 %d). 끄려면 -stop", pid)
 	}
-	exe, err := os.Executable()
+	// The path the program was started from: after an update moved it
+	// aside, os.Executable names the old file.
+	exe, err := update.Program()
 	if err != nil {
 		return err
 	}
@@ -70,6 +74,10 @@ func startDaemon(dir string, args []string) error {
 		return err
 	}
 	pid := cmd.Process.Pid
+	// Written here as well as by the server: one of a version from before
+	// it did (just updated to) is still found by -stop.
+	_ = os.WriteFile(pidFile(dir), []byte(strconv.Itoa(pid)+"\n"), 0o600)
+	noteArgs(dir, args)
 	ended := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()

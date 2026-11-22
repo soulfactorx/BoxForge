@@ -44,3 +44,7 @@ func install(string, map[string]string) error {
 func uninstall() error { return install("", nil) }
 
 func serviceStatus() string { return "" }
+
+func keepOwner(string) {}
+
+func restartService(string) string { return "" }

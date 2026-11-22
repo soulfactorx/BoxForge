@@ -44,6 +44,7 @@ xattr -dr com.apple.quarantine /Applications/BoxForge.app
 ./BoxForge-server-linux-amd64 -listen :8088 -tls          # 지금 이 터미널에서
 ./BoxForge-server-linux-amd64 -daemon -listen :8088 -tls  # 백그라운드로 (-stop 으로 끄기)
 sudo ./BoxForge-server-linux-amd64 -install               # 서비스로 설치: 컴퓨터를 켤 때마다 시작
+./BoxForge-server-linux-amd64 -update                     # 새 버전으로 바꾸고 돌던 서버를 다시 켬
 ```
 
 ## 처음 켜면

@@ -7,6 +7,7 @@
 //	boxforge-server -set-password         # choose the password
 //	boxforge-server -daemon -listen :8088 -tls   # in the background, now
 //	boxforge-server -stop | -status
+//	boxforge-server -update               # the newest version, now
 //	sudo boxforge-server -install         # a service that starts with the machine
 //	sudo boxforge-server -uninstall
 //
@@ -51,6 +52,8 @@ func main() {
 	status := flag.Bool("status", false, "say whether the server runs (in the background or as a service)")
 	doInstall := flag.Bool("install", false, "as root: put the program in "+installDir+" and make it a service (systemd or OpenRC) that starts with the machine, then start it; without -listen it serves every network over TLS on 8088")
 	doUninstall := flag.Bool("uninstall", false, "as root: stop and remove the service (the program and settings stay)")
+	doUpdate := flag.Bool("update", false, "fetch the newest release's server program in place of this one (checked against its checksums), then start the running server (-daemon or service) again on it")
+	forceUpdate := flag.Bool("force", false, "with -update: fetch the newest even when this one is as new")
 	runAs := flag.String("user", "", "with -install: the user the service runs as (default: the one who ran sudo)")
 	flag.Parse()
 	if *showVersion {
@@ -79,6 +82,13 @@ func main() {
 	}
 	dir := filepath.Join(cfg, "BoxForge")
 	passwords := webserver.PasswordsIn(dir)
+	if *doUpdate {
+		log.SetFlags(0)
+		if err := selfUpdate(dir, *forceUpdate); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if *daemon || *stop || *status {
 		log.SetFlags(0)
 		switch {

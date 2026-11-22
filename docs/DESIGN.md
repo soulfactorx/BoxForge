@@ -229,7 +229,7 @@ volumes/<이름>.tar       볼륨 데이터
 
 브라우저에서는 파일이 서버가 아니라 그 기기로 가야 하므로, "저장"과 "내보내기"는 서버의 임시 폴더에 쓴 뒤 브라우저가 한 번 받아 가고(받으면 지움), "가져오기"는 브라우저가 올린다.
 
-실행 방법: 터미널에서 그대로, `-daemon`(새 세션으로 떼어 내 백그라운드, 출력은 `~/.config/BoxForge/server.log`, 서버가 자기 프로세스 번호를 `server.pid`에 적고 `-stop` · `-status`가 그것을 씀), 또는 `-install`(root: `/opt/boxforge`에 두고 그 사용자의 것으로, docker 그룹, 비밀번호 · 인증서 준비, systemd 단위나 OpenRC 스크립트를 만들어 켬. `-uninstall`은 서비스만 지움). 임시 폴더는 사용자마다 따로다(`/tmp/boxforge-server-<uid>`). Windows에서는 `-daemon`만 되고 서비스 설치는 아직 없다.
+실행 방법: 터미널에서 그대로, `-daemon`(새 세션으로 떼어 내 백그라운드, 출력은 `~/.config/BoxForge/server.log`, 서버가 자기 프로세스 번호를 `server.pid`에 적고 `-stop` · `-status`가 그것을 씀), 또는 `-install`(root: `/opt/boxforge`에 두고 그 사용자의 것으로, docker 그룹, 비밀번호 · 인증서 준비, systemd 단위나 OpenRC 스크립트를 만들어 켬. `-uninstall`은 서비스만 지움). `-update`는 화면의 자동 업데이트와 같은 부품(체크섬 확인, 실행 중인 파일은 옆으로 옮기고 새 파일을 그 이름에)으로 바꾼 뒤, `-daemon`으로 돌던 서버는 저장해 둔 옵션(`server.args`)으로 다시 켜고, 서비스면 서비스를 다시 켠다. 임시 폴더는 사용자마다 따로다(`/tmp/boxforge-server-<uid>`). Windows에서는 `-daemon`만 되고 서비스 설치는 아직 없다.
 
 개발용 `cmd/devserver`는 같은 패키지를 로그인 없이 쓰며 127.0.0.1에만 열린다.
 

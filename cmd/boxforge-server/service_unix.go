@@ -303,3 +303,44 @@ func chownTree(root string, uid, gid int) {
 		return nil
 	})
 }
+
+// keepOwner gives the program back to the owner of its folder when root
+// replaced it: the service's user updates it next time.
+func keepOwner(exe string) {
+	if os.Geteuid() != 0 {
+		return
+	}
+	if fi, err := os.Stat(filepath.Dir(exe)); err == nil {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			_ = os.Chown(exe, int(st.Uid), int(st.Gid))
+		}
+	}
+}
+
+// restartService starts the installed service again on the new program,
+// or says how to. "" when there is no service.
+func restartService(exe string) string {
+	m := manager()
+	if m == "" {
+		return ""
+	}
+	if _, err := os.Stat(serviceFile(m)); err != nil {
+		return ""
+	}
+	installed := filepath.Join(installDir, "boxforge-server")
+	note := ""
+	if exe != installed {
+		note = fmt.Sprintf("참고: 서비스는 %s 를 씁니다. 그 파일을 바꾸려면 %s -update 를 실행하세요.\n", installed, installed)
+	}
+	restart := []string{"systemctl", "restart", serviceName}
+	if m == "openrc" {
+		restart = []string{"rc-service", serviceName, "restart"}
+	}
+	if os.Geteuid() != 0 {
+		return note + "서비스를 새 버전으로 다시 켜려면: sudo " + strings.Join(restart, " ")
+	}
+	if err := sh(false, restart[0], restart[1:]...); err != nil {
+		return note + err.Error()
+	}
+	return note + "서비스를 새 버전으로 다시 켰습니다."
+}

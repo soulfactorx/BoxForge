@@ -1,8 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 // The web server for other machines: sign-in, the look-only password,
 // and what it refuses. Its own program, on its own port, over TLS.
@@ -90,4 +95,53 @@ test("-install makes it a service that runs, -uninstall takes it away", async ({
     expect(execFileSync("sudo", ["/opt/boxforge/boxforge-server", "-uninstall"], { encoding: "utf8" })).toContain("서비스를 지웠습니다");
   }
   await expect(request.get("https://127.0.0.1:34200/", { timeout: 3000 })).rejects.toThrow();
+});
+
+test("-update puts the newest release in place, checked, and starts the running one again on it", async ({ request }) => {
+  // A release of our own: version 9.9.9, served from here.
+  const dir = mkdtempSync(join(tmpdir(), "bfe2e-update-"));
+  const old = join(dir, "boxforge-server");
+  const fresh = join(dir, "release-program");
+  const v = (n: string) => ["build", "-ldflags", `-X github.com/soulfactorx/boxforge/internal/version.Version=${n}`];
+  execFileSync("go", [...v("0.0.1"), "-o", old, "../cmd/boxforge-server"], { stdio: "inherit" });
+  execFileSync("go", [...v("9.9.9"), "-o", fresh, "../cmd/boxforge-server"], { stdio: "inherit" });
+  const os = process.platform === "win32" ? "windows" : process.platform;
+  const arch = process.arch === "x64" ? "amd64" : process.arch;
+  const asset = `BoxForge-server-${os}-${arch}${os === "windows" ? ".exe" : ""}`;
+  const program = readFileSync(fresh);
+  let sum = createHash("sha256").update(program).digest("hex");
+  const releases = createHttpServer((req, res) => {
+    const at = "http://127.0.0.1:34202";
+    if (req.url === "/latest") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ tag_name: "v9.9.9", body: "", html_url: at, assets: [{ name: asset, browser_download_url: `${at}/p` }, { name: "checksums.txt", browser_download_url: `${at}/sums` }] }));
+    } else if (req.url === "/p") res.end(program);
+    else if (req.url === "/sums") res.end(`${sum}  ${asset}\n`);
+    else res.writeHead(404).end();
+  });
+  await new Promise<void>((ok, fail) => releases.once("error", fail).listen(34202, "127.0.0.1", () => ok()));
+  try {
+    const env = { ...process.env, XDG_CONFIG_HOME: join(dir, "config"), BOXFORGE_UPDATE_API: "http://127.0.0.1:34202/latest" };
+    // Not execFileSync: the release server above answers from this very process.
+    const run = async (...args: string[]) => (await execFileAsync(old, args, { env, encoding: "utf8" })).stdout;
+
+    // A download that doesn't match the release's checksum is not installed.
+    sum = "0".repeat(64);
+    await expect(run("-update")).rejects.toThrow(/checksum/);
+    expect((await run("-version")).trim()).toBe("0.0.1");
+    sum = createHash("sha256").update(program).digest("hex");
+
+    await run("-daemon", "-listen", "127.0.0.1:34203", "-tls");
+    const out = await run("-update");
+    expect(out).toContain("지금 버전: 0.0.1");
+    expect(out).toContain("9.9.9(으)로 바꿨습니다");
+    expect(out).toContain("새 버전으로 다시 켭니다");
+    expect(out).toContain("BoxForge 서버 9.9.9");
+    expect((await run("-version")).trim()).toBe("9.9.9");
+    expect((await request.get("https://127.0.0.1:34203/")).status()).toBe(200);
+    expect(await run("-update")).toContain("이미 최신 버전입니다");
+    expect(await run("-stop")).toContain("서버를 껐습니다");
+  } finally {
+    releases.close();
+  }
 });
