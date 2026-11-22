@@ -91,6 +91,24 @@ test("a secret's keys show, its value never does", async ({ page, request }) => 
   expect(kubectl("get secret bfe2e-secret -o jsonpath={.metadata.annotations}")).not.toContain("hunter2");
 });
 
+test("a cluster made by an older BoxForge is made again at its start, its data kept", async ({ page }) => {
+  test.skip(had, "a cluster was already there");
+  const k3s = process.env.E2E_K3S || "rancher/k3s:v1.33.5-k3s1";
+  // As 0.23 and before made it: no label, the node named after the container.
+  sh("docker rm -f boxforge-k3s");
+  sh(`docker run -d --name boxforge-k3s --privileged --tmpfs /run --tmpfs /var/run -e K3S_KUBECONFIG_MODE=644 -p 127.0.0.1:6450:6443 -v boxforge-k3s:/var/lib/rancher/k3s ${k3s} server`);
+  await expect.poll(() => kubectl("get nodes --no-headers"), { timeout: 240_000 }).toMatch(/ Ready /);
+  sh("docker stop boxforge-k3s");
+  await open(page);
+  await go(page, "kube");
+  await expect(page.getByTestId("kube-state")).toContainText("꺼짐", { timeout: 60_000 });
+  await kube(page);
+  expect(sh("docker inspect -f '{{index .Config.Labels \"dev.boxforge.k3s\"}} {{json .Config.Cmd}}' boxforge-k3s")).toBe('2 ["server","--disable-network-policy","--node-name","boxforge"]');
+  // What was in it is still there, on one node, the new one.
+  expect(kubectl("get secret bfe2e-secret -o name")).toBe("secret/bfe2e-secret");
+  await expect.poll(() => kubectl("get nodes -o jsonpath={.items[*].metadata.name}"), { timeout: 60_000 }).toBe("boxforge");
+});
+
 test("deploy with the helper: address, storage, settings, and the picture", async ({ page, request }) => {
   // Some machines can't run containers inside a container at all.
   test.skip(!!process.env.E2E_KUBE_NO_PODS, "pods can't run in a cluster here");

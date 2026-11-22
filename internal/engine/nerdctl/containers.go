@@ -303,6 +303,9 @@ func runArgs(spec engine.RunSpec) []string {
 	if spec.Restart != "" {
 		args = append(args, "--restart", spec.Restart)
 	}
+	for k, v := range spec.Labels {
+		args = append(args, "--label", k+"="+v)
+	}
 	if spec.Privileged {
 		args = append(args, "--privileged")
 	}

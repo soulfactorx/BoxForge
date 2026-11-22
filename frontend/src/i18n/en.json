@@ -1127,6 +1127,7 @@
  "클러스터 안에서 이름으로 (Service) — 다른 앱이": "By name inside the cluster (Service) — other apps reach it at",
  "클러스터 안의 서비스는 밖에서 바로 접속할 수 없습니다. 내 PC의 포트 하나를 이 서비스로 이어 주면 브라우저나 다른 프로그램에서 localhost로 접속할 수 있습니다.": "Services in the cluster can't be reached directly from outside. Link a port on this PC to this service and you can reach it at localhost from a browser or other programs.",
  "클러스터 컨테이너를 만드는 중": "Creating cluster container",
+ "클러스터 컨테이너를 새 설정으로 다시 만드는 중 (안의 데이터는 그대로)": "Making the cluster container again with the new settings (what is in it is kept)",
  "클러스터 컨테이너를 시작하는 중": "Starting cluster container",
  "클러스터 컨테이너의 로그를 기다리는 중…": "Waiting for the cluster container's log…",
  "클러스터가 꺼져 있습니다. 안에 배포해 둔 것은 그대로 있습니다.": "The cluster is turned off. What you deployed in it is still there.",

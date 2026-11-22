@@ -316,7 +316,7 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 	}
 	created, err := c.cli.ContainerCreate(ctx,
 		&container.Config{
-			Image: spec.Image, Env: spec.Env, Cmd: spec.Command, ExposedPorts: exposed,
+			Image: spec.Image, Env: spec.Env, Cmd: spec.Command, ExposedPorts: exposed, Labels: spec.Labels,
 			Tty: spec.Interactive, OpenStdin: spec.Interactive,
 		},
 		&container.HostConfig{

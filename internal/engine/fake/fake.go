@@ -274,7 +274,7 @@ func (c containers) Run(_ context.Context, spec engine.RunSpec) (string, error) 
 	}
 	c.r.list = append(c.r.list, engine.Container{
 		ID: id, Name: name, Image: spec.Image, ImageID: "sha256:" + spec.Image, State: "running",
-		Status: "Up 1 second", Created: time.Now().Unix(), Ports: ports, Labels: map[string]string{},
+		Status: "Up 1 second", Created: time.Now().Unix(), Ports: ports, Labels: labelsOf(spec),
 		Volumes: []string{}, Networks: []engine.Attachment{{Network: "bridge", IP: "172.17.0.9"}},
 	})
 	c.r.announce(engine.Event{Type: "container", Action: "start", ID: id})
@@ -670,4 +670,13 @@ func (v volumes) Put(context.Context, string, string, io.Reader) error { return 
 func (v volumes) Restore(ctx context.Context, name string, r io.Reader) error {
 	_, _ = io.Copy(io.Discard, r)
 	return v.Create(ctx, name)
+}
+
+// labelsOf is a run's labels, as a container of its own keeps them.
+func labelsOf(spec engine.RunSpec) map[string]string {
+	out := map[string]string{}
+	for k, v := range spec.Labels {
+		out[k] = v
+	}
+	return out
 }

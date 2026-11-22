@@ -23,6 +23,25 @@ import (
 // that container, so it works the same on every engine and needs no way
 // from this PC to the cluster's own network.
 
+// kubeMade marks how a cluster container was made (label kubeMadeLabel).
+// A stopped one made otherwise is made again at its next start, its data
+// kept in the volume: what changed reaches clusters made before.
+//
+//	2: --disable-network-policy, --node-name, the API port on 127.0.0.1 only
+const (
+	kubeMadeLabel = "dev.boxforge.k3s"
+	kubeMade      = "2"
+	kubeNode      = "boxforge"
+)
+
+// The k3s server's arguments. The network policy controller is left out:
+// it finds its network device by the node's address as last recorded, and
+// a container's address changes when the engine restarts it, which stops
+// the cluster from starting ("failed to find interface with specified node
+// ip"). It is also memory a small machine is short of. The node's name is
+// fixed so that a container made again is the same node.
+var kubeArgs = []string{"server", "--disable-network-policy", "--node-name", kubeNode}
+
 // kubeContainer is the cluster's container, and kubeVolume its data.
 const (
 	kubeContainer = engine.ClusterName
@@ -160,13 +179,16 @@ func (a *App) nodeReady(ctx context.Context) (bool, string) {
 	if json.Unmarshal([]byte(out), &list) != nil || len(list.Items) == 0 {
 		return false, ""
 	}
-	n := list.Items[0].Status
-	for _, c := range n.Conditions {
-		if c.Type == "Ready" && c.Status == "True" {
-			return true, n.NodeInfo.KubeletVersion
+	// Any node that is Ready: one an older cluster left behind never will be.
+	version := list.Items[0].Status.NodeInfo.KubeletVersion
+	for _, n := range list.Items {
+		for _, c := range n.Status.Conditions {
+			if c.Type == "Ready" && c.Status == "True" {
+				return true, n.Status.NodeInfo.KubeletVersion
+			}
 		}
 	}
-	return false, n.NodeInfo.KubeletVersion
+	return false, version
 }
 
 // KubeStatus says where the cluster stands.
@@ -197,7 +219,16 @@ func (a *App) KubeStart() error {
 	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
 	fresh := false
-	switch c := a.kubeContainer(); {
+	c := a.kubeContainer()
+	if c != nil && c.State != "running" && c.Labels[kubeMadeLabel] != kubeMade {
+		say("클러스터 컨테이너를 새 설정으로 다시 만드는 중 (안의 데이터는 그대로)")
+		// The container only: its volume, the cluster's state, stays.
+		if err := a.eng().Containers().Remove(ctx, c.ID, true, false); err != nil {
+			return err
+		}
+		c = nil
+	}
+	switch {
 	case c == nil:
 		fresh = true
 		img := kubeImage()
@@ -226,7 +257,8 @@ func (a *App) KubeStart() error {
 			env = append(env, "HTTP_PROXY="+proxy, "HTTPS_PROXY="+proxy, "NO_PROXY="+no)
 		}
 		_, err = a.eng().Containers().Run(ctx, engine.RunSpec{
-			Image: img, Name: kubeContainer, Command: []string{"server"},
+			Image: img, Name: kubeContainer, Command: kubeArgs,
+			Labels: map[string]string{kubeMadeLabel: kubeMade},
 			// k3s runs containers of its own inside this one.
 			Privileged: true, Tmpfs: []string{"/run", "/var/run"},
 			Env: env,
@@ -265,6 +297,7 @@ func (a *App) KubeStart() error {
 		ready, version := a.nodeReady(probe)
 		stop()
 		if ready {
+			a.dropOldNodes(ctx)
 			return nil
 		}
 		waited := waitedText(time.Since(begun))
@@ -284,6 +317,22 @@ func (a *App) KubeStart() error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// dropOldNodes removes nodes a cluster made before kubeMade 2 left
+// behind: there the node was named after the container, so a container
+// made again came back as a new node, the old one never ready. Their pods
+// move to the node that is.
+func (a *App) dropOldNodes(ctx context.Context) {
+	out, err := a.kubectl(ctx, nil, "get", "nodes", "-o", "jsonpath={.items[*].metadata.name}")
+	if err != nil {
+		return
+	}
+	for _, n := range strings.Fields(out) {
+		if n != kubeNode {
+			_, _ = a.kubectl(ctx, nil, "delete", "node", n, "--wait=false")
 		}
 	}
 }

@@ -137,7 +137,8 @@ type RunSpec struct {
 	Interactive bool `json:"interactive"`
 	// Network is whose network the container uses instead of one of its
 	// own: "container:<name>" shares that container's.
-	Network string `json:"network"`
+	Network string            `json:"network"`
+	Labels  map[string]string `json:"labels,omitempty"`
 }
 
 // Size is the disk a container takes. RootFS is everything it sees, its
