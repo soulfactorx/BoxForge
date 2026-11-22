@@ -410,7 +410,19 @@ volumes:
       await expect(progress).toContainText("db 배포가 끝났습니다", { timeout: 180_000 });
       // Found by name, as in Compose.
       // (BusyBox's nslookup answers, then ends with 1 for the IPv6 half: its words are what count.)
-      expect(kubectl(`exec -n bfe2e-kmove deploy/web -- sh -c "nslookup db 2>&1; true"`)).toContain("db.bfe2e-kmove.svc.cluster.local");
+      const lookup = () => kubectl(`exec -n bfe2e-kmove deploy/web -- sh -c "nslookup db 2>&1; true"`);
+      try {
+        await expect.poll(lookup, { timeout: 90_000, intervals: [3000] }).toContain("db.bfe2e-kmove.svc.cluster.local");
+      } catch (e) {
+        // How the cluster's name service stood, for a failure seen only in CI.
+        console.log(lookup());
+        console.log(kubectl(`exec -n bfe2e-kmove deploy/web -- cat /etc/resolv.conf`));
+        console.log(kubectl("get pods,svc,endpoints -n kube-system -o wide"));
+        console.log(kubectl("get svc,endpoints -n bfe2e-kmove -o wide"));
+        console.log(kubectl("logs -n kube-system deploy/coredns --tail=30"));
+        console.log(sh("docker exec boxforge-k3s sh -c 'iptables-save | grep -c KUBE-SVC; ip route; lsmod 2>/dev/null | grep -E \"br_netfilter|vxlan\"'", true));
+        throw e;
+      }
     }
   } finally {
     kubectl("delete namespace bfe2e-kmove --wait=false");
