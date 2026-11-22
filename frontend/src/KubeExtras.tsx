@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { type Pair } from "./recipes";
 import { Pairs } from "./RunDialog";
+import { call } from "./bridge";
 import { Dialog } from "./ui";
 
 export interface Meta {
@@ -62,6 +63,12 @@ const eventMeaning: Record<string, string> = {
 export function whyPod(p: Item, events: Item[]): string {
   for (const c of [...(p.status?.initContainerStatuses ?? []), ...(p.status?.containerStatuses ?? [])]) {
     const w = c.state?.waiting;
+    const last = c.lastState?.terminated;
+    // Ended by itself, with nothing wrong: an image with nothing to do (a
+    // bare shell, as alpine and ubuntu run) is restarted over and over.
+    if (w?.reason === "CrashLoopBackOff" && last?.exitCode === 0) {
+      return "할 일 없이 바로 끝나는 이미지입니다(alpine · ubuntu 같은 기본 이미지는 셸만 있어서, 터미널이 없으면 곧바로 끝납니다). Kubernetes는 끝난 컨테이너를 계속 다시 켭니다. 다시 배포할 때 '실행할 명령'을 주거나 '터미널을 연 채로 두기'를 켜세요.";
+    }
     if (w?.message && w.reason !== "ContainerCreating" && w.reason !== "PodInitializing") return w.message;
     const t = c.lastState?.terminated ?? c.state?.terminated;
     if (t && t.reason !== "Completed" && (c.restartCount ?? 0) > 0) return `마지막으로 끝난 이유: ${t.reason}${t.exitCode != null ? ` (종료 코드 ${t.exitCode})` : ""}`;
@@ -99,9 +106,15 @@ export interface Deploy {
   host: string;
   disk: string; // GB of storage to keep; "" for none
   mount: string;
+  command: string; // run in place of the image's own ("" for its own), through sh -c
+  keepOpen: boolean; // a terminal and input kept open: what a bare shell needs to stay up
 }
 
-export const emptyDeploy: Deploy = { name: "", image: "", replicas: "1", port: "", env: [], from: "", reach: "inside", host: "", disk: "", mount: "/data" };
+export const emptyDeploy: Deploy = { name: "", image: "", replicas: "1", port: "", env: [], from: "", reach: "inside", host: "", disk: "", mount: "/data", command: "", keepOpen: false };
+
+// Base images whose own command is only a shell, when the engine can't say.
+const shellImage = /^(?:docker\.io\/)?(?:library\/)?(alpine|ubuntu|debian|busybox|fedora|centos|rockylinux|almalinux|archlinux|amazonlinux|oraclelinux|opensuse\/\w+)(?::[^/]*)?$/;
+export const looksBareShell = (image: string) => shellImage.test(image.trim().replace(/^mirror\.gcr\.io\//, ""));
 
 /** The YAML the deploy helper applies. */
 export function deployYaml(d: Deploy): string {
@@ -126,6 +139,8 @@ export function deployYaml(d: Deploy): string {
     `        - name: ${name}`,
     `          image: ${q(d.image.trim())}`,
   ];
+  if (d.command.trim()) lines.push(`          command: ["sh", "-c", ${q(d.command.trim())}]`);
+  else if (d.keepOpen) lines.push("          stdin: true", "          tty: true");
   if (port) lines.push("          ports:", `            - containerPort: ${port}`);
   if (env.length) {
     lines.push("          env:");
@@ -179,8 +194,30 @@ export const pvcYaml = (name: string, gb: string) => pvcLines(name, gb).join("\n
 export function DeployDialog(props: { data: Item[]; onApply: (yaml: string, d: Deploy) => void; onYaml: (yaml: string) => void; onClose: () => void; busy: boolean; busyText?: string }) {
   const [d, setD] = useState<Deploy>(emptyDeploy);
   const [show, setShow] = useState(false);
-  const set = (patch: Partial<Deploy>) => setD({ ...d, ...patch });
+  const set = (patch: Partial<Deploy>) => setD((old) => ({ ...old, ...patch }));
   const yaml = useMemo(() => deployYaml(d), [d]);
+  // An image that only runs a shell ends at once without a terminal: found
+  // out (from the engine's copy, else by its name) and kept open.
+  const [bare, setBare] = useState(false);
+  useEffect(() => {
+    const image = d.image.trim();
+    if (!image) return setBare(false);
+    let stale = false;
+    const t = setTimeout(() => {
+      call<{ shell: boolean }>("ImageDefaults", image).then(
+        (x) => !stale && found(!!x?.shell || looksBareShell(image)),
+        () => !stale && found(looksBareShell(image)),
+      );
+    }, 400);
+    const found = (yes: boolean) => {
+      setBare(yes);
+      if (yes) set({ keepOpen: true });
+    };
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [d.image]);
   const portOk = !d.port || (+d.port > 0 && +d.port < 65536);
   const ok = validName(d.name) && d.image.trim() !== "" && !/\s/.test(d.image.trim()) && portOk;
   const sources = props.data.filter((i) => i.metadata.namespace === "default");
@@ -197,6 +234,7 @@ export function DeployDialog(props: { data: Item[]; onApply: (yaml: string, d: D
         <label>
           이미지
           <input autoFocus aria-label="이미지" placeholder="예: nginx:alpine" value={d.image} onChange={(e) => set({ image: e.target.value, name: d.name || kubeName(e.target.value.split("/").pop()!.split(":")[0]) })} />
+          <span className="help">이름만 적으면 Docker Hub의 공식 이미지입니다(alpine = docker.io/library/alpine:latest). 버전을 고정하려면 alpine:3.20처럼 :태그를, 다른 곳의 이미지는 ghcr.io/사용자/이름처럼 주소째 적습니다.</span>
         </label>
         <label>
           이름
@@ -215,6 +253,20 @@ export function DeployDialog(props: { data: Item[]; onApply: (yaml: string, d: D
             <span className="help">앱이 기다리는 포트. 웹이 아니면 비워 둡니다.</span>
           </label>
         </div>
+        <label>
+          실행할 명령
+          <input aria-label="실행할 명령" placeholder="비워 두면 이미지에 정해진 것" value={d.command} onChange={(e) => set({ command: e.target.value })} />
+          <span className="help">예: sleep infinity, python app.py. sh -c 로 실행합니다.</span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={d.keepOpen && !d.command.trim()} disabled={!!d.command.trim()} onChange={(e) => set({ keepOpen: e.target.checked })} />
+          터미널을 연 채로 두기
+        </label>
+        {bare && (
+          <p className="note" data-testid="bare-shell">
+            이 이미지는 셸만 실행합니다. 터미널이 없으면 바로 끝나서 Kubernetes가 계속 다시 켜기만 하므로, "터미널을 연 채로 두기"를 켜 두었습니다. 파드의 터미널로 들어가 쓸 수 있습니다.
+          </p>
+        )}
         {d.port && (
           <fieldset>
             <legend>접속 방법</legend>
@@ -512,7 +564,14 @@ export function DeployProgress(props: { names: string[]; workloads: Item[]; pods
       const o = e.involvedObject ?? {};
       return e.metadata.namespace === "default" && ((o.kind === "Deployment" && o.name === name) || ((o.kind === "ReplicaSet" || o.kind === "Pod") && String(o.name).startsWith(name + "-")) || (o.kind === "PersistentVolumeClaim" && o.name === name + "-data"));
     };
-    const steps = props.events.filter(mine).sort((a, b) => when(a) - when(b)).slice(-10);
+    // The same step again and again (a container restarted over and over) once, with how often.
+    const steps: (Item & { times: number })[] = [];
+    for (const e of props.events.filter(mine).sort((a, b) => when(a) - when(b))) {
+      const prev = steps[steps.length - 1];
+      if (prev && prev.reason === e.reason) prev.times += e.count ?? 1;
+      else steps.push({ ...e, times: e.count ?? 1 });
+    }
+    steps.splice(0, Math.max(0, steps.length - 10));
     const done = !!w && want > 0 && have >= want;
     const stuck = pods.find((p) => props.podTone(p) === "bad");
     return { name, w, pods, want, have, steps, done, stuck };
@@ -541,6 +600,7 @@ export function DeployProgress(props: { names: string[]; workloads: Item[]; pods
               {r.steps.map((e) => (
                 <li key={e.metadata.name} className={e.type === "Warning" ? "warn" : ""}>
                   <span>{stepMeaning[e.reason] ?? e.reason}</span>
+                  {e.times > 1 && <span>{` (${e.times}번)`}</span>}
                   <span className="muted"> · {e.involvedObject?.kind} {e.message}</span>
                 </li>
               ))}

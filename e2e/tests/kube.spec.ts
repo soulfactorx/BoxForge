@@ -191,6 +191,28 @@ test("deploy with the helper: address, storage, settings, and the picture", asyn
   await expect(pvc).toContainText("bfe2e-web-");
 });
 
+test("an image that only runs a shell is kept open, and a command can be given", async ({ page }) => {
+  await kube(page);
+  await page.getByRole("button", { name: "앱 배포" }).click();
+  const d = page.getByRole("dialog");
+  await d.getByLabel("이미지").fill(ALPINE);
+  await d.getByLabel("이름").fill("bfe2e-shell");
+  await expect(d.getByTestId("bare-shell")).toBeVisible();
+  await expect(d.getByLabel("터미널을 연 채로 두기")).toBeChecked();
+  await d.getByRole("button", { name: "만들어질 YAML 보기" }).click();
+  await expect(d.getByTestId("deploy-yaml")).toContainText("tty: true");
+  await d.getByLabel("실행할 명령").fill("sleep infinity");
+  await expect(d.getByTestId("deploy-yaml")).toContainText('command: ["sh", "-c", "sleep infinity"]');
+  await expect(d.getByTestId("deploy-yaml")).not.toContainText("tty: true");
+  await d.getByLabel("실행할 명령").fill("");
+  if (process.env.E2E_KUBE_NO_PODS) return;
+  // Where pods run: it stays up instead of being restarted over and over.
+  await d.getByRole("button", { name: "배포" }).click();
+  await expect(page.getByTestId("deploy-progress")).toContainText("bfe2e-shell 배포가 끝났습니다", { timeout: 180_000 });
+  await page.getByTestId("deploy-progress").getByRole("button", { name: "닫기" }).click();
+  kubectl("delete deployment/bfe2e-shell --wait=false");
+});
+
 test("a stuck pod says why, and deleting asks first", async ({ page }) => {
   await kube(page);
   await page.getByRole("button", { name: "앱 배포" }).click();
