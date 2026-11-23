@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -86,5 +87,24 @@ func TestParseCompose(t *testing.T) {
 	}
 	if !journeyName("boxforge-export/nexadmin:20261123-090000") || journeyName("nexadmin:v1") {
 		t.Fatal("journeyName")
+	}
+}
+
+// A project started on Windows, taken to Linux: its Compose file, named
+// C:\…, is found where the bundle put it back, /mnt/c/….
+func TestLocalFile(t *testing.T) {
+	root := t.TempDir()
+	dir := root + "/mnt/c/Users/07912/proj"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/docker-compose.yml", []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := localFileIn(root, `C:\Users\07912\proj\docker-compose.yml`); got != "/mnt/c/Users/07912/proj/docker-compose.yml" {
+		t.Fatalf("got %q", got)
+	}
+	if got := localFileIn(root, `C:\Users\07912\other.yml`); got != `C:\Users\07912\other.yml` {
+		t.Fatalf("a file that is nowhere stays as named: %q", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/soulfactorx/boxforge/internal/clirunner"
@@ -64,6 +65,7 @@ func (a *App) ComposeAction(req ComposeRequest) error {
 		return fmt.Errorf("unknown compose action %q", req.Action)
 	}
 	args := []string{"compose", "--ansi", "never", "--progress", "plain"}
+	req.Files = localFiles(req.Files)
 	if req.Project == "" && len(req.Files) == 0 {
 		return fmt.Errorf("name a project or a compose file")
 	}
@@ -116,7 +118,7 @@ func (a *App) composeArgs(project string, files []string) []string {
 	if project != "" {
 		args = append(args, "-p", project)
 	}
-	for _, f := range files {
+	for _, f := range localFiles(files) {
 		if _, err := os.Stat(f); err == nil {
 			args = append(args, "-f", a.hostPath(f))
 		}
@@ -180,6 +182,7 @@ func isYAML(file string) bool {
 
 // ComposeSave writes a compose file's text back.
 func (a *App) ComposeSave(file, text string) error {
+	file = localFile(file)
 	if !isYAML(file) {
 		return fmt.Errorf("%s is not a .yml or .yaml file", filepath.Base(file))
 	}
@@ -266,6 +269,7 @@ func parseDryRun(lines []string) []Change {
 // files held text instead of what is saved: which containers stay, which
 // are made anew, which go. Nothing is changed.
 func (a *App) ComposePreview(project string, files []string, file, text string) ([]Change, error) {
+	file, files = localFile(file), localFiles(files)
 	if !isYAML(file) {
 		return nil, fmt.Errorf("%s is not a .yml or .yaml file", filepath.Base(file))
 	}
@@ -309,6 +313,7 @@ const composeFileLimit = 1 << 20
 
 // ComposeFile returns a compose file's text.
 func (a *App) ComposeFile(file string) (string, error) {
+	file = localFile(file)
 	if !isYAML(file) {
 		return "", fmt.Errorf("%s is not a .yml or .yaml file", filepath.Base(file))
 	}
@@ -336,4 +341,36 @@ func (a *App) PickComposeFile() (string, error) {
 		return "", fmt.Errorf("no file dialog here: type the path")
 	}
 	return picker()
+}
+
+// localFile is a compose file's path as this PC sees it. Compose run on
+// Windows names its files C:\…; a project taken to Linux in a BoxForge
+// bundle has them put back under /mnt/c/… (where WSL sees that drive, and
+// so where the engine looked for them), and they are found there.
+func localFile(f string) string {
+	if runtime.GOOS == "windows" {
+		return f
+	}
+	return localFileIn("", f)
+}
+
+// localFileIn is localFile with the machine's root at root (for tests).
+func localFileIn(root, f string) string {
+	if _, err := os.Stat(root + f); err == nil {
+		return f
+	}
+	if p := enginePath(f); p != f {
+		if _, err := os.Stat(root + p); err == nil {
+			return p
+		}
+	}
+	return f
+}
+
+func localFiles(files []string) []string {
+	out := make([]string, len(files))
+	for i, f := range files {
+		out[i] = localFile(f)
+	}
+	return out
 }
