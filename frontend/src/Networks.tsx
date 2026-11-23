@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { call, type Container, type Network, type Run } from "./bridge";
 import { ago, isUp } from "./format";
-import { Dialog, Icon, IconButton } from "./ui";
+import { BulkBar, Dialog, Icon, IconButton, PickBox, useSelection } from "./ui";
 
 interface Props {
   networks: Network[];
@@ -45,6 +45,31 @@ export default function Networks({ networks, containers, run, onOpen }: Props) {
     if (name) await run(`docker network create ${subnet ? `--subnet ${subnet} ` : ""}${name}`, () => call("CreateNetwork", name, subnet));
   };
 
+  // The engine's own networks can't be removed: not offered for picking.
+  const pickable = rows.filter((r) => !r.n.builtin);
+  const pick = useSelection(pickable.map((r) => r.n.id));
+  const picked = pickable.filter((r) => pick.has(r.n.id));
+  const [bulkRemoving, setBulkRemoving] = useState(false);
+  // One at a time, every failure told together at the end.
+  const each = async <T,>(list: T[], name: (x: T) => string, work: (x: T) => Promise<unknown>) => {
+    const failed: string[] = [];
+    for (const x of list) {
+      try {
+        await work(x);
+      } catch (e: any) {
+        failed.push(`${name(x)}: ${e.message ?? e}`);
+      }
+    }
+    if (failed.length) throw new Error(failed.join("\n"));
+  };
+  const confirmBulkRemove = async () => {
+    const list = picked.filter((r) => r.members.length === 0).map((r) => r.n);
+    setBulkRemoving(false);
+    pick.clear();
+    if (list.length === 0) return;
+    await run(`docker network rm ${list.map((n) => n.name).join(" ")}`, () => each(list, (n) => n.name, (n) => call("RemoveNetwork", n.id)));
+  };
+
   const confirmRemove = async () => {
     if (!removing) return;
     const n = removing;
@@ -83,12 +108,21 @@ export default function Networks({ networks, containers, run, onOpen }: Props) {
         데이터베이스 주소로 <code>db:5432</code>를 씁니다. 직접 만든 네트워크에서만 이렇게 됩니다.
       </p>
 
+      <BulkBar count={pick.size} onClear={pick.clear}>
+        <button type="button" className="danger" onClick={() => setBulkRemoving(true)}>
+          삭제
+        </button>
+      </BulkBar>
+
       {rows.length === 0 ? (
         <p className="empty">{networks.length === 0 ? "네트워크가 없습니다." : "조건에 맞는 네트워크가 없습니다."}</p>
       ) : (
         <table className="grid">
           <thead>
             <tr>
+              <th className="pick">
+                <PickBox label="보이는 네트워크 모두 고르기" state={pick.state(pickable.map((r) => r.n.id))} disabled={pickable.length === 0} onChange={(on) => pick.setMany(pickable.map((r) => r.n.id), on)} />
+              </th>
               <th>이름</th>
               <th>주소 범위</th>
               <th>연결된 컨테이너</th>
@@ -98,7 +132,8 @@ export default function Networks({ networks, containers, run, onOpen }: Props) {
           </thead>
           <tbody>
             {rows.map(({ n, members }) => (
-              <tr key={n.id} data-testid={`network-${n.name}`}>
+              <tr key={n.id} className={pick.has(n.id) ? "picked" : ""} data-testid={`network-${n.name}`}>
+                <td className="pick">{!n.builtin && <PickBox label={`${n.name} 고르기`} state={pick.has(n.id)} onChange={() => pick.toggle(n.id)} />}</td>
                 <td className="name-cell">
                   <div className="name-wrap">
                     <span className="avatar">
@@ -210,6 +245,28 @@ export default function Networks({ networks, containers, run, onOpen }: Props) {
             <button onClick={() => setConnecting(null)}>취소</button>
             <button className="primary" disabled={!connecting.id} onClick={confirmConnect}>
               연결
+            </button>
+          </div>
+        </Dialog>
+      )}
+
+      {bulkRemoving && (
+        <Dialog title={`네트워크 ${picked.length}개 삭제`} onClose={() => setBulkRemoving(false)}>
+          <p>고른 네트워크를 삭제합니다.</p>
+          <ul className="bulk-list" data-testid="bulk-remove-list">
+            {picked.map((r) => (
+              <li key={r.n.id}>
+                <strong>{r.n.name}</strong>{" "}
+                {r.members.length > 0 && <span className="warn">{`· ${r.members.map((c) => c.name).join(", ")}가 연결돼 있어 지우지 않습니다`}</span>}
+              </li>
+            ))}
+          </ul>
+          <div className="dialog-actions">
+            <button type="button" onClick={() => setBulkRemoving(false)}>
+              취소
+            </button>
+            <button type="button" className="danger solid" disabled={picked.every((r) => r.members.length > 0)} onClick={confirmBulkRemove}>
+              {`${picked.filter((r) => r.members.length === 0).length}개 삭제`}
             </button>
           </div>
         </Dialog>

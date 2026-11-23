@@ -6,7 +6,7 @@ import { ExportDialog, ImportDialog } from "./Bundle";
 import type { RunInit } from "./recipes";
 import { type Deploy, kubeName } from "./KubeExtras";
 import EngineCopy, { explain } from "./EngineCopy";
-import { Dialog, IconButton, Menu, type MenuItem } from "./ui";
+import { BulkBar, Dialog, IconButton, Menu, PickBox, useSelection, type MenuItem } from "./ui";
 
 type Filter = "all" | "running" | "stopped" | "failed";
 
@@ -253,6 +253,37 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
     return out.sort((a, b) => a.key.localeCompare(b.key));
   }, [visible, filter, query]);
 
+  // Rows picked for one action on them all.
+  const shownAll = useMemo(() => items.flatMap((g) => g.members), [items]);
+  const pick = useSelection(shownAll.map((c) => c.id));
+  const picked = shownAll.filter((c) => pick.has(c.id));
+  const [bulkRemoving, setBulkRemoving] = useState<{ volumes: boolean } | null>(null);
+
+  // All at once (a stop waits for its container), every failure told
+  // together at the end.
+  const each = async (list: Container[], work: (c: Container) => Promise<unknown>) => {
+    const done = await Promise.allSettled(list.map(work));
+    const failed = done.flatMap((d, i) => (d.status === "rejected" ? [`${list[i].name}: ${d.reason?.message ?? d.reason}`] : []));
+    if (failed.length) throw new Error(failed.join("\n"));
+  };
+  const bulk = (action: "start" | "stop" | "restart") => {
+    const todo = picked.filter((c) => (action === "start" ? !isUp(c) : action === "stop" ? isUp(c) : true));
+    if (todo.length === 0) return;
+    return during(todo.map((c) => c.id), action, () =>
+      run(`docker ${action} ${todo.map((c) => c.name).join(" ")}`, () => each(todo, (c) => call("ContainerAction", c.id, action))),
+    );
+  };
+  const confirmBulkRemove = async () => {
+    if (!bulkRemoving) return;
+    const { volumes } = bulkRemoving;
+    const list = picked;
+    setBulkRemoving(null);
+    pick.clear();
+    await during(list.map((c) => c.id), "remove", () =>
+      run(`docker rm -f${volumes ? " -v" : ""} ${list.map((c) => c.name).join(" ")}`, () => each(list, (c) => call("RemoveContainer", c.id, isUp(c), volumes))),
+    );
+  };
+
   const act = (c: Container, action: string) =>
     during([c.id], action, () => run(`docker ${action} ${c.name}`, () => call("ContainerAction", c.id, action)));
 
@@ -308,7 +339,10 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
   };
 
   const row = (c: Container, nested: boolean) => (
-    <tr key={c.id} className={nested ? "nested" : ""} data-testid={`row-${c.name}`}>
+    <tr key={c.id} className={(nested ? "nested" : "") + (pick.has(c.id) ? " picked" : "")} data-testid={`row-${c.name}`}>
+      <td className="pick">
+        <PickBox label={`${c.name} 고르기`} state={pick.has(c.id)} onChange={() => pick.toggle(c.id)} />
+      </td>
       <td className="name-cell">
         <div className="name-wrap">
         <Avatar image={c.image} kind="box" />
@@ -458,12 +492,33 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
         </button>
       </header>
 
+      <BulkBar count={pick.size} onClear={pick.clear}>
+        <button type="button" disabled={!picked.some((c) => !isUp(c))} onClick={() => bulk("start")}>
+          시작
+        </button>
+        <button type="button" disabled={!picked.some(isUp)} onClick={() => bulk("stop")}>
+          중지
+        </button>
+        <button type="button" onClick={() => bulk("restart")}>
+          재시작
+        </button>
+        <button type="button" onClick={() => setExporting(picked.map((c) => c.id))}>
+          파일로 내보내기
+        </button>
+        <button type="button" className="danger" onClick={() => setBulkRemoving({ volumes: false })}>
+          삭제
+        </button>
+      </BulkBar>
+
       {items.length === 0 ? (
         <p className="empty">{visible.length === 0 ? "컨테이너가 없습니다." : "조건에 맞는 컨테이너가 없습니다."}</p>
       ) : (
         <table className="grid">
           <thead>
             <tr>
+              <th className="pick">
+                <PickBox label="보이는 컨테이너 모두 고르기" state={pick.state(shownAll.map((c) => c.id))} onChange={(on) => pick.setMany(shownAll.map((c) => c.id), on)} />
+              </th>
               <th>이름</th>
               <th>상태</th>
               <th>포트</th>
@@ -479,6 +534,9 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
               const open = !collapsed.has(g.project);
               return [
                 <tr key={"g:" + g.project} className="group" data-testid={`group-${g.project}`}>
+                  <td className="pick">
+                    <PickBox label={`${g.project} 프로젝트 모두 고르기`} state={pick.state(g.members.map((c) => c.id))} onChange={(on) => pick.setMany(g.members.map((c) => c.id), on)} />
+                  </td>
                   <td colSpan={5}>
                     <button className="twisty" aria-expanded={open} aria-label={open ? "접기" : "펼치기"} onClick={() => toggle(g.project)}>
                       {open ? "▾" : "▸"}
@@ -578,6 +636,31 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
             setCopying(null);
           }}
         />
+      )}
+
+      {bulkRemoving && (
+        <Dialog title={`컨테이너 ${picked.length}개 삭제`} onClose={() => setBulkRemoving(null)}>
+          <p>고른 컨테이너를 삭제합니다. 컨테이너 안에서 바뀐 파일은 사라지며 되돌릴 수 없습니다. 볼륨(이름 붙은 데이터)은 남습니다.</p>
+          <ul className="bulk-list" data-testid="bulk-remove-list">
+            {picked.map((c) => (
+              <li key={c.id}>
+                <strong>{c.name}</strong> <span className="muted">{c.image}</span> {isUp(c) && <span className="warn">· 실행 중 (강제로 멈춘 뒤 삭제)</span>}
+              </li>
+            ))}
+          </ul>
+          <label className="check">
+            <input type="checkbox" checked={bulkRemoving.volumes} onChange={(e) => setBulkRemoving({ volumes: e.target.checked })} />
+            이 컨테이너들의 이름 없는 볼륨도 함께 삭제
+          </label>
+          <div className="dialog-actions">
+            <button type="button" onClick={() => setBulkRemoving(null)}>
+              취소
+            </button>
+            <button type="button" className="danger solid" onClick={confirmBulkRemove}>
+              {`${picked.length}개 삭제`}
+            </button>
+          </div>
+        </Dialog>
       )}
 
       {removing && (

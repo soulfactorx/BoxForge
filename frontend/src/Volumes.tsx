@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { call, type Container, type Run, type Volume } from "./bridge";
 import { ago, bytes } from "./format";
 import EngineCopy from "./EngineCopy";
-import { Dialog, Icon, IconButton, Note } from "./ui";
+import { BulkBar, Dialog, Icon, IconButton, Note, PickBox, useSelection } from "./ui";
 import VolumeBrowser from "./VolumeBrowser";
 
 interface Props {
@@ -59,6 +59,31 @@ export default function Volumes({ volumes, containers, run, showCli, onOpen }: P
     if (name) await run(`docker volume create ${name}`, () => call("CreateVolume", name));
   };
 
+  const pick = useSelection(shown.map((r) => r.v.name));
+  const picked = shown.filter((r) => pick.has(r.v.name));
+  const [bulkRemoving, setBulkRemoving] = useState(false);
+  // One at a time, every failure told together at the end.
+  const each = async <T,>(list: T[], name: (x: T) => string, work: (x: T) => Promise<unknown>) => {
+    const failed: string[] = [];
+    for (const x of list) {
+      try {
+        await work(x);
+      } catch (e: any) {
+        failed.push(`${name(x)}: ${e.message ?? e}`);
+      }
+    }
+    if (failed.length) throw new Error(failed.join("\n"));
+  };
+  const label = (name: string) => (anonymous(name) ? name.slice(0, 12) : name);
+  const confirmBulkRemove = async () => {
+    // A volume a container uses is refused by the engine: left, and said so before.
+    const list = picked.filter((r) => r.users.length === 0).map((r) => r.v.name);
+    setBulkRemoving(false);
+    pick.clear();
+    if (list.length === 0) return;
+    await run(`docker volume rm ${list.join(" ")}`, () => each(list, label, (name) => call("RemoveVolume", name)));
+  };
+
   const confirmRemove = async () => {
     if (!removing) return;
     const name = removing.name;
@@ -100,12 +125,21 @@ export default function Volumes({ volumes, containers, run, showCli, onOpen }: P
       </p>
       {note && <Note onClose={() => setNote("")}>{note}</Note>}
 
+      <BulkBar count={pick.size} onClear={pick.clear}>
+        <button type="button" className="danger" onClick={() => setBulkRemoving(true)}>
+          삭제
+        </button>
+      </BulkBar>
+
       {shown.length === 0 ? (
         <p className="empty">{volumes.length === 0 ? "볼륨이 없습니다." : "조건에 맞는 볼륨이 없습니다."}</p>
       ) : (
         <table className="grid">
           <thead>
             <tr>
+              <th className="pick">
+                <PickBox label="보이는 볼륨 모두 고르기" state={pick.state(shown.map((r) => r.v.name))} onChange={(on) => pick.setMany(shown.map((r) => r.v.name), on)} />
+              </th>
               <th>이름</th>
               <th>사용처</th>
               <th className="num">크기</th>
@@ -115,7 +149,10 @@ export default function Volumes({ volumes, containers, run, showCli, onOpen }: P
           </thead>
           <tbody>
             {shown.map(({ v, users }) => (
-              <tr key={v.name} data-testid={`volume-${v.name}`}>
+              <tr key={v.name} className={pick.has(v.name) ? "picked" : ""} data-testid={`volume-${v.name}`}>
+                <td className="pick">
+                  <PickBox label={`${anonymous(v.name) ? v.name.slice(0, 12) : v.name} 고르기`} state={pick.has(v.name)} onChange={() => pick.toggle(v.name)} />
+                </td>
                 <td className="name-cell">
                   <div className="name-wrap">
                     <span className="avatar">
@@ -212,6 +249,28 @@ export default function Volumes({ volumes, containers, run, showCli, onOpen }: P
               </button>
             </div>
           </form>
+        </Dialog>
+      )}
+
+      {bulkRemoving && (
+        <Dialog title={`볼륨 ${picked.length}개 삭제`} onClose={() => setBulkRemoving(false)}>
+          <p>고른 볼륨과 그 안의 데이터를 모두 삭제합니다. 되돌릴 수 없습니다.</p>
+          <ul className="bulk-list" data-testid="bulk-remove-list">
+            {picked.map((r) => (
+              <li key={r.v.name}>
+                <strong>{label(r.v.name)}</strong>{" "}
+                {r.users.length > 0 && <span className="warn">{`· ${r.users.map((c) => c.name).join(", ")}가 쓰고 있어 지우지 않습니다`}</span>}
+              </li>
+            ))}
+          </ul>
+          <div className="dialog-actions">
+            <button type="button" onClick={() => setBulkRemoving(false)}>
+              취소
+            </button>
+            <button type="button" className="danger solid" disabled={picked.every((r) => r.users.length > 0)} onClick={confirmBulkRemove}>
+              {`${picked.filter((r) => r.users.length === 0).length}개 삭제`}
+            </button>
+          </div>
         </Dialog>
       )}
 

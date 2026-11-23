@@ -207,3 +207,74 @@ export function Note(props: { children: ReactNode; onClose: () => void; classNam
     </div>
   );
 }
+
+/**
+ * Rows picked in a list, by key. Keys no longer shown (deleted, filtered
+ * out by the engine) are forgotten, so an action never reaches something
+ * that isn't on the screen.
+ */
+export function useSelection(present: string[]) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const key = present.join("\n");
+  useEffect(() => {
+    setSelected((old) => {
+      const keep = new Set([...old].filter((k) => present.includes(k)));
+      return keep.size === old.size ? old : keep;
+    });
+  }, [key]);
+  const setMany = (keys: string[], on: boolean) =>
+    setSelected((old) => {
+      const next = new Set(old);
+      keys.forEach((k) => (on ? next.add(k) : next.delete(k)));
+      return next;
+    });
+  return {
+    selected,
+    size: selected.size,
+    has: (k: string) => selected.has(k),
+    toggle: (k: string) => setMany([k], !selected.has(k)),
+    setMany,
+    clear: () => setSelected(new Set()),
+    /** The state of a box that stands for many keys: all, some or none picked. */
+    state: (keys: string[]): "all" | "some" | "none" => {
+      const n = keys.filter((k) => selected.has(k)).length;
+      return n === 0 ? "none" : n === keys.length ? "all" : "some";
+    },
+  };
+}
+
+/** A row's (or a group's, or the whole list's) pick box. */
+export function PickBox(props: { label: string; state: "all" | "some" | "none" | boolean; disabled?: boolean; onChange: (on: boolean) => void }) {
+  const box = useRef<HTMLInputElement>(null);
+  const on = props.state === true || props.state === "all";
+  useEffect(() => {
+    if (box.current) box.current.indeterminate = props.state === "some";
+  });
+  return (
+    <input
+      ref={box}
+      type="checkbox"
+      className="pick-box"
+      aria-label={props.label}
+      checked={on}
+      disabled={props.disabled}
+      onClick={(e) => e.stopPropagation()}
+      onChange={() => props.onChange(!on)}
+    />
+  );
+}
+
+/** What can be done to the rows picked: shown while any are. */
+export function BulkBar(props: { count: number; onClear: () => void; children: ReactNode }) {
+  if (props.count === 0) return null;
+  return (
+    <div className="bulk-bar" role="toolbar" aria-label="고른 항목에 할 일" data-testid="bulk-bar">
+      <strong>{`${props.count}개 골랐습니다`}</strong>
+      {props.children}
+      <span className="spacer" />
+      <button type="button" className="link" onClick={props.onClear}>
+        고르기 취소
+      </button>
+    </div>
+  );
+}

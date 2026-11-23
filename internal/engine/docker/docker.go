@@ -561,8 +561,8 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 	}
 	// host.docker.internal, which Docker Desktop and Kiri give every
 	// container (an app reaching a port published on the PC, a database
-	// say), and a plain Docker engine doesn't: given here too.
-	hostName := false
+	// say), and a plain Docker engine doesn't: given there too.
+	hostName := c.givesHostName(ctx)
 	for _, h := range host.ExtraHosts {
 		if strings.HasPrefix(h, "host.docker.internal:") || strings.HasPrefix(h, "host.docker.internal=") {
 			hostName = true

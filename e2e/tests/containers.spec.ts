@@ -119,3 +119,36 @@ test("the lists can be read again by hand", async ({ page }) => {
   await expect(page.getByTestId("cli")).toContainText("docker ps -a");
   await expect(button).toBeEnabled();
 });
+
+test("several containers and volumes are picked and handled at once", async ({ page }) => {
+  for (const n of ["bfe2e-many-a", "bfe2e-many-b", "bfe2e-many-c"]) sh(`docker run -d --name ${n} ${ALPINE} sleep 1d`);
+  sh(`docker volume create bfe2e-many-v1 && docker volume create bfe2e-many-v2`);
+  await open(page);
+  await go(page, "containers");
+  await page.getByPlaceholder("이름·이미지·프로젝트 검색").fill("bfe2e-many");
+  await page.getByRole("checkbox", { name: "bfe2e-many-a 고르기" }).check();
+  await page.getByRole("checkbox", { name: "bfe2e-many-b 고르기" }).check();
+  const bar = page.getByTestId("bulk-bar");
+  await expect(bar).toContainText("2개 골랐습니다");
+  await bar.getByRole("button", { name: "중지" }).click();
+  await expect.poll(() => sh(`docker inspect -f '{{.State.Running}}' bfe2e-many-a bfe2e-many-b bfe2e-many-c`)).toBe("false\nfalse\ntrue");
+  await expect(page.getByTestId("cli")).toContainText("docker stop bfe2e-many-a bfe2e-many-b");
+
+  // All shown, then delete: what goes is listed first.
+  await page.getByRole("checkbox", { name: "보이는 컨테이너 모두 고르기" }).check();
+  await expect(bar).toContainText("3개 골랐습니다");
+  await bar.getByRole("button", { name: "삭제" }).click();
+  const dlg = page.getByRole("dialog");
+  await expect(dlg.getByTestId("bulk-remove-list")).toContainText("bfe2e-many-c");
+  await expect(dlg.getByTestId("bulk-remove-list")).toContainText("실행 중");
+  await dlg.getByRole("button", { name: "3개 삭제" }).click();
+  await expect.poll(() => sh(`docker ps -a -q --filter name=bfe2e-many`)).toBe("");
+  await expect(bar).toBeHidden();
+
+  await go(page, "volumes");
+  await page.getByPlaceholder("이름·프로젝트 검색").fill("bfe2e-many");
+  await page.getByRole("checkbox", { name: "보이는 볼륨 모두 고르기" }).check();
+  await page.getByTestId("bulk-bar").getByRole("button", { name: "삭제" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "2개 삭제" }).click();
+  await expect.poll(() => sh(`docker volume ls -q --filter name=bfe2e-many`)).toBe("");
+});

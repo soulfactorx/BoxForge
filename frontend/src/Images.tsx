@@ -3,7 +3,7 @@ import { Avatar, splitRef } from "./brand";
 import { call, on, type Container, type Image, type PullState, type Run } from "./bridge";
 import { ago, bytes, isUp, shortId } from "./format";
 import { HubSearch, ImageDetail, PushDialog } from "./ImageExtras";
-import { Dialog, Icon, IconButton, Menu, Note, Progress } from "./ui";
+import { BulkBar, Dialog, Icon, IconButton, Menu, Note, PickBox, Progress, useSelection } from "./ui";
 
 interface Props {
   images: Image[];
@@ -151,6 +151,34 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
     return { last, force, target, running, command: `docker rmi${force ? " -f" : ""} ${r.ref || shortId(r.im.id)}` };
   };
 
+  const keyOf = (r: Row) => r.im.id + "|" + r.ref;
+  const pick = useSelection(shown.map(keyOf));
+  const picked = shown.filter((r) => pick.has(keyOf(r)));
+  const [bulkRemoving, setBulkRemoving] = useState(false);
+  // One at a time, every failure told together at the end.
+  const each = async <T,>(list: T[], name: (x: T) => string, work: (x: T) => Promise<unknown>) => {
+    const failed: string[] = [];
+    for (const x of list) {
+      try {
+        await work(x);
+      } catch (e: any) {
+        failed.push(`${name(x)}: ${e.message ?? e}`);
+      }
+    }
+    if (failed.length) throw new Error(failed.join("\n"));
+  };
+  const confirmBulkRemove = async () => {
+    // Those a running container uses can't go: left, and said so before.
+    const list = picked.filter((r) => removal(r).running.length === 0);
+    setBulkRemoving(false);
+    pick.clear();
+    if (list.length === 0) return;
+    const force = list.some((r) => removal(r).force);
+    await run(`docker rmi${force ? " -f" : ""} ${list.map((r) => r.ref || shortId(r.im.id)).join(" ")}`, () =>
+      each(list, (r) => r.ref || shortId(r.im.id), (r) => call("RemoveImage", removal(r).target, removal(r).force)),
+    );
+  };
+
   const confirmRemove = async () => {
     if (!removing) return;
     const { force, target, command } = removal(removing);
@@ -238,12 +266,21 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
       )}
       {note && !pull && <Note onClose={() => setNote("")}>{note}</Note>}
 
+      <BulkBar count={pick.size} onClear={pick.clear}>
+        <button type="button" className="danger" onClick={() => setBulkRemoving(true)}>
+          삭제
+        </button>
+      </BulkBar>
+
       {shown.length === 0 ? (
         <p className="empty">{images.length === 0 ? "이미지가 없습니다. 위에서 이름을 넣어 받아 보세요." : "조건에 맞는 이미지가 없습니다."}</p>
       ) : (
         <table className="grid">
           <thead>
             <tr>
+              <th className="pick">
+                <PickBox label="보이는 이미지 모두 고르기" state={pick.state(shown.map(keyOf))} onChange={(on) => pick.setMany(shown.map(keyOf), on)} />
+              </th>
               <th>{head("name", "리포지토리")}</th>
               <th>태그</th>
               <th>사용처</th>
@@ -255,7 +292,10 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
           </thead>
           <tbody>
             {shown.map((r) => (
-              <tr key={r.im.id + r.ref} data-testid={`image-${r.ref || "none"}`}>
+              <tr key={r.im.id + r.ref} className={pick.has(keyOf(r)) ? "picked" : ""} data-testid={`image-${r.ref || "none"}`}>
+                <td className="pick">
+                  <PickBox label={`${r.ref || shortId(r.im.id)} 고르기`} state={pick.has(keyOf(r))} onChange={() => pick.toggle(keyOf(r))} />
+                </td>
                 <td className="name-cell">
                   <div className="name-wrap">
                     <Avatar image={r.ref} kind="layers" />
@@ -307,6 +347,37 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
             ))}
           </tbody>
         </table>
+      )}
+
+      {bulkRemoving && (
+        <Dialog title={`이미지 ${picked.length}개 삭제`} onClose={() => setBulkRemoving(false)}>
+          <p>고른 이미지를 삭제합니다. 다시 쓰려면 새로 받아야 합니다.</p>
+          <ul className="bulk-list" data-testid="bulk-remove-list">
+            {picked.map((r) => {
+              const x = removal(r);
+              return (
+                <li key={keyOf(r)}>
+                  <strong>{r.ref || shortId(r.im.id)}</strong>{" "}
+                  {x.running.length > 0 ? (
+                    <span className="warn">{`· 실행 중인 ${x.running.map((c) => c.name).join(", ")}가 써서 지우지 않습니다`}</span>
+                  ) : !x.last ? (
+                    <span className="muted">· 이 이름만 지움 (다른 이름으로 남음)</span>
+                  ) : x.force ? (
+                    <span className="warn">{`· 멈춘 컨테이너 ${r.users.map((c) => c.name).join(", ")}가 이 이미지로 만들어져 강제로 지움 (그 컨테이너는 다시 시작할 수 없게 됨)`}</span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+          <div className="dialog-actions">
+            <button type="button" onClick={() => setBulkRemoving(false)}>
+              취소
+            </button>
+            <button type="button" className="danger solid" disabled={picked.every((r) => removal(r).running.length > 0)} onClick={confirmBulkRemove}>
+              {`${picked.filter((r) => removal(r).running.length === 0).length}개 삭제`}
+            </button>
+          </div>
+        </Dialog>
       )}
 
       {removing && (

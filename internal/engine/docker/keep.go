@@ -90,7 +90,9 @@ func (c containers) rejoin(ctx context.Context, in container.InspectResponse, ma
 			notes = append(notes, "network-made:"+name)
 		}
 		for _, a := range was.Aliases {
-			if a != short && a != "" && a != strings.TrimPrefix(in.Name, "/") && !slices.Contains(ep.Aliases, a) {
+			// The container's own name stays among them: Docker finds a
+			// container by name anyway, but Kiri's engine only by its aliases.
+			if a != short && a != "" && !slices.Contains(ep.Aliases, a) {
 				ep.Aliases = append(ep.Aliases, a)
 			}
 		}
@@ -198,4 +200,38 @@ func keepUnshown(cfg *container.Config, host *container.HostConfig, in container
 	host.Resources.Devices = oh.Resources.Devices
 	host.Resources.Ulimits = oh.Resources.Ulimits
 	host.Resources.Memory, host.Resources.MemorySwap, host.Resources.NanoCPUs = oh.Resources.Memory, oh.Resources.MemorySwap, oh.Resources.NanoCPUs
+}
+
+// givesHostName reports whether the engine gives every container the name
+// host.docker.internal by itself: Docker Desktop, Kiri's engine and Podman
+// do; a plain Docker engine (BoxForge's own, a Linux one) doesn't. Where it
+// does, an entry of ours would only replace its own (host-gateway may mean
+// another place there).
+func (c containers) givesHostName(ctx context.Context) bool {
+	i, err := c.cli.Info(ctx)
+	if err != nil {
+		return true // unknown: left to the engine
+	}
+	look := strings.ToLower(i.OperatingSystem + " " + i.Name + " " + i.DockerRootDir + " " + i.ServerVersion)
+	if strings.Contains(look, "docker desktop") || strings.Contains(look, "kiri") || strings.Contains(look, "podman") {
+		return true
+	}
+	if v, err := c.cli.ServerVersion(ctx); err == nil {
+		for _, comp := range v.Components {
+			n := strings.ToLower(comp.Name)
+			if strings.Contains(n, "podman") || strings.Contains(n, "kiri") {
+				return true
+			}
+		}
+		// Moby's own daemon names itself "Engine"; another program
+		// answering the same API is not plain Docker.
+		engine := false
+		for _, comp := range v.Components {
+			engine = engine || comp.Name == "Engine"
+		}
+		if !engine {
+			return true
+		}
+	}
+	return false
 }

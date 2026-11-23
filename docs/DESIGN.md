@@ -149,7 +149,7 @@ Docker가 어려운 이유는 대개 (a) 용어, (b) 플래그가 많은 `run`, 
 | 화면 | 내용 |
 |------|------|
 | 홈 | 5절 |
-| 컨테이너 | Compose 프로젝트별 묶음, 상태 필터(전체 · 실행 중 · 중지 · 실패), 상태 검사, 크기, 포트 링크. 실패하면 알림. 시작 · 중지 · 재시작 · 일시정지 · 강제 종료 · 이름 변경 · 삭제, 자원 제한 바꾸기, 설정 바꿔 다시 만들기, 다른 엔진으로 복사, 파일로 내보내기 · 가져오기 |
+| 컨테이너 | 여러 개 골라 한 번에(시작 · 중지 · 재시작 · 내보내기 · 삭제; 이미지 · 볼륨 · 네트워크는 삭제, 지울 수 없는 것은 미리 표시하고 뺌), Compose 프로젝트별 묶음, 상태 필터(전체 · 실행 중 · 중지 · 실패), 상태 검사, 크기, 포트 링크. 실패하면 알림. 시작 · 중지 · 재시작 · 일시정지 · 강제 종료 · 이름 변경 · 삭제, 자원 제한 바꾸기, 설정 바꿔 다시 만들기, 다른 엔진으로 복사, 파일로 내보내기 · 가져오기 |
 | 컨테이너 상세 | 개요(CPU · 메모리 · 네트워크(초당) 그래프, 멈춘 이유, 상태 검사, 자원 제한, 포트 · 저장 공간 · 네트워크 · 환경변수, 값마다 복사 버튼, 환경변수 "고치기" = 설정 바꿔 다시 만들기), 실시간 로그(수준 골라 보기: 줄의 낱말 error · warn · info · debug와 `level=`, JSON `"level"`로 가름, 보이는 로그 복사), 프로세스(`docker top`, 3초마다), 터미널(앱 안 · 외부), 파일(둘러보기 · 미리 보기 · 내려받기 · 올리기), 원본(inspect, 복사) |
 | Compose | 새 프로젝트 만들기(폴더 + 시작용 `compose.yaml`), 프로젝트 목록과 올리기 · 내리기. 상세: 구조 그림(서비스 고치기 · 추가 · 삭제, 선을 끌어 잇기 · 선을 눌러 끊기), 서비스별 조작, 파일 편집과 적용 미리 보기, 통합 로그 |
 | 관계도 | 포트 · 컨테이너 · 네트워크 · 볼륨을 한 그림으로 |
@@ -218,7 +218,7 @@ folders/<n>.tar         컨테이너가 연결한 엔진 컴퓨터의 폴더 · 
 
 "연결한 폴더와 Compose 파일 포함"(기본 켬)이면 각 컨테이너의 바인드 마운트 원본과 Compose 라벨(`com.docker.compose.project.config_files` · `environment_file`)의 파일을 담는다. 엔진의 컴퓨터(WSL 배포판 등)에 있는 것이라 앱이 직접 읽지 못하므로, 그 경로의 부모 폴더를 마운트한 도우미 컨테이너로 읽고(`Volumes().Archive`에 경로를 줌) 가져올 때도 같은 방법으로 쓴다(`Volumes().Put`, 엔진이 없는 폴더를 만듦). 같은 경로에 이미 있으면(같은 PC의 `/mnt/c` 등) 건드리지 않는다. 시스템 경로(`/proc`, `/run`, 엔진의 소켓 등)와 다른 것 안에 든 경로는 빼고, 하나로 묶는다. 경로가 같으므로 Compose 라벨이 가리키는 파일이 받는 쪽에도 생겨 Compose 화면에서 그대로 다룬다. 다른 엔진으로 복사도 같은 부품(`copyHostPath`)을 쓴다. "가져온 뒤 바로 시작"은 depends_on으로 순서를 정해 시작하고, `service_healthy`(또는 `service_completed_successfully`)면 앞의 것이 준비될 때까지(최대 15분) 기다린다. depends_on은 Compose의 라벨과, 함께 담긴 Compose 파일(라벨이 빠진 엔진이 있다: Kiri)에서 읽는다. Compose를 Windows에서 실행하면 라벨의 경로가 `C:\…`라서, WSL의 엔진이 보는 `/mnt/c/…`로 바꿔 읽는다.
 
-Kiri 엔진의 설명은 Docker와 모양이 조금 다르다(실제 사용자의 것으로 확인): 연결한 폴더 · 볼륨이 `HostConfig.Binds` 없이 `Mounts`에만 있고, 사용자가 정한 MAC 주소가 `Config.MacAddress` 없이 맨 위 `NetworkSettings.MacAddress`에만 있으며, 멈춘 컨테이너의 네트워크 끝점은 비어 있다. Docker 어댑터의 `CreateFrom`은 `Binds`에 없는 마운트를 `Mounts`에서 채우고, 자기 네트워크에 있는 컨테이너는 맨 위 MAC을 쓴다(Docker는 자기 네트워크에서 이 칸을 비워 둔다). 볼륨에 데이터를 넣을 때(`Volumes().Restore` · `Put`)는 엔진의 복사(`CopyToContainer`)가 아니라 도우미 컨테이너 안에서 root로 `tar --numeric-owner -xf -`를 돌려 넣는다: Docker의 복사는 tar의 주인을 지키지만 Kiri 엔진은 root로 바꿔서, 자기 사용자로 도는 앱(Oracle)이 자기 파일을 열지 못했다. 도우미에 tar가 없으면 엔진의 복사로 한다. Docker Desktop과 Kiri가 모든 컨테이너에 주는 `host.docker.internal`이 그냥 Docker에는 없어서, 없으면 `host.docker.internal:host-gateway`를 넣는다(모르는 엔진이면 빼고 다시 만든다).
+Kiri 엔진의 설명은 Docker와 모양이 조금 다르다(실제 사용자의 것으로 확인): 연결한 폴더 · 볼륨이 `HostConfig.Binds` 없이 `Mounts`에만 있고, 사용자가 정한 MAC 주소가 `Config.MacAddress` 없이 맨 위 `NetworkSettings.MacAddress`에만 있으며, 멈춘 컨테이너의 네트워크 끝점은 비어 있다. Docker 어댑터의 `CreateFrom`은 `Binds`에 없는 마운트를 `Mounts`에서 채우고, 자기 네트워크에 있는 컨테이너는 맨 위 MAC을 쓴다(Docker는 자기 네트워크에서 이 칸을 비워 둔다). 볼륨에 데이터를 넣을 때(`Volumes().Restore` · `Put`)는 엔진의 복사(`CopyToContainer`)가 아니라 도우미 컨테이너 안에서 root로 `tar --numeric-owner -xf -`를 돌려 넣는다: Docker의 복사는 tar의 주인을 지키지만 Kiri 엔진은 root로 바꿔서, 자기 사용자로 도는 앱(Oracle)이 자기 파일을 열지 못했다. 도우미에 tar가 없으면 엔진의 복사로 한다. Docker Desktop과 Kiri(와 Podman)가 모든 컨테이너에 주는 `host.docker.internal`이 그냥 Docker에는 없어서, 받는 엔진이 그냥 Docker일 때만(`Info`가 Docker Desktop · Kiri · Podman이 아니고 버전의 구성 요소에 Moby의 `Engine`이 있을 때) `host.docker.internal:host-gateway`를 넣는다: 스스로 주는 엔진에 넣으면 그 엔진의 값을 덮어써 엉뚱한 곳을 가리킨다(Kiri에서 서비스가 Oracle에 닿지 못했다). 네트워크 별칭에서 컨테이너 자신의 이름은 빼지 않는다: Docker는 이름으로도 찾지만 Kiri는 별칭으로만 찾는다.
 
 파일에는 환경변수(비밀번호 포함)와 볼륨 데이터가 그대로 들어간다. 화면에서 이를 알린다.
 
