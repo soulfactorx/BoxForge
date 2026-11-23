@@ -55,7 +55,7 @@ exec "$@"
     env: { ...process.env, XDG_CONFIG_HOME: config, XDG_CACHE_HOME: cache, BOXFORGE_WSL: wsl, BOXFORGE_WSLCONFIG: wslconfig, BOXFORGE_WSL_DISKS: `kiri=${kiri}`, BOXFORGE_DISKPART: diskpart },
     stdio: "ignore",
   });
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 180; i++) {
     try {
       await fetch(base, { signal: AbortSignal.timeout(1000) });
       break;
