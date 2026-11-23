@@ -2,6 +2,10 @@
 
 BoxForge의 버전별 변경 사항입니다. 각 버전의 내용이 그대로 릴리스 설명과 앱의 "업데이트" 화면에 나옵니다.
 
+## 0.34.2
+
+- 고침: 0.34.1 전에 가져온 컨테이너를 다시 내보낸 파일(컨테이너가 `boxforge-export/…` 이미지로 돌던 것)은, 가져와도 이미지의 원래 이름(`nexadmin:v1` 등)을 알 수 없어 Compose의 "실행"이 여전히 실패했습니다. 이제 파일에 함께 담긴 Compose 파일의 `image:`에서 원래 이름을 찾아 붙입니다. 이미 있는 컨테이너는 그대로 두고 이미지에만 이름을 붙이므로, 이미 가져온 엔진에서도 같은 파일을 한 번 더 가져오면 Compose가 이미지를 다시 찾습니다.
+
 ## 0.34.1
 
 - 고침: Kiri → BoxForge로 가져올 때 BoxForge 엔진용으로 넣어 준 `host.docker.internal`(→ host-gateway)이 컨테이너 설정에 남아, BoxForge에서 다시 내보내 Kiri에 가져오면 Kiri 자신의 값을 덮어썼습니다. 그래서 nexadmin · ide-server가 `host.docker.internal:1521`의 Oracle에 닿지 못했습니다(엉뚱한 172.20.0.1로 감). 이제 이 이름을 스스로 주는 엔진(Kiri, Docker Desktop, Podman)에 가져올 때는 그 값을 뺍니다.

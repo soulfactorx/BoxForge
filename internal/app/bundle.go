@@ -426,13 +426,9 @@ func (a *App) ImportBundle(key, file string, start bool) ([]string, error) {
 			names[c.Name] = true
 		}
 	}
+	_, composeImages := composeFiles(zr, info)
 	var made []madeContainer
 	for _, c := range info.Containers {
-		if names[c.Name] {
-			notes = append(notes, "container-kept:"+c.Name)
-			continue
-		}
-		say(c.Name + ": 컨테이너를 만드는 중")
 		in, err := zr.Open(c.File)
 		if err != nil {
 			return notes, fmt.Errorf("the bundle lacks %s", c.File)
@@ -442,9 +438,31 @@ func (a *App) ImportBundle(key, file string, start bool) ([]string, error) {
 		if err != nil {
 			return notes, err
 		}
-		var desc struct{ Config struct{ Image string } }
+		var desc struct {
+			Config struct {
+				Image  string
+				Labels map[string]string
+			}
+		}
 		_ = json.Unmarshal(raw, &desc)
-		id, more, err := rt.Containers().CreateFrom(ctx, raw, asOriginal(ctx, rt, c.Image, desc.Config.Image))
+		original := desc.Config.Image
+		if journeyName(original) {
+			// Made from an image carried before (a bundle of a bundle):
+			// its own name is in the project's Compose file.
+			l := desc.Config.Labels
+			if name := composeImages[l["com.docker.compose.project"]+"/"+l["com.docker.compose.service"]]; name != "" {
+				original = name
+			}
+		}
+		if names[c.Name] {
+			// Left as it is; its image still gets its own name, for
+			// Compose (an import done before the name was given).
+			asOriginal(ctx, rt, c.Image, original)
+			notes = append(notes, "container-kept:"+c.Name)
+			continue
+		}
+		say(c.Name + ": 컨테이너를 만드는 중")
+		id, more, err := rt.Containers().CreateFrom(ctx, raw, asOriginal(ctx, rt, c.Image, original))
 		if err != nil {
 			return notes, fmt.Errorf("%s: %w", c.Name, portHint(err))
 		}
@@ -552,7 +570,14 @@ type dependency struct {
 // project/service. Compose writes them into a label too, but not every
 // engine keeps it whole (Kiri's left some out).
 func composeDeps(zr *zip.ReadCloser, info BundleInfo) map[string][]dependency {
-	out := map[string][]dependency{}
+	deps, _ := composeFiles(zr, info)
+	return deps
+}
+
+// composeFiles reads the Compose files in a bundle: each service's
+// depends_on and image name, by project/service.
+func composeFiles(zr *zip.ReadCloser, info BundleInfo) (map[string][]dependency, map[string]string) {
+	deps, images := map[string][]dependency{}, map[string]string{}
 	// The project each Compose file belongs to, from the containers' labels.
 	project := map[string]string{}
 	for _, c := range info.Containers {
@@ -590,38 +615,57 @@ func composeDeps(zr *zip.ReadCloser, info BundleInfo) map[string][]dependency {
 				continue
 			}
 			b, _ := io.ReadAll(tr)
-			var doc struct {
-				Services map[string]struct {
-					DependsOn yaml.Node `yaml:"depends_on"`
-				} `yaml:"services"`
+			d, im := parseCompose(b)
+			for svc, list := range d {
+				deps[p+"/"+svc] = append(deps[p+"/"+svc], list...)
 			}
-			if yaml.Unmarshal(b, &doc) != nil {
-				continue
-			}
-			for svc, def := range doc.Services {
-				n := def.DependsOn
-				switch n.Kind {
-				case yaml.SequenceNode: // [db, cache]
-					for _, e := range n.Content {
-						out[p+"/"+svc] = append(out[p+"/"+svc], dependency{e.Value, "service_started"})
-					}
-				case yaml.MappingNode: // db: {condition: service_healthy}
-					for i := 0; i+1 < len(n.Content); i += 2 {
-						cond := "service_started"
-						var opts struct {
-							Condition string `yaml:"condition"`
-						}
-						if n.Content[i+1].Decode(&opts) == nil && opts.Condition != "" {
-							cond = opts.Condition
-						}
-						out[p+"/"+svc] = append(out[p+"/"+svc], dependency{n.Content[i].Value, cond})
-					}
-				}
+			for svc, name := range im {
+				images[p+"/"+svc] = name
 			}
 		}
 		in.Close()
 	}
-	return out
+	return deps, images
+}
+
+// parseCompose reads one Compose file's services: what each depends on,
+// and the image each runs (as written; one built here is named by Compose
+// after the project, so none is given for it).
+func parseCompose(b []byte) (map[string][]dependency, map[string]string) {
+	deps, images := map[string][]dependency{}, map[string]string{}
+	var doc struct {
+		Services map[string]struct {
+			Image     string    `yaml:"image"`
+			DependsOn yaml.Node `yaml:"depends_on"`
+		} `yaml:"services"`
+	}
+	if yaml.Unmarshal(b, &doc) != nil {
+		return deps, images
+	}
+	for svc, def := range doc.Services {
+		if def.Image != "" && !strings.Contains(def.Image, "${") {
+			images[svc] = def.Image
+		}
+		n := def.DependsOn
+		switch n.Kind {
+		case yaml.SequenceNode: // [db, cache]
+			for _, e := range n.Content {
+				deps[svc] = append(deps[svc], dependency{e.Value, "service_started"})
+			}
+		case yaml.MappingNode: // db: {condition: service_healthy}
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				cond := "service_started"
+				var opts struct {
+					Condition string `yaml:"condition"`
+				}
+				if n.Content[i+1].Decode(&opts) == nil && opts.Condition != "" {
+					cond = opts.Condition
+				}
+				deps[svc] = append(deps[svc], dependency{n.Content[i].Value, cond})
+			}
+		}
+	}
+	return deps, images
 }
 
 // startOrder puts the containers after those they depend on (Compose's
@@ -746,7 +790,7 @@ func (a *App) waitFor(ctx context.Context, d dependency, say func(string)) strin
 // by those names: without them, "up" went to fetch nexadmin:v1 from the
 // internet.
 func asOriginal(ctx context.Context, rt engine.Runtime, carried, original string) string {
-	if original == "" || original == carried || strings.HasPrefix(original, "sha256:") || rt.Images().Exists(ctx, original) {
+	if original == "" || journeyName(original) || original == carried || strings.HasPrefix(original, "sha256:") || rt.Images().Exists(ctx, original) {
 		return carried
 	}
 	if err := rt.Images().Tag(ctx, carried, original); err != nil {
@@ -755,4 +799,10 @@ func asOriginal(ctx context.Context, rt engine.Runtime, carried, original string
 	// The journey's name, no longer needed: only the name comes off.
 	_ = rt.Images().Remove(ctx, carried, false)
 	return original
+}
+
+// journeyName reports whether an image name is one BoxForge gave a
+// container's state for a journey, not the image's own.
+func journeyName(name string) bool {
+	return strings.HasPrefix(name, "boxforge-export/") || strings.HasPrefix(name, "boxforge-copy/")
 }

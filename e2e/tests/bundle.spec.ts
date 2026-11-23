@@ -163,3 +163,41 @@ test("an image made on this PC comes back under its own name, for Compose to fin
     sh(`docker rmi bfe2e-own:v1`, true);
   }
 });
+
+test("a file whose containers ran on carried images still gives back the images' own names, from its Compose file", async ({ page }) => {
+  // As made by an import before 0.34.1: the container runs on boxforge-export/…,
+  // while the project's Compose file names the image bfe2e-cmp:v1.
+  const dir = mkdtempSync(join(tmpdir(), "bfe2e-carried-"));
+  const yml = (image: string) => `services:\n  app:\n    image: ${image}\n    command: sleep 1d\n`;
+  sh(`docker tag ${ALPINE} boxforge-export/bfe2e-cmp:old`);
+  writeFileSync(join(dir, "compose.yaml"), yml("boxforge-export/bfe2e-cmp:old"));
+  const compose = `docker compose -p bfe2e-carried -f ${join(dir, "compose.yaml")}`;
+  sh(`${compose} up -d`);
+  writeFileSync(join(dir, "compose.yaml"), yml("bfe2e-cmp:v1"));
+  const file = join(mkdtempSync(join(tmpdir(), "bfe2e-bundle-")), "carried.boxforge");
+  try {
+    await open(page);
+    await go(page, "containers");
+    await page.locator("tr", { hasText: "bfe2e-carried-app" }).getByRole("button", { name: "더보기" }).click();
+    await page.getByRole("menuitem", { name: "파일로 내보내기" }).click();
+    const dlg = page.getByRole("dialog");
+    await dlg.getByLabel("저장할 파일").fill(file);
+    await dlg.getByRole("button", { name: "내보내기", exact: true }).click();
+    await expect(page.getByText("파일로 내보냈습니다")).toBeVisible({ timeout: 90_000 });
+
+    sh(`${compose} down`);
+    sh(`docker rmi boxforge-export/bfe2e-cmp:old`);
+    await page.getByRole("button", { name: "가져오기", exact: true }).click();
+    await dlg.getByLabel("가져올 파일").fill(file);
+    await dlg.getByRole("button", { name: "열기" }).click();
+    await dlg.getByRole("button", { name: "가져오기", exact: true }).click();
+    await expect(page.getByText(/가져왔습니다: /)).toBeVisible({ timeout: 90_000 });
+    expect(sh(`docker inspect bfe2e-carried-app-1 --format '{{.Config.Image}}'`)).toBe("bfe2e-cmp:v1");
+    // Compose finds its image again: up starts it, fetching nothing.
+    sh(`${compose} up -d`);
+    expect(sh(`docker inspect bfe2e-carried-app-1 --format '{{.State.Status}}'`)).toBe("running");
+  } finally {
+    sh(`${compose} down`, true);
+    sh(`docker rmi bfe2e-cmp:v1 boxforge-export/bfe2e-cmp:old`, true);
+  }
+});

@@ -59,3 +59,32 @@ func TestHostPaths(t *testing.T) {
 		t.Fatalf("%+v", l)
 	}
 }
+
+func TestParseCompose(t *testing.T) {
+	deps, images := parseCompose([]byte(`services:
+  my_oracle:
+    image: gvenzl/oracle-xe:latest
+  nexadmin:
+    image: nexadmin:v1
+    depends_on:
+      my_oracle:
+        condition: service_healthy
+  web:
+    build: .
+    depends_on: [nexadmin]
+  tagged:
+    image: app:${TAG}
+`))
+	if images["nexadmin"] != "nexadmin:v1" || images["my_oracle"] != "gvenzl/oracle-xe:latest" || images["web"] != "" || images["tagged"] != "" {
+		t.Fatalf("images %v", images)
+	}
+	if d := deps["nexadmin"]; len(d) != 1 || d[0] != (dependency{"my_oracle", "service_healthy"}) {
+		t.Fatalf("nexadmin deps %v", d)
+	}
+	if d := deps["web"]; len(d) != 1 || d[0] != (dependency{"nexadmin", "service_started"}) {
+		t.Fatalf("web deps %v", d)
+	}
+	if !journeyName("boxforge-export/nexadmin:20261123-090000") || journeyName("nexadmin:v1") {
+		t.Fatal("journeyName")
+	}
+}
