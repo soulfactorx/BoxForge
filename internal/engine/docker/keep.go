@@ -10,6 +10,7 @@ package docker
 import (
 	"context"
 	"net"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,7 +90,7 @@ func (c containers) rejoin(ctx context.Context, in container.InspectResponse, ma
 			notes = append(notes, "network-made:"+name)
 		}
 		for _, a := range was.Aliases {
-			if a != short && a != "" && a != strings.TrimPrefix(in.Name, "/") {
+			if a != short && a != "" && a != strings.TrimPrefix(in.Name, "/") && !slices.Contains(ep.Aliases, a) {
 				ep.Aliases = append(ep.Aliases, a)
 			}
 		}
@@ -177,7 +178,10 @@ func keepUnshown(cfg *container.Config, host *container.HostConfig, in container
 		cfg.Hostname = old.Hostname
 	}
 	cfg.Domainname = old.Domainname
-	cfg.MacAddress = old.MacAddress //nolint:staticcheck // what API 1.51 still reports
+	cfg.MacAddress = old.MacAddress                                                                                                       //nolint:staticcheck // what API 1.51 still reports
+	if nm := string(oh.NetworkMode); cfg.MacAddress == "" && in.NetworkSettings != nil && nm != "" && nm != "default" && nm != "bridge" { //nolint:staticcheck
+		cfg.MacAddress = in.NetworkSettings.MacAddress //nolint:staticcheck // where Kiri's engine says it
+	}
 	cfg.User = old.User
 	cfg.StopSignal = old.StopSignal
 	if old.Image == cfg.Image || strings.TrimPrefix(old.Image, "docker.io/") == cfg.Image {

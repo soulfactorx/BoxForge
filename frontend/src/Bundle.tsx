@@ -47,6 +47,10 @@ function Steps({ steps, busy }: { steps: string[]; busy: boolean }) {
 export function importNotes(notes: string[]) {
   return explain(notes).map((n) => {
     if (n.startsWith("volume-kept:")) return `볼륨 "${n.slice(12)}"은(는) 이미 있어서 그대로 두었습니다. 파일의 데이터로 바꾸려면 그 볼륨을 지운 뒤 다시 가져오세요.`;
+    if (n.startsWith("wait-failed:")) {
+      const [name, ...why] = n.slice(12).split("=");
+      return `"${name}"이(가) 준비(healthy)되지 않아 기다리지 않고 다음 것을 시작했습니다: ${why.join("=")}. 그 컨테이너의 로그를 보세요.`;
+    }
     if (n.startsWith("start-failed:")) {
       const [name, ...why] = n.slice(13).split("=");
       return `컨테이너 "${name}"을(를) 시작하지 못했습니다: ${why.join("=")}`;

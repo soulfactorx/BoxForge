@@ -1,6 +1,7 @@
 {
  "\"{0}\" 설정을 저장했습니다. 다음에 목록에서 고르면 그대로 채워집니다.": "Saved the \"{0}\" settings. Pick it from the list next time and the form is filled in for you.",
  "\"{0}\" 설정을 지웠습니다. 폴더와 이미지는 그대로입니다.": "Removed the \"{0}\" settings. The folder and image are untouched.",
+ "\"{0}\"이(가) 준비(healthy)되지 않아 기다리지 않고 다음 것을 시작했습니다: {1}. 그 컨테이너의 로그를 보세요.": "\"{0}\" did not become ready (healthy), so the next ones were started without waiting: {1}. See that container's log.",
  "\"에 쓸 수 없는 글자가 있습니다.": "\" has characters that can't be used.",
  "\"적용\"은 파일을 저장한 다음": "\"Apply\" saves the file and then runs",
  "# %UserProfile%\\.wslconfig 의 [wsl2]: {0}{1}": "# [wsl2] in %UserProfile%\\.wslconfig: {0}{1}",
@@ -253,6 +254,7 @@
  "{0}: 최근 1분, 지금 {1}": "{0}: last minute, now {1}",
  "{0}가 {1}를 기다리게 잇기": "join {0} to wait for {1}",
  "{0}가 이미 {1}를 기다리고 있어서, 서로 기다리게 되면 둘 다 시작하지 못합니다.": "{0} already waits for {1}: if each waited for the other, neither could start.",
+ "{0}가 준비(healthy)되기를 기다리는 중": "Waiting for {0} to be ready (healthy)",
  "{0}개": "{0}",
  "{0}개 중 {1}개 실행": "{1} of {0} running",
  "{0}개 중 {1}개 완료": "{1} of {0} done",

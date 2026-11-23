@@ -1,6 +1,7 @@
 package app
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"compress/flate"
 	"context"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/soulfactorx/boxforge/internal/engine"
 	"github.com/soulfactorx/boxforge/internal/version"
+	"gopkg.in/yaml.v3"
 )
 
 // A bundle is containers put in one file to take to another PC: for each,
@@ -452,7 +454,15 @@ func (a *App) ImportBundle(key, file string, start bool) ([]string, error) {
 		}
 	}
 	if start {
-		for _, m := range startOrder(made) {
+		order, waits := startOrder(made, composeDeps(zr, info))
+		for _, m := range order {
+			// What it waits for, as Compose would: those it depends on
+			// being healthy (or done) first.
+			for _, w := range waits[m.name] {
+				if msg := a.waitFor(ctx, w, say); msg != "" {
+					notes = append(notes, msg)
+				}
+			}
 			say(fmt.Sprintf("%s: 시작하는 중", m.name))
 			if err := rt.Containers().Start(ctx, m.id); err != nil {
 				notes = append(notes, "start-failed:"+m.name+"="+portHint(err).Error())
@@ -473,7 +483,7 @@ type hostPaths struct {
 }
 
 func (h *hostPaths) add(p string, compose bool) {
-	p = path.Clean(strings.ReplaceAll(p, "\\", "/"))
+	p = enginePath(p)
 	if !path.IsAbs(p) || p == "/" || systemPath(p) {
 		return
 	}
@@ -499,6 +509,20 @@ func (h *hostPaths) list() []struct {
 	return h.all
 }
 
+// enginePath is a path as the engine's machine names it. Compose run on
+// Windows (as Kiri's is) writes its files' Windows paths into its labels;
+// an engine in WSL sees the drive C: as /mnt/c.
+func enginePath(p string) string {
+	p = strings.ReplaceAll(strings.TrimSpace(p), "\\", "/")
+	if len(p) >= 3 && p[1] == ':' && p[2] == '/' && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) {
+		p = "/mnt/" + strings.ToLower(p[:1]) + p[2:]
+	}
+	if p == "" {
+		return ""
+	}
+	return path.Clean(p)
+}
+
 // systemPath is a path of the machine itself, mounted for what it is there
 // (the engine's socket, devices, the clock), not for its content.
 func systemPath(p string) bool {
@@ -515,11 +539,97 @@ type madeContainer struct {
 	raw      []byte
 }
 
-// startOrder puts the containers of a Compose project after those they
-// depend on (its depends_on, kept in a label), the others as they came.
-func startOrder(made []madeContainer) []madeContainer {
+// dependency is one container waiting for another: the name of the one
+// waited for, and for what (service_started, service_healthy,
+// service_completed_successfully), as in Compose.
+type dependency struct {
+	name, condition string
+}
+
+// composeDeps reads the depends_on of the Compose files in a bundle, by
+// project/service. Compose writes them into a label too, but not every
+// engine keeps it whole (Kiri's left some out).
+func composeDeps(zr *zip.ReadCloser, info BundleInfo) map[string][]dependency {
+	out := map[string][]dependency{}
+	// The project each Compose file belongs to, from the containers' labels.
+	project := map[string]string{}
+	for _, c := range info.Containers {
+		in, err := zr.Open(c.File)
+		if err != nil {
+			continue
+		}
+		var d struct {
+			Config struct{ Labels map[string]string }
+		}
+		_ = json.NewDecoder(io.LimitReader(in, 16<<20)).Decode(&d)
+		in.Close()
+		for _, f := range strings.Split(d.Config.Labels["com.docker.compose.project.config_files"], ",") {
+			if f = enginePath(f); f != "" {
+				project[f] = d.Config.Labels["com.docker.compose.project"]
+			}
+		}
+	}
+	for _, f := range info.Folders {
+		p, ok := project[f.Path]
+		if !f.Compose || !ok {
+			continue
+		}
+		in, err := zr.Open(f.Archive)
+		if err != nil {
+			continue
+		}
+		tr := tar.NewReader(in)
+		for {
+			h, err := tr.Next()
+			if err != nil {
+				break
+			}
+			if h.Typeflag != tar.TypeReg || h.Size > 4<<20 {
+				continue
+			}
+			b, _ := io.ReadAll(tr)
+			var doc struct {
+				Services map[string]struct {
+					DependsOn yaml.Node `yaml:"depends_on"`
+				} `yaml:"services"`
+			}
+			if yaml.Unmarshal(b, &doc) != nil {
+				continue
+			}
+			for svc, def := range doc.Services {
+				n := def.DependsOn
+				switch n.Kind {
+				case yaml.SequenceNode: // [db, cache]
+					for _, e := range n.Content {
+						out[p+"/"+svc] = append(out[p+"/"+svc], dependency{e.Value, "service_started"})
+					}
+				case yaml.MappingNode: // db: {condition: service_healthy}
+					for i := 0; i+1 < len(n.Content); i += 2 {
+						cond := "service_started"
+						var opts struct {
+							Condition string `yaml:"condition"`
+						}
+						if n.Content[i+1].Decode(&opts) == nil && opts.Condition != "" {
+							cond = opts.Condition
+						}
+						out[p+"/"+svc] = append(out[p+"/"+svc], dependency{n.Content[i].Value, cond})
+					}
+				}
+			}
+		}
+		in.Close()
+	}
+	return out
+}
+
+// startOrder puts the containers after those they depend on (Compose's
+// depends_on, from its label and its files), the others as they came. It
+// also says, by container name, what each must wait for before it starts:
+// containers (by name) to be healthy or done.
+func startOrder(made []madeContainer, fromFiles map[string][]dependency) ([]madeContainer, map[string][]dependency) {
 	service := map[string]int{} // project/service → index
-	needs := make([][]string, len(made))
+	deps := make([][]dependency, len(made))
+	project := make([]string, len(made))
 	for i, m := range made {
 		var c struct {
 			Config struct{ Labels map[string]string }
@@ -527,25 +637,48 @@ func startOrder(made []madeContainer) []madeContainer {
 		_ = json.Unmarshal(m.raw, &c)
 		l := c.Config.Labels
 		p := l["com.docker.compose.project"]
-		if s := l["com.docker.compose.service"]; s != "" {
-			service[p+"/"+s] = i
+		project[i] = p
+		svc := l["com.docker.compose.service"]
+		if svc != "" {
+			service[p+"/"+svc] = i
 		}
 		for _, d := range strings.Split(l["com.docker.compose.depends_on"], ",") {
-			if name, _, _ := strings.Cut(strings.TrimSpace(d), ":"); name != "" {
-				needs[i] = append(needs[i], p+"/"+name)
+			parts := strings.Split(strings.TrimSpace(d), ":")
+			if parts[0] == "" {
+				continue
+			}
+			cond := "service_started"
+			if len(parts) > 1 {
+				cond = parts[1]
+			}
+			deps[i] = append(deps[i], dependency{parts[0], cond})
+		}
+		for _, d := range fromFiles[p+"/"+svc] {
+			have := false
+			for _, x := range deps[i] {
+				have = have || x.name == d.name
+			}
+			if !have {
+				deps[i] = append(deps[i], d)
 			}
 		}
 	}
+	waits := map[string][]dependency{}
 	var out []madeContainer
 	done := make([]bool, len(made))
-	var visit func(i int, depth int)
-	visit = func(i int, depth int) {
+	var visit func(i, depth int)
+	visit = func(i, depth int) {
 		if done[i] || depth > len(made) {
 			return
 		}
-		for _, n := range needs[i] {
-			if j, ok := service[n]; ok {
-				visit(j, depth+1)
+		for _, d := range deps[i] {
+			j, ok := service[project[i]+"/"+d.name]
+			if !ok {
+				continue
+			}
+			visit(j, depth+1)
+			if d.condition == "service_healthy" || d.condition == "service_completed_successfully" {
+				waits[made[i].name] = append(waits[made[i].name], dependency{made[j].name, d.condition})
 			}
 		}
 		if !done[i] {
@@ -556,5 +689,50 @@ func startOrder(made []madeContainer) []madeContainer {
 	for i := range made {
 		visit(i, 0)
 	}
-	return out
+	return out, waits
+}
+
+// waitFor waits, up to 15 minutes, for a started container to be healthy
+// (or to have ended well, for service_completed_successfully). It returns
+// a note when it gave up: "wait-failed:<name>=<why>".
+func (a *App) waitFor(ctx context.Context, d dependency, say func(string)) string {
+	deadline := time.Now().Add(15 * time.Minute)
+	for first := true; time.Now().Before(deadline); first = false {
+		raw, err := a.eng().Containers().Inspect(ctx, d.name)
+		if err != nil {
+			return ""
+		}
+		var st struct {
+			State struct {
+				Status   string
+				ExitCode int
+				Health   *struct{ Status string }
+			}
+		}
+		_ = json.Unmarshal(raw, &st)
+		switch {
+		case d.condition == "service_completed_successfully":
+			if st.State.Status == "exited" {
+				if st.State.ExitCode == 0 {
+					return ""
+				}
+				return fmt.Sprintf("wait-failed:%s=exit %d", d.name, st.State.ExitCode)
+			}
+		case st.State.Health == nil:
+			return "" // no health check: started is all there is to wait for
+		case st.State.Health.Status == "healthy":
+			return ""
+		case st.State.Status == "exited" || st.State.Status == "dead":
+			return fmt.Sprintf("wait-failed:%s=%s", d.name, st.State.Status)
+		}
+		if first {
+			say(fmt.Sprintf("%s가 준비(healthy)되기를 기다리는 중", d.name))
+		}
+		select {
+		case <-ctx.Done():
+			return "wait-failed:" + d.name + "=" + ctx.Err().Error()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return "wait-failed:" + d.name + "=not healthy within 15 minutes"
 }

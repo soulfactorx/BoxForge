@@ -515,8 +515,17 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 		cfg.Hostname = ""
 	}
 	// Its networks: made here when missing, each with its aliases, fixed
-	// address and MAC address.
-	j, more := c.rejoin(ctx, in, cfg.MacAddress) //nolint:staticcheck // what API 1.51 still reports
+	// address and MAC address. The MAC address the user gave is in Config
+	// on Docker; Kiri's engine leaves it out there and gives it (for a
+	// container on a network of its own) as the top-level MacAddress.
+	mac := cfg.MacAddress //nolint:staticcheck // what API 1.51 still reports
+	if mac == "" && in.NetworkSettings != nil {
+		if nm := string(host.NetworkMode); nm != "" && nm != "default" && nm != "bridge" {
+			mac = in.NetworkSettings.MacAddress //nolint:staticcheck // the only place Kiri's engine says it
+			cfg.MacAddress = mac                //nolint:staticcheck
+		}
+	}
+	j, more := c.rejoin(ctx, in, mac)
 	notes = append(notes, more...)
 	host.NetworkMode = container.NetworkMode(j.primary)
 	host.Links, host.VolumesFrom = nil, nil
@@ -527,18 +536,47 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 	for _, m := range host.Mounts {
 		named[m.Source] = true
 	}
+	ro := func(rw bool) string {
+		if rw {
+			return ""
+		}
+		return ":ro"
+	}
 	for _, m := range in.Mounts {
 		switch {
 		case engine.OwnMount(m.Source, m.Destination):
 		case m.Type == "bind":
 			notes = append(notes, "bind:"+m.Source)
+			// Docker lists a container's folders in HostConfig.Binds;
+			// Kiri's engine only among its mounts: taken from there.
+			if !named[m.Source] {
+				host.Binds = append(host.Binds, m.Source+":"+m.Destination+ro(m.RW))
+			}
 		case m.Type == "volume" && m.Name != "" && !named[m.Name]:
 			// A volume the image asked for, with a name the engine made
-			// up: named here, so that the copy uses the copied data.
-			host.Binds = append(host.Binds, m.Name+":"+m.Destination)
+			// up (or one Kiri's engine lists only here): named here, so
+			// that the copy uses the copied data.
+			host.Binds = append(host.Binds, m.Name+":"+m.Destination+ro(m.RW))
 		}
 	}
+	// host.docker.internal, which Docker Desktop and Kiri give every
+	// container (an app reaching a port published on the PC, a database
+	// say), and a plain Docker engine doesn't: given here too.
+	hostName := false
+	for _, h := range host.ExtraHosts {
+		if strings.HasPrefix(h, "host.docker.internal:") || strings.HasPrefix(h, "host.docker.internal=") {
+			hostName = true
+		}
+	}
+	if !hostName {
+		host.ExtraHosts = append(host.ExtraHosts, "host.docker.internal:host-gateway")
+	}
 	created, err := c.cli.ContainerCreate(ctx, cfg, host, j.networking(), nil, strings.TrimPrefix(in.Name, "/"))
+	if err != nil && !hostName && strings.Contains(err.Error(), "host-gateway") {
+		// An engine that doesn't know host-gateway: made as it was.
+		host.ExtraHosts = host.ExtraHosts[:len(host.ExtraHosts)-1]
+		created, err = c.cli.ContainerCreate(ctx, cfg, host, j.networking(), nil, strings.TrimPrefix(in.Name, "/"))
+	}
 	if err != nil {
 		return "", notes, err
 	}

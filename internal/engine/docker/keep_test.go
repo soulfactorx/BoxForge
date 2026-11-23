@@ -112,3 +112,61 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+// TestKiriShapeLive makes a container from a description the way Kiri's
+// engine writes one (seen in the field): folders only among Mounts, no
+// Binds; the MAC address the user gave only as the top-level MacAddress;
+// a network of the project with nothing filled in. Its folder, volume,
+// MAC address, hostname, alias and host.docker.internal must all be there.
+func TestKiriShapeLive(t *testing.T) {
+	img := os.Getenv("BOXFORGE_DOCKER_IMAGE")
+	if img == "" {
+		t.Skip("BOXFORGE_DOCKER_IMAGE is not set")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/license.xml", []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clean := func() {
+		_ = exec.Command("docker", "rm", "-f", "bfk-ide").Run()
+		_ = exec.Command("docker", "network", "rm", "bfkiri_default").Run()
+		_ = exec.Command("docker", "volume", "rm", "bfk_oracle_vol").Run()
+	}
+	clean()
+	t.Cleanup(clean)
+	raw := `{
+  "Id": "d4d66088e1a7657365cb1a1945c3c2a87930689193380af7be09ab046b5d3b37",
+  "Name": "/bfk-ide", "Path": "sleep", "Args": ["600"],
+  "Config": {"Hostname": "SKAX26N00713", "Image": "x", "Entrypoint": ["sleep", "600"], "Cmd": [],
+    "Env": ["SPRING_DATASOURCE_URL=jdbc:oracle:thin:@host.docker.internal:1521/XE"],
+    "Labels": {"com.docker.compose.project": "bfkiri", "com.docker.compose.service": "ide-server"}},
+  "HostConfig": {"NetworkMode": "bfkiri_default", "RestartPolicy": {"Name": "unless-stopped"}, "CapAdd": [], "Devices": []},
+  "Mounts": [
+    {"Type": "bind", "Source": "` + dir + `", "Destination": "/app/license", "RW": true},
+    {"Type": "volume", "Name": "bfk_oracle_vol", "Source": "/var/lib/kiri/volumes/bfk_oracle_vol/_data", "Destination": "/data", "RW": true}
+  ],
+  "NetworkSettings": {"MacAddress": "80:13:16:f7:54:fe", "Networks": {"bfkiri_default": {"Aliases": ["ide-server", "ide-server"], "IPAddress": "", "MacAddress": ""}}},
+  "State": {"Status": "exited"}
+}`
+	rt, err := Connect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, _, err := rt.Containers().CreateFrom(ctx, []byte(raw), img); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("docker", "start", "bfk-ide").CombinedOutput()
+	if err != nil {
+		t.Fatalf("start: %v %s", err, out)
+	}
+	got, _ := exec.Command("docker", "exec", "bfk-ide", "sh", "-c",
+		`cat /app/license/license.xml; echo; hostname; cat /sys/class/net/eth0/address; grep -c host.docker.internal /etc/hosts; ls -d /data`).CombinedOutput()
+	if want := "ok\nSKAX26N00713\n80:13:16:f7:54:fe\n1\n/data\n"; string(got) != want {
+		t.Fatalf("inside the container:\n%s\nwant:\n%s", got, want)
+	}
+	aliases, _ := exec.Command("docker", "inspect", "bfk-ide", "--format", `{{(index .NetworkSettings.Networks "bfkiri_default").Aliases}}`).Output()
+	if !strings.Contains(string(aliases), "ide-server") {
+		t.Fatalf("aliases %s", aliases)
+	}
+}

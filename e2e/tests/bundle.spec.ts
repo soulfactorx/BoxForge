@@ -79,10 +79,13 @@ test("a Compose project is exported with its folders and files, and comes back w
     image: ${ALPINE}
     command: sh -c "cat /cfg/app.conf; sleep 1d"
     volumes: ["./config:/cfg"]
-    depends_on: [db]
+    depends_on:
+      db:
+        condition: service_healthy
   db:
     image: ${ALPINE}
-    command: sleep 1d
+    command: sh -c "sleep 4; touch /ready; sleep 1d"
+    healthcheck: { test: ["CMD", "test", "-f", "/ready"], interval: 2s, retries: 30 }
 `,
   );
   const compose = `docker compose -p bfe2e-clone -f ${join(dir, "compose.yaml")}`;
@@ -115,6 +118,11 @@ test("a Compose project is exported with its folders and files, and comes back w
 
     // Running, reading its folder; and Compose knows the project from its file again.
     await expect.poll(() => sh(`docker inspect bfe2e-clone-app-1 --format '{{.State.Status}}'`, true)).toBe("running");
+    // app waited for db to be healthy, as Compose does.
+    const at = (c: string, f: string) => Date.parse(sh(`docker inspect ${c} --format '{{${f}}}'`));
+    expect(at("bfe2e-clone-app-1", ".State.StartedAt")).toBeGreaterThan(at("bfe2e-clone-db-1", ".State.StartedAt") + 3000);
+    // host.docker.internal is there, as on Docker Desktop and Kiri.
+    expect(sh(`docker exec bfe2e-clone-app-1 grep -c host.docker.internal /etc/hosts`)).toBe("1");
     await expect.poll(() => sh(`docker logs bfe2e-clone-app-1`, true)).toContain("license=abc");
     expect(readFileSync(join(dir, "compose.yaml"), "utf8")).toContain("./config:/cfg");
     expect(sh(`${compose} ps --services`).split("\n").sort()).toEqual(["app", "db"]);
