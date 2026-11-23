@@ -11,7 +11,16 @@ interface Disk {
   distro: string;
   path: string;
   bytes: number;
+  sparse: boolean;
   own: boolean;
+}
+interface Result {
+  before: number;
+  after: number;
+  sparse: boolean;
+  trim: string;
+  trimmed: boolean;
+  log: string;
 }
 
 export default function WSLDisks({ run }: { run: Run }) {
@@ -19,7 +28,7 @@ export default function WSLDisks({ run }: { run: Run }) {
   const [asking, setAsking] = useState<Disk | null>(null);
   const [busy, setBusy] = useState("");
   const [step, setStep] = useState("");
-  const [note, setNote] = useState("");
+  const [done, setDone] = useState<{ distro: string; r: Result } | null>(null);
   const load = () => call<Disk[]>("WSLDisks").then(setDisks, () => {});
   useEffect(() => {
     load();
@@ -32,14 +41,12 @@ export default function WSLDisks({ run }: { run: Run }) {
     setBusy(d.distro);
     setStep("");
     const command = [`wsl -d ${d.distro} -u root -- fstrim -a`, "wsl --shutdown", `diskpart  # select vdisk file="${d.path}" → attach vdisk readonly → compact vdisk → detach vdisk`].join(" && ");
-    let result: { before: number; after: number } | null = null;
-    await run(command, () => call<{ before: number; after: number }>("CompactWSLDisk", d.distro).then((r) => (result = r)));
+    setDone(null);
+    let result: Result | null = null;
+    await run(command, () => call<Result>("CompactWSLDisk", d.distro).then((r) => (result = r)));
     setBusy("");
     setStep("");
-    if (result) {
-      const r = result as { before: number; after: number };
-      setNote(`${d.distro}의 디스크: ${bytes(r.before)} → ${bytes(r.after)} (${bytes(Math.max(0, r.before - r.after))} 줄었습니다)`);
-    }
+    if (result) setDone({ distro: d.distro, r: result });
     load();
   };
 
@@ -50,7 +57,7 @@ export default function WSLDisks({ run }: { run: Run }) {
         WSL의 배포판(BoxForge, Kiri, Docker 등)마다 가상 디스크 파일(ext4.vhdx)이 있습니다. 안에서 이미지나 컨테이너를 지워도 이 파일은 줄지 않습니다. "줄이기"는 지운 만큼을
         Windows로 돌려줍니다. 먼저 안 쓰는 이미지 · 컨테이너를 정리하면 더 많이 줄어듭니다.
       </p>
-      {note && <Note onClose={() => setNote("")}>{note}</Note>}
+      {done && <Outcome distro={done.distro} r={done.r} onClose={() => setDone(null)} />}
       {busy && (
         <p className="note" role="status" data-testid="compacting">
           <span className="spinner" /> {step || `${busy}의 디스크를 줄이는 중…`}
@@ -61,7 +68,7 @@ export default function WSLDisks({ run }: { run: Run }) {
           <tr>
             <th>배포판</th>
             <th>파일</th>
-            <th>크기</th>
+            <th>차지하는 크기</th>
             <th />
           </tr>
         </thead>
@@ -74,7 +81,9 @@ export default function WSLDisks({ run }: { run: Run }) {
               <td>
                 <code className="path">{d.path}</code>
               </td>
-              <td>{bytes(d.bytes)}</td>
+              <td>
+                {bytes(d.bytes)} {d.sparse && <span className="muted">(자동 줄이기 켜짐)</span>}
+              </td>
               <td>
                 <button type="button" disabled={!!busy} onClick={() => setAsking(d)}>
                   줄이기
@@ -106,5 +115,32 @@ export default function WSLDisks({ run }: { run: Run }) {
         </Dialog>
       )}
     </div>
+  );
+}
+
+/** What shrinking did, and when nothing came back, why. */
+function Outcome({ distro, r, onClose }: { distro: string; r: Result; onClose: () => void }) {
+  const freed = r.before - r.after;
+  return (
+    <Note onClose={onClose} testid="compact-result">
+      <strong>{freed > 0 ? `${distro}의 디스크: ${bytes(r.before)} → ${bytes(r.after)} (${bytes(freed)} 줄었습니다)` : `${distro}의 디스크가 줄지 않았습니다 (${bytes(r.before)})`}</strong>
+      {!r.trimmed && (
+        <span className="block warn">{`배포판 안에서 fstrim을 하지 못했습니다(${r.trim}). 그러면 Windows는 어느 자리가 비었는지 알 수 없어, 압축해도 거의 줄지 않습니다. 그 배포판에 fstrim(util-linux)을 설치하거나, 그 배포판을 만든 프로그램(Kiri 등)의 디스크 정리 기능을 쓰세요.`}</span>
+      )}
+      {r.trimmed && r.trim && <span className="block muted">{`fstrim: ${r.trim}`}</span>}
+      {r.trimmed && freed <= 0 && (
+        <span className="block muted">
+          배포판 안에 지운 자리가 거의 없었습니다. 컨테이너 · 이미지 · 볼륨이 아직 그 엔진 안에 남아 있으면 공간을 그대로 차지합니다: 그 엔진을 켜고 먼저 정리(지우기)한 뒤 다시 줄여
+          보세요.
+        </span>
+      )}
+      {r.sparse && <span className="block muted">자동 줄이기(sparse)가 켜진 디스크라 diskpart 압축 대신 fstrim으로 바로 돌려주었습니다.</span>}
+      {r.log && (
+        <details>
+          <summary>diskpart가 한 말</summary>
+          <pre className="log-box">{r.log}</pre>
+        </details>
+      )}
+    </Note>
   );
 }

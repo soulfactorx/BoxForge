@@ -116,21 +116,14 @@ func (a *App) WSLDisks() []provision.WSLDisk {
 	return disks
 }
 
-// Compacted is a disk's size before and after shrinking.
-type Compacted struct {
-	Before int64 `json:"before"`
-	After  int64 `json:"after"`
-}
-
 // CompactWSLDisk shrinks a WSL distribution's virtual disk. WSL is stopped
 // for it (every distribution and its containers); the engine connects again
 // when next used. Each step is sent as a "disk-compact" event.
-func (a *App) CompactWSLDisk(distro string) (Compacted, error) {
+func (a *App) CompactWSLDisk(distro string) (provision.Compacted, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	if a.wslTarget() != "" {
 		a.hangUp()
 	}
-	before, after, err := provision.CompactDisk(ctx, distro, func(text string) { a.emit("disk-compact", text) })
-	return Compacted{Before: before, After: after}, err
+	return provision.CompactDisk(ctx, distro, func(text string) { a.emit("disk-compact", text) })
 }

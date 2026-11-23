@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -39,4 +41,29 @@ func registryDisks() map[string]string {
 		}
 	}
 	return out
+}
+
+var compressedSize = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetCompressedFileSizeW")
+
+// onDisk is what a file takes on the drive (less than its length when it
+// is sparse), and whether it is sparse.
+func onDisk(p string) (int64, bool) {
+	st, err := os.Stat(p)
+	if err != nil {
+		return 0, false
+	}
+	name, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return st.Size(), false
+	}
+	sparse := false
+	if attrs, err := windows.GetFileAttributes(name); err == nil {
+		sparse = attrs&windows.FILE_ATTRIBUTE_SPARSE_FILE != 0
+	}
+	var high uint32
+	low, _, callErr := compressedSize.Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&high)))
+	if uint32(low) == 0xFFFFFFFF && callErr != windows.ERROR_SUCCESS {
+		return st.Size(), sparse
+	}
+	return int64(high)<<32 | int64(uint32(low)), sparse
 }

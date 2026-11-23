@@ -23,9 +23,9 @@ test.beforeAll(async () => {
     `#!/bin/sh
 case "$1" in
   --status) exit 0 ;;
-  -l) printf 'BoxForge\nkiri\n'; exit 0 ;;
+  -l) case "$*" in *--running*) exit 0 ;; esac; printf 'BoxForge\nkiri\n'; exit 0 ;;
   --shutdown|--terminate|--manage) echo "$*" >> ${calls}; exit 0 ;;
-  -d) case "$*" in *fstrim*) echo "$*" >> ${calls}; exit 0 ;; esac ;;
+  -d) case "$*" in *fstrim*) echo "$*" >> ${calls}; echo "/: 30 MiB (31457280 bytes) trimmed on /dev/sdc"; exit 0 ;; esac ;;
 esac
 while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
 shift
@@ -40,12 +40,13 @@ exec "$@"
   const cache = join(dir, "cache");
   mkdirSync(join(cache, "BoxForge", "wsl"), { recursive: true });
   execFileSync("truncate", ["-s", "3G", join(cache, "BoxForge", "wsl", "ext4.vhdx")]);
-  // Kiri's distribution's disk, and a stand-in diskpart that writes down its
-  // script and shrinks the file as compacting would.
+  // Kiri's distribution's disk (written out: what counts is what it takes
+  // on the drive), and a stand-in diskpart that writes down its script and
+  // shrinks the file as compacting would.
   const kiri = join(dir, "kiri.vhdx");
-  execFileSync("truncate", ["-s", "5G", kiri]);
+  execFileSync("fallocate", ["-l", "50M", kiri]);
   const diskpart = join(dir, "diskpart");
-  writeFileSync(diskpart, `#!/bin/sh\ncat >> ${calls}\necho "DiskPart successfully compacted the virtual disk file."\ntruncate -s 2G ${kiri}\n`);
+  writeFileSync(diskpart, `#!/bin/sh\ncat >> ${calls}\necho "DiskPart successfully compacted the virtual disk file."\nrm -f ${kiri}; fallocate -l 20M ${kiri}\n`);
   chmodSync(diskpart, 0o755);
 
   const bin = join(__dirname, "..", ".bin", "devserver");
@@ -102,15 +103,19 @@ test("a WSL disk is shrunk: free blocks marked, WSL stopped, the file compacted"
   await page.goto(base);
   await page.getByTestId("nav-settings").click();
   const panel = page.getByTestId("wsl-disks");
-  await expect(panel.getByTestId("wsl-disk-kiri")).toContainText("5.0 GB");
+  await expect(panel.getByTestId("wsl-disk-kiri")).toContainText("50.0 MB");
   await expect(panel.getByTestId("wsl-disk-BoxForge")).toContainText("BoxForge 엔진");
   await panel.getByTestId("wsl-disk-kiri").getByRole("button", { name: "줄이기" }).click();
   const dlg = page.getByRole("dialog");
   await expect(dlg).toContainText("모든 WSL 배포판");
   await dlg.getByRole("button", { name: "WSL 멈추고 줄이기" }).click();
-  await expect(panel).toContainText("5.0 GB → 2.0 GB", { timeout: 30_000 });
+  const result = page.getByTestId("compact-result");
+  await expect(result).toContainText("50.0 MB → 20.0 MB", { timeout: 30_000 });
+  await expect(result).toContainText("fstrim: /: 30 MiB");
+  await result.getByText("diskpart가 한 말").click();
+  await expect(result).toContainText("successfully compacted");
   const said = readFileSync(calls, "utf8");
-  expect(said).toContain("-d kiri -u root -- fstrim -a");
+  expect(said).toContain("-d kiri -u root -- fstrim -av");
   expect(said.indexOf("fstrim")).toBeLessThan(said.lastIndexOf("--shutdown"));
   expect(said).toContain(`select vdisk file="${join(dir, "kiri.vhdx")}"`);
   expect(said).toContain("compact vdisk");

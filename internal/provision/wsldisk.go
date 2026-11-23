@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/soulfactorx/boxforge/internal/clirunner"
 	"github.com/soulfactorx/boxforge/internal/engines"
@@ -25,7 +26,8 @@ import (
 type WSLDisk struct {
 	Distro string `json:"distro"`
 	Path   string `json:"path"`
-	Bytes  int64  `json:"bytes"`
+	Bytes  int64  `json:"bytes"` // what it takes on the drive
+	Sparse bool   `json:"sparse"`
 	Own    bool   `json:"own"` // BoxForge's distribution
 }
 
@@ -41,11 +43,11 @@ func WSLDisks() []WSLDisk {
 		if p == "" {
 			continue
 		}
-		st, err := os.Stat(p)
-		if err != nil {
+		if _, err := os.Stat(p); err != nil {
 			continue
 		}
-		out = append(out, WSLDisk{Distro: d, Path: p, Bytes: st.Size(), Own: d == Distro})
+		size, sparse := onDisk(p)
+		out = append(out, WSLDisk{Distro: d, Path: p, Bytes: size, Sparse: sparse, Own: d == Distro})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Bytes > out[j].Bytes })
 	return out
@@ -78,9 +80,22 @@ func diskpartScript(path string) string {
 	}, "\r\n") + "\r\n"
 }
 
+// Compacted is what shrinking a disk did. Sizes are what the file takes
+// on the drive: for a sparse file (WSL's "auto shrink", which Kiri may set)
+// that is less than its length, and it is what gives space back.
+type Compacted struct {
+	Before  int64  `json:"before"`
+	After   int64  `json:"after"`
+	Sparse  bool   `json:"sparse"` // the file is sparse: diskpart can't compact it, fstrim did the work
+	Trim    string `json:"trim"`   // what fstrim said
+	Trimmed bool   `json:"trimmed"`
+	Log     string `json:"log"` // what diskpart said
+}
+
 // CompactDisk shrinks a distribution's disk, telling say each step. It
 // stops WSL (every distribution, and the containers in them).
-func CompactDisk(ctx context.Context, distro string, say func(string)) (before, after int64, err error) {
+func CompactDisk(ctx context.Context, distro string, say func(string)) (Compacted, error) {
+	var res Compacted
 	var disk *WSLDisk
 	for _, d := range WSLDisks() {
 		if d.Distro == distro {
@@ -89,41 +104,79 @@ func CompactDisk(ctx context.Context, distro string, say func(string)) (before, 
 		}
 	}
 	if disk == nil {
-		return 0, 0, fmt.Errorf("no virtual disk was found for %q", distro)
+		return res, fmt.Errorf("no virtual disk was found for %q", distro)
 	}
-	before = disk.Bytes
+	res.Before, res.Sparse = onDisk(disk.Path)
+	res.After = res.Before
 
+	// Without this, Windows can't tell which blocks ext4 freed: compacting
+	// then gives back nothing.
 	say("안에서 지운 파일의 자리를 비우는 중 (fstrim)")
-	if _, err := wsl(ctx, "-d", distro, "-u", "root", "--", "fstrim", "-a"); err != nil {
-		// Not every distribution has fstrim; compacting still gives back
-		// the blocks never written again.
+	out, err := wsl(ctx, "-d", distro, "-u", "root", "--", "fstrim", "-av")
+	if err != nil {
+		// A distribution without fstrim of its own may have busybox's.
+		if o2, err2 := wsl(ctx, "-d", distro, "-u", "root", "--", "busybox", "fstrim", "-v", "/"); err2 == nil {
+			out, err = o2, nil
+		}
+	}
+	res.Trim, res.Trimmed = strings.TrimSpace(out), err == nil
+	if err != nil {
+		res.Trim = err.Error()
 		say(fmt.Sprintf("fstrim을 하지 못했습니다(%s). 압축은 계속합니다", err))
 	}
+
 	say("WSL을 멈추는 중 (wsl --shutdown)")
 	if _, err := wsl(ctx, "--shutdown"); err != nil {
-		return before, before, err
+		return res, err
+	}
+	// Its disk is free only once the distribution has stopped: what starts
+	// it again (its own app) is waited out for a while.
+	for i := 0; i < 15; i++ {
+		running, _ := wsl(ctx, "-l", "--running", "-q")
+		if !hasLine(running, distro) {
+			break
+		}
+		if i == 14 {
+			return res, fmt.Errorf("%s 배포판이 자꾸 다시 켜져서 디스크를 압축할 수 없습니다. 그 배포판을 쓰는 프로그램(Kiri 등)을 완전히 끄고 다시 해 보세요", distro)
+		}
+		time.Sleep(2 * time.Second)
+		_, _ = wsl(ctx, "--terminate", distro)
 	}
 
-	dir, err := os.MkdirTemp("", "boxforge-compact-")
-	if err != nil {
-		return before, before, err
-	}
-	defer os.RemoveAll(dir)
-	log := filepath.Join(dir, "compact.log")
-	say("가상 디스크를 압축하는 중 (diskpart: 관리자 권한을 묻는 창이 뜹니다)")
-	err = diskpart(ctx, dir, diskpartScript(disk.Path), log)
-	said, _ := os.ReadFile(log)
-	text := strings.TrimSpace(strings.TrimPrefix(string(said), "\uFEFF"))
-	if err != nil {
-		if text == "" {
-			return before, before, errors.New("관리자 권한을 허락하지 않았거나 diskpart가 실행되지 않아 압축하지 않았습니다")
+	if res.Sparse {
+		// A sparse disk gives back what fstrim freed by itself, and
+		// diskpart refuses to compact one.
+		say("자동 줄이기(sparse)가 켜진 디스크라 fstrim으로 이미 돌려주었습니다")
+	} else {
+		dir, err := os.MkdirTemp("", "boxforge-compact-")
+		if err != nil {
+			return res, err
 		}
-		return before, before, fmt.Errorf("diskpart가 압축하지 못했습니다:\n%s", text)
+		defer os.RemoveAll(dir)
+		log := filepath.Join(dir, "compact.log")
+		say("가상 디스크를 압축하는 중 (diskpart: 관리자 권한을 묻는 창이 뜹니다)")
+		err = diskpart(ctx, dir, diskpartScript(disk.Path), log)
+		said, _ := os.ReadFile(log)
+		res.Log = strings.TrimSpace(strings.TrimPrefix(string(said), "\uFEFF"))
+		if err != nil {
+			if res.Log == "" {
+				return res, errors.New("관리자 권한을 허락하지 않았거나 diskpart가 실행되지 않아 압축하지 않았습니다")
+			}
+			return res, fmt.Errorf("diskpart가 압축하지 못했습니다:\n%s", res.Log)
+		}
 	}
-	if st, err := os.Stat(disk.Path); err == nil {
-		after = st.Size()
+	res.After, _ = onDisk(disk.Path)
+	return res, nil
+}
+
+// hasLine reports whether one line of wsl's output is name.
+func hasLine(out, name string) bool {
+	for _, l := range strings.Split(out, "\n") {
+		if strings.TrimSpace(l) == name {
+			return true
+		}
 	}
-	return before, after, nil
+	return false
 }
 
 // diskpart runs a diskpart script as administrator, its output in log
