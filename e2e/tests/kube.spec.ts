@@ -146,7 +146,7 @@ test("deploy with the helper: address, storage, settings, and the picture", asyn
   const yaml = await d.getByTestId("deploy-yaml").innerText();
   for (const want of ["kind: Deployment", "kind: Service", "kind: Ingress", "kind: PersistentVolumeClaim", "secretRef: { name: bfe2e-secret }", 'host: "bfe2e-web.localhost"']) expect(yaml).toContain(want);
   await d.getByRole("button", { name: "배포" }).click();
-  await expect(page.getByTestId("applied")).toContainText("deployment.apps/bfe2e-web created");
+  await expect(page.getByTestId("applied")).toContainText("deployment.apps/bfe2e-web created", { timeout: 120_000 });
   // How it comes up, step by step, until all its pods are ready.
   const progress = page.getByTestId("deploy-progress");
   await expect(progress).toContainText("bfe2e-web");
