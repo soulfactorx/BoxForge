@@ -567,10 +567,11 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
               label: `연결된 볼륨의 데이터도 복사${copying.volumes.length ? ` (${copying.volumes.length}개)` : ""}`,
               help: copying.volumes.length ? "데이터베이스 같은 볼륨의 내용이 함께 갑니다. 크면 오래 걸립니다." : "이 컨테이너에는 볼륨이 없습니다.",
             },
+            { key: "folders", label: "연결한 폴더와 Compose 파일도 복사", help: "컨테이너가 엔진의 컴퓨터에서 연결해 쓰는 폴더 · 파일(./config 등)과 Compose 파일을 받는 쪽의 같은 경로에 둡니다. 이미 있으면 그대로 둡니다." },
           ]}
           run={run}
           command={(other) => `docker commit ${copying.name} copy:tmp && docker save copy:tmp | ${other} load && ${other} create --name ${copying.name} copy:tmp`}
-          copy={(key, target, chosen) => call<string[]>("CopyContainer", key, copying.id, target, { changes: chosen.changes, volumes: chosen.volumes })}
+          copy={(key, target, chosen) => call<string[]>("CopyContainer", key, copying.id, target, { changes: chosen.changes, volumes: chosen.volumes, folders: chosen.folders })}
           onClose={() => setCopying(null)}
           onDone={(label, notes) => {
             setCopied({ text: `${copying.name} 컨테이너를 "${label}"에 만들었습니다. 그 엔진으로 바꿔서 시작하면 됩니다.`, notes: explain(notes) });

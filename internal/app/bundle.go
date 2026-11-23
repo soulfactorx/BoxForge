@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/soulfactorx/boxforge/internal/engine"
 	"github.com/soulfactorx/boxforge/internal/version"
 )
 
@@ -24,6 +26,9 @@ import (
 //	containers/<n>.json          the engine's description of a container
 //	images/<n>.tar               an image, as `docker save` writes it
 //	volumes/<name>.tar           a volume's data
+//	folders/<n>.tar              a folder (or file) of the engine's machine
+//	                             a container mounts, and a Compose project's
+//	                             files, to be put back at the same place
 //
 // Taking one in makes the images, volumes and containers on the engine in
 // use; the containers are made, not started.
@@ -39,6 +44,16 @@ type BundleInfo struct {
 	Runtime    string            `json:"runtime"` // the kind of engine it came from
 	Containers []BundleContainer `json:"containers"`
 	Volumes    []string          `json:"volumes"`
+	Folders    []BundleFolder    `json:"folders,omitempty"`
+}
+
+// BundleFolder is a folder or file of the machine the engine ran on, kept
+// to be put back at the same path: what a container mounts from there
+// (a Compose project's ./config), and the project's Compose files.
+type BundleFolder struct {
+	Path    string `json:"path"`
+	Archive string `json:"archive"`
+	Compose bool   `json:"compose,omitempty"` // a Compose file of the project
 }
 
 // BundleContainer is one container in a bundle.
@@ -147,6 +162,7 @@ func (a *App) ExportBundle(key string, ids []string, file string, o CopyOptions)
 		info.Runtime = ei.Runtime
 	}
 	sent := map[string]string{} // image name → its file in the bundle
+	folders := &hostPaths{}
 	vols := map[string]bool{}
 	for n, id := range ids {
 		raw, err := rt.Containers().Inspect(ctx, id)
@@ -155,8 +171,11 @@ func (a *App) ExportBundle(key string, ids []string, file string, o CopyOptions)
 		}
 		var c struct {
 			Name   string
-			Config struct{ Image string }
-			Mounts []struct{ Type, Name string }
+			Config struct {
+				Image  string
+				Labels map[string]string
+			}
+			Mounts []struct{ Type, Name, Source, Destination string }
 		}
 		if err := json.Unmarshal(raw, &c); err != nil {
 			return err
@@ -228,7 +247,38 @@ func (a *App) ExportBundle(key string, ids []string, file string, o CopyOptions)
 				return fmt.Errorf("volume %s: %w", m.Name, err)
 			}
 		}
+		if o.Folders {
+			for _, m := range c.Mounts {
+				if m.Type == "bind" && !engine.OwnMount(m.Source, m.Destination) {
+					folders.add(m.Source, false)
+				}
+			}
+			// The project's Compose files, so that it can be managed
+			// (up, down, edited) where it is taken.
+			for _, key := range []string{"com.docker.compose.project.config_files", "com.docker.compose.project.environment_file"} {
+				for _, f := range strings.Split(c.Config.Labels[key], ",") {
+					folders.add(strings.TrimSpace(f), true)
+				}
+			}
+		}
 		info.Containers = append(info.Containers, entry)
+	}
+	for i, f := range folders.list() {
+		say(fmt.Sprintf("폴더 %s를 담는 중", f.path))
+		dir, base := path.Split(f.path)
+		rc, err := rt.Volumes().Archive(ctx, path.Clean(dir), base)
+		if err != nil {
+			// Gone from the machine (or not readable): said in the notes
+			// of the import as a folder that isn't in the file.
+			continue
+		}
+		bf := BundleFolder{Path: f.path, Archive: fmt.Sprintf("folders/%d.tar", i), Compose: f.compose}
+		err = put(bf.Archive, rc, func(int64) {})
+		rc.Close()
+		if err != nil {
+			return fmt.Errorf("folder %s: %w", f.path, err)
+		}
+		info.Folders = append(info.Folders, bf)
 	}
 	manifest, _ := json.MarshalIndent(info, "", "  ")
 	if err := put("manifest.json", strings.NewReader(string(manifest)), func(int64) {}); err != nil {
@@ -288,7 +338,7 @@ func (a *App) InspectBundle(file string) (BundleInfo, error) {
 // whose name is taken is left as it is and said so in the notes
 // ("volume-kept:<name>", "container-kept:<name>"), beside the engine's own
 // notes on what a container could not carry over.
-func (a *App) ImportBundle(key, file string) ([]string, error) {
+func (a *App) ImportBundle(key, file string, start bool) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*pullTimeout)
 	defer cancel()
 	say := func(text string) { a.emit("transfer", Transfer{Key: key, Text: text}) }
@@ -345,12 +395,36 @@ func (a *App) ImportBundle(key, file string) ([]string, error) {
 			return notes, fmt.Errorf("volume %s: %w", name, err)
 		}
 	}
+	// The folders, back at their paths on this engine's machine: where one
+	// has content already (the same PC's drive, or taken before), it is kept.
+	for _, f := range info.Folders {
+		dir, base := path.Split(f.Path)
+		dir = path.Clean(dir)
+		if rc, err := rt.Volumes().Archive(ctx, dir, base); err == nil {
+			rc.Close()
+			notes = append(notes, "folder-kept:"+f.Path)
+			continue
+		}
+		say(fmt.Sprintf("폴더 %s를 되살리는 중", f.Path))
+		in, err := zr.Open(f.Archive)
+		if err != nil {
+			return notes, fmt.Errorf("the bundle lacks %s", f.Archive)
+		}
+		err = rt.Volumes().Put(ctx, dir, "/", in)
+		in.Close()
+		if err != nil {
+			return notes, fmt.Errorf("folder %s: %w", f.Path, err)
+		}
+		notes = append(notes, "folder-made:"+f.Path)
+	}
+
 	names := map[string]bool{}
 	if list, err := rt.Containers().List(ctx); err == nil {
 		for _, c := range list {
 			names[c.Name] = true
 		}
 	}
+	var made []madeContainer
 	for _, c := range info.Containers {
 		if names[c.Name] {
 			notes = append(notes, "container-kept:"+c.Name)
@@ -366,15 +440,121 @@ func (a *App) ImportBundle(key, file string) ([]string, error) {
 		if err != nil {
 			return notes, err
 		}
-		_, more, err := rt.Containers().CreateFrom(ctx, raw, c.Image)
+		id, more, err := rt.Containers().CreateFrom(ctx, raw, c.Image)
 		if err != nil {
 			return notes, fmt.Errorf("%s: %w", c.Name, portHint(err))
 		}
+		made = append(made, madeContainer{id: id, name: c.Name, raw: raw})
 		for _, n := range more {
 			if !contains(notes, n) {
 				notes = append(notes, n)
 			}
 		}
 	}
+	if start {
+		for _, m := range startOrder(made) {
+			say(fmt.Sprintf("%s: 시작하는 중", m.name))
+			if err := rt.Containers().Start(ctx, m.id); err != nil {
+				notes = append(notes, "start-failed:"+m.name+"="+portHint(err).Error())
+			}
+		}
+	}
 	return notes, nil
+}
+
+// hostPaths gathers the folders and files of the engine's machine to put in
+// a bundle: each once, none inside another already there, and none of the
+// system's own (the engine's socket, /proc, …).
+type hostPaths struct {
+	all []struct {
+		path    string
+		compose bool
+	}
+}
+
+func (h *hostPaths) add(p string, compose bool) {
+	p = path.Clean(strings.ReplaceAll(p, "\\", "/"))
+	if !path.IsAbs(p) || p == "/" || systemPath(p) {
+		return
+	}
+	for i, have := range h.all {
+		if have.path == p || strings.HasPrefix(p, have.path+"/") {
+			return
+		}
+		if strings.HasPrefix(have.path, p+"/") {
+			h.all[i].path = p // a folder that holds one already there
+			return
+		}
+	}
+	h.all = append(h.all, struct {
+		path    string
+		compose bool
+	}{p, compose})
+}
+
+func (h *hostPaths) list() []struct {
+	path    string
+	compose bool
+} {
+	return h.all
+}
+
+// systemPath is a path of the machine itself, mounted for what it is there
+// (the engine's socket, devices, the clock), not for its content.
+func systemPath(p string) bool {
+	for _, root := range []string{"/proc", "/sys", "/dev", "/run", "/var/run", "/var/lib/docker", "/etc/localtime", "/etc/timezone", "/tmp/.X11-unix", "/lib/modules", "/boot"} {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+type madeContainer struct {
+	id, name string
+	raw      []byte
+}
+
+// startOrder puts the containers of a Compose project after those they
+// depend on (its depends_on, kept in a label), the others as they came.
+func startOrder(made []madeContainer) []madeContainer {
+	service := map[string]int{} // project/service → index
+	needs := make([][]string, len(made))
+	for i, m := range made {
+		var c struct {
+			Config struct{ Labels map[string]string }
+		}
+		_ = json.Unmarshal(m.raw, &c)
+		l := c.Config.Labels
+		p := l["com.docker.compose.project"]
+		if s := l["com.docker.compose.service"]; s != "" {
+			service[p+"/"+s] = i
+		}
+		for _, d := range strings.Split(l["com.docker.compose.depends_on"], ",") {
+			if name, _, _ := strings.Cut(strings.TrimSpace(d), ":"); name != "" {
+				needs[i] = append(needs[i], p+"/"+name)
+			}
+		}
+	}
+	var out []madeContainer
+	done := make([]bool, len(made))
+	var visit func(i int, depth int)
+	visit = func(i int, depth int) {
+		if done[i] || depth > len(made) {
+			return
+		}
+		for _, n := range needs[i] {
+			if j, ok := service[n]; ok {
+				visit(j, depth+1)
+			}
+		}
+		if !done[i] {
+			done[i] = true
+			out = append(out, made[i])
+		}
+	}
+	for i := range made {
+		visit(i, 0)
+	}
+	return out
 }

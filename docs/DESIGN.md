@@ -209,11 +209,14 @@ manifest.json           무엇이 들었는지 (형식 번호, 만든 버전, �
 containers/<n>.json     엔진이 준 컨테이너 설명(inspect) 그대로
 images/<n>.tar          이미지 (docker save 형식). "바뀐 파일 포함"이면 지금 상태를 이미지로 만든 것
 volumes/<이름>.tar       볼륨 데이터
+folders/<n>.tar         컨테이너가 연결한 엔진 컴퓨터의 폴더 · 파일, Compose 파일 (같은 경로에 되살림)
 ```
 
 가져올 때는 이미지 넣기 → 볼륨 채우기 → 컨테이너 만들기(시작하지 않음) 순서로 한다. 같은 이름의 볼륨이나 컨테이너가 이미 있으면 건드리지 않고 알린다. Docker와 containerd는 설명의 모양이 조금 달라서, 각 어댑터의 `CreateFrom`이 상대의 설명도 읽는다. 엔진 사이의 복사도 같은 부품을 쓴다.
 
 자리를 확인하는 이미지(MAC 주소 · 호스트 이름에 묶인 라이선스)와 Compose 프로젝트(서비스끼리 네트워크의 별칭으로 찾음)가 받는 쪽에서도 그대로 돌도록, Docker 어댑터의 `CreateFrom`(`engine/docker/keep.go`)은 컨테이너를 원래 네트워크에 다시 놓는다: 받는 쪽에 없는 네트워크는 컨테이너가 있던 주소 범위(주소와 접두 길이, 아직 돈 적 없으면 고정 주소의 /24)와 게이트웨이로 만들고, Compose 프로젝트의 것이면 Compose가 자기 것으로 알아보는 라벨(`com.docker.compose.project` · `network`)을 붙인다. 각 네트워크의 별칭 · 고정 IP와, 사용자가 정한 MAC 주소(API 1.51까지의 `Config.MacAddress`; 엔진이 지어 준 MAC은 옮기지 않는다)를 끝점 설정으로 준다. 첫 네트워크는 만들 때, 나머지는 만든 뒤 연결한다. 그 주소 범위가 받는 쪽에서 이미 쓰이면 엔진이 고른 범위로 만들고 고정 IP는 지키지 못했다고 알린다. containerd(nerdctl) 어댑터는 아직 기본 네트워크에 놓는다. "설정 바꿔 다시 만들기"(환경변수 고치기 포함)도 옛 컨테이너의 설명을 `RunSpec.From`으로 넘겨, 실행 창에 없는 설정(호스트 이름, MAC, 권한 cap_add · cap_drop, extra_hosts, 장치, DNS, sysctls, ulimits, init, 자원 제한, 같은 이미지면 entrypoint · 작업 폴더)과 같은 네트워크면 그 자리(별칭 · 고정 IP · 다른 네트워크)를 지킨다.
+
+"연결한 폴더와 Compose 파일 포함"(기본 켬)이면 각 컨테이너의 바인드 마운트 원본과 Compose 라벨(`com.docker.compose.project.config_files` · `environment_file`)의 파일을 담는다. 엔진의 컴퓨터(WSL 배포판 등)에 있는 것이라 앱이 직접 읽지 못하므로, 그 경로의 부모 폴더를 마운트한 도우미 컨테이너로 읽고(`Volumes().Archive`에 경로를 줌) 가져올 때도 같은 방법으로 쓴다(`Volumes().Put`, 엔진이 없는 폴더를 만듦). 같은 경로에 이미 있으면(같은 PC의 `/mnt/c` 등) 건드리지 않는다. 시스템 경로(`/proc`, `/run`, 엔진의 소켓 등)와 다른 것 안에 든 경로는 빼고, 하나로 묶는다. 경로가 같으므로 Compose 라벨이 가리키는 파일이 받는 쪽에도 생겨 Compose 화면에서 그대로 다룬다. 다른 엔진으로 복사도 같은 부품(`copyHostPath`)을 쓴다. "가져온 뒤 바로 시작"은 Compose의 depends_on 라벨로 순서를 정해 시작한다.
 
 파일에는 환경변수(비밀번호 포함)와 볼륨 데이터가 그대로 들어간다. 화면에서 이를 알린다.
 

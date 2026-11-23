@@ -1380,6 +1380,9 @@ func (a *App) CopyVolume(key, name, targetID string) error {
 type CopyOptions struct {
 	Changes bool `json:"changes"` // the files written in the container since it was made
 	Volumes bool `json:"volumes"` // the data of the volumes it uses
+	// Folders: the folders of the engine's machine it mounts, and its
+	// Compose project's files (bundles only).
+	Folders bool `json:"folders"`
 }
 
 // CopyContainer makes a container like this one on another engine, without
@@ -1402,8 +1405,11 @@ func (a *App) CopyContainer(key, id, targetID string, o CopyOptions) ([]string, 
 	}
 	var info struct {
 		Name   string
-		Config struct{ Image string }
-		Mounts []struct{ Type, Name string }
+		Config struct {
+			Image  string
+			Labels map[string]string
+		}
+		Mounts []struct{ Type, Name, Source, Destination string }
 	}
 	if err := json.Unmarshal(raw, &info); err != nil {
 		return nil, err
@@ -1456,11 +1462,38 @@ func (a *App) CopyContainer(key, id, targetID string, o CopyOptions) ([]string, 
 			}
 		}
 	}
+	// The folders it mounts from the engine's machine, and its Compose
+	// project's files: at the same path there, unless already there.
+	var moved []string
+	if o.Folders {
+		paths := &hostPaths{}
+		for _, m := range info.Mounts {
+			if m.Type == "bind" && !engine.OwnMount(m.Source, m.Destination) {
+				paths.add(m.Source, false)
+			}
+		}
+		for _, key := range []string{"com.docker.compose.project.config_files", "com.docker.compose.project.environment_file"} {
+			for _, f := range strings.Split(info.Config.Labels[key], ",") {
+				paths.add(strings.TrimSpace(f), true)
+			}
+		}
+		for _, f := range paths.list() {
+			note, err := copyHostPath(ctx, src, dst, f.path, say)
+			if err != nil {
+				undo()
+				return nil, fmt.Errorf("folder %s: %w", f.path, err)
+			}
+			if note != "" {
+				moved = append(moved, note)
+			}
+		}
+	}
 	say("받는 쪽에 컨테이너를 만드는 중")
 	_, notes, err := dst.Containers().CreateFrom(ctx, raw, ref)
 	if notes == nil {
 		notes = []string{}
 	}
+	notes = append(moved, notes...)
 	if err != nil {
 		undo()
 		err = portHint(err)
@@ -1651,4 +1684,26 @@ func (a *App) SetKeepEngine(on bool) error {
 		return provision.Keep(distro, on)
 	}
 	return nil
+}
+
+// copyHostPath puts a folder or file of one engine's machine at the same
+// path on another's, unless that one has it already. It returns a note:
+// "folder-made:<path>", "folder-kept:<path>", or "" when the source has none.
+func copyHostPath(ctx context.Context, src, dst engine.Runtime, p string, say func(string)) (string, error) {
+	dir, base := path.Split(p)
+	dir = path.Clean(dir)
+	if rc, err := dst.Volumes().Archive(ctx, dir, base); err == nil {
+		rc.Close()
+		return "folder-kept:" + p, nil
+	}
+	rc, err := src.Volumes().Archive(ctx, dir, base)
+	if err != nil {
+		return "", nil // gone from where it was: nothing to bring
+	}
+	defer rc.Close()
+	say(fmt.Sprintf("폴더 %s를 보내는 중", p))
+	if err := dst.Volumes().Put(ctx, dir, "/", rc); err != nil {
+		return "", err
+	}
+	return "folder-made:" + p, nil
 }

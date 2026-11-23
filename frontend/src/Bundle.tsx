@@ -9,6 +9,7 @@ interface Info {
   runtime: string;
   containers: { name: string; image: string; volumes: string[] }[];
   volumes: string[];
+  folders?: { path: string; compose?: boolean }[];
 }
 
 let serial = 0;
@@ -46,6 +47,10 @@ function Steps({ steps, busy }: { steps: string[]; busy: boolean }) {
 export function importNotes(notes: string[]) {
   return explain(notes).map((n) => {
     if (n.startsWith("volume-kept:")) return `볼륨 "${n.slice(12)}"은(는) 이미 있어서 그대로 두었습니다. 파일의 데이터로 바꾸려면 그 볼륨을 지운 뒤 다시 가져오세요.`;
+    if (n.startsWith("start-failed:")) {
+      const [name, ...why] = n.slice(13).split("=");
+      return `컨테이너 "${name}"을(를) 시작하지 못했습니다: ${why.join("=")}`;
+    }
     if (n.startsWith("container-kept:")) return `컨테이너 "${n.slice(15)}"은(는) 같은 이름이 이미 있어서 만들지 않았습니다.`;
     return n;
   });
@@ -64,6 +69,7 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
   const [ids, setIds] = useState<string[]>(picked);
   const [changes, setChanges] = useState(true);
   const [volumes, setVolumes] = useState(true);
+  const [folders, setFolders] = useState(true);
   const [file, setFile] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -100,7 +106,7 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
     const target = remote() ? await call<string>("PickExportFileDefault", base) : where;
     const ok = await run(`# ${names} 를 파일 하나로: docker commit → docker save, 볼륨은 tar 로 → ${remote() ? base + ".boxforge" : target}`, async () => {
       try {
-        await call("ExportBundle", key, ids, target, { changes, volumes });
+        await call("ExportBundle", key, ids, target, { changes, volumes, folders });
       } catch (e: any) {
         failed = e.message;
         throw e;
@@ -153,6 +159,15 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
           <span className="sub">데이터베이스 내용처럼 볼륨에 든 것입니다. 비밀번호 같은 민감한 값이 들어 있을 수 있으니 파일을 건넬 때 주의하세요.</span>
         </span>
       </label>
+      <label className="check option">
+        <input type="checkbox" checked={folders} disabled={busy} onChange={(e) => setFolders(e.target.checked)} />
+        <span>
+          연결한 폴더와 Compose 파일 포함
+          <span className="sub">
+            Compose의 ./config 처럼 컨테이너가 엔진의 컴퓨터에서 연결해 쓰는 폴더 · 파일과, 프로젝트의 compose.yaml · .env입니다. 가져오는 쪽에서 같은 경로에 되살려, 설정 그대로 돌고 Compose 화면에서도 다룰 수 있습니다.
+          </span>
+        </span>
+      </label>
       <label className="file-line" hidden={remote()}>
         저장할 파일
         <div className="pair">
@@ -163,7 +178,12 @@ export function ExportDialog({ containers, picked, run, onClose, onDone }: Expor
         </div>
         {!file.trim() && suggested && <span className="help">비워 두면 흐리게 보이는 곳에 저장합니다.</span>}
       </label>
-      <p className="muted footnote">환경변수(비밀번호 포함)와 포트 설정도 함께 담깁니다. 내 PC의 폴더를 연결한 부분은 경로만 담기고 폴더의 내용은 담기지 않습니다.</p>
+      <p className="muted footnote">환경변수(비밀번호 포함)와 포트 · 네트워크 설정(고정 IP, MAC 주소)도 함께 담깁니다.{folders ? "" : " 연결한 폴더는 경로만 담기고 내용은 담기지 않습니다."}</p>
+      {volumes && chosen.some((c) => c.state === "running" && c.volumes.length > 0) && (
+        <p className="note-box" data-testid="export-running">
+          실행 중인 상태로도 내보낼 수 있습니다. 다만 데이터베이스처럼 볼륨에 계속 쓰는 앱은 담는 도중에 바뀐 내용이 어긋날 수 있으니, 그런 프로젝트는 멈춘 뒤 내보내는 편이 안전합니다.
+        </p>
+      )}
       <Steps steps={steps} busy={busy} />
       {error && (
         <p className="warn" role="alert">
@@ -192,6 +212,7 @@ interface ImportProps {
 export function ImportDialog({ run, onClose, onDone }: ImportProps) {
   const [file, setFile] = useState("");
   const [info, setInfo] = useState<Info | null>(null);
+  const [start, setStart] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const key = useRef(`b${++serial}`).current;
@@ -253,9 +274,9 @@ export function ImportDialog({ run, onClose, onDone }: ImportProps) {
     setSteps([]);
     let failed = "";
     let notes: string[] = [];
-    const ok = await run(`# ${file} 에서: docker load, 볼륨 데이터 풀기, docker create`, async () => {
+    const ok = await run(`# ${file} 에서: docker load, 볼륨 데이터 풀기, 폴더 되살리기, docker create${start ? ", docker start (depends_on 순서)" : ""}`, async () => {
       try {
-        notes = (await call<string[]>("ImportBundle", key, file)) ?? [];
+        notes = (await call<string[]>("ImportBundle", key, file, start)) ?? [];
       } catch (e: any) {
         failed = e.message;
         throw e;
@@ -303,12 +324,33 @@ export function ImportDialog({ run, onClose, onDone }: ImportProps) {
               </li>
             ))}
           </ul>
+          {(info.folders ?? []).length > 0 && (
+            <>
+              <strong>같은 경로에 되살릴 폴더 · 파일</strong>
+              <ul data-testid="bundle-folders">
+                {info.folders!.map((f) => (
+                  <li key={f.path}>
+                    <code>{f.path}</code> {f.compose && <span className="muted">(Compose 파일)</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <span className="sub">
             {new Date(info.created * 1000).toLocaleString()} · BoxForge {info.app} · {info.runtime === "containerd" ? "containerd" : "Docker"}에서 내보냄
           </span>
         </div>
       )}
-      {info && <p className="muted footnote">같은 이름의 컨테이너나 볼륨이 이미 있으면 건드리지 않고 건너뜁니다. 모르는 사람이 준 파일은 가져오지 마세요: 컨테이너는 내 PC의 폴더와 포트를 쓸 수 있습니다.</p>}
+      {info && (
+        <label className="check option">
+          <input type="checkbox" checked={start} disabled={busy} onChange={(e) => setStart(e.target.checked)} />
+          <span>
+            가져온 뒤 바로 시작
+            <span className="sub">Compose 프로젝트는 depends_on 순서대로 시작합니다. 원래 엔진(예: Kiri)에서 같은 포트로 아직 돌고 있으면 포트가 겹쳐 시작하지 못하니, 그쪽을 먼저 멈추세요.</span>
+          </span>
+        </label>
+      )}
+      {info && <p className="muted footnote">같은 이름의 컨테이너나 볼륨이 이미 있으면 건드리지 않고 건너뜁니다. 같은 경로에 내용이 이미 있는 폴더도 그대로 둡니다. 모르는 사람이 준 파일은 가져오지 마세요: 컨테이너는 내 PC의 폴더와 포트를 쓸 수 있습니다.</p>}
       <Steps steps={steps} busy={busy} />
       {error && (
         <p className="warn" role="alert">

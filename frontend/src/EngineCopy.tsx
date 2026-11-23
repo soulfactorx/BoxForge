@@ -147,6 +147,8 @@ export function explain(notes: string[]) {
       const [net, ip] = value.split("=");
       return `네트워크 "${net}"의 주소 범위가 받는 쪽에서 이미 쓰이고 있어, 고정 IP ${ip}를 지키지 못했습니다(엔진이 새 주소를 줌).`;
     }
+    if (kind === "folder-made") return `폴더 ${value} 를 같은 경로에 되살렸습니다.`;
+    if (kind === "folder-kept") return `폴더 ${value} 는 이 엔진의 컴퓨터에 이미 있어서 그대로 두었습니다(같은 PC의 드라이브이거나 전에 가져온 것).`;
     if (kind === "bind") return `내 PC의 폴더 ${value} 를 그대로 가리킵니다. 받는 쪽 엔진에서도 같은 경로가 보여야 합니다.`;
     return n;
   });
