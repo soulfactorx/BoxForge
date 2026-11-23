@@ -130,3 +130,36 @@ test("a Compose project is exported with its folders and files, and comes back w
     sh(`${compose} down`, true);
   }
 });
+
+test("an image made on this PC comes back under its own name, for Compose to find", async ({ page }) => {
+  sh(`docker tag ${ALPINE} bfe2e-own:v1`);
+  sh(`docker run -d --name bfe2e-own bfe2e-own:v1 sleep 1d`);
+  const file = join(mkdtempSync(join(tmpdir(), "bfe2e-bundle-")), "own.boxforge");
+  try {
+    await open(page);
+    await go(page, "containers");
+    await page.locator("tr", { hasText: "bfe2e-own" }).getByRole("button", { name: "더보기" }).click();
+    await page.getByRole("menuitem", { name: "파일로 내보내기" }).click();
+    const dlg = page.getByRole("dialog");
+    // The container's changes go in: as an image of the journey's own name.
+    await expect(dlg.getByRole("checkbox", { name: /컨테이너 안에서 바뀐 파일 포함/ })).toBeChecked();
+    await dlg.getByLabel("저장할 파일").fill(file);
+    await dlg.getByRole("button", { name: "내보내기", exact: true }).click();
+    await expect(page.getByText("파일로 내보냈습니다")).toBeVisible({ timeout: 90_000 });
+
+    // Another engine: neither the container nor the image is there.
+    sh(`docker rm -f bfe2e-own`);
+    sh(`docker rmi bfe2e-own:v1`);
+    await page.getByRole("button", { name: "가져오기", exact: true }).click();
+    await dlg.getByLabel("가져올 파일").fill(file);
+    await dlg.getByRole("button", { name: "열기" }).click();
+    await dlg.getByRole("button", { name: "가져오기", exact: true }).click();
+    await expect(page.getByText(/가져왔습니다: /)).toBeVisible({ timeout: 90_000 });
+    expect(sh(`docker inspect bfe2e-own --format '{{.Config.Image}}'`)).toBe("bfe2e-own:v1");
+    expect(sh(`docker image inspect bfe2e-own:v1 --format ok`)).toBe("ok");
+    expect(sh(`docker images --format '{{.Repository}}' | grep -c 'boxforge-export/bfe2e-own' || true`)).toBe("0");
+  } finally {
+    sh(`docker rm -f bfe2e-own`, true);
+    sh(`docker rmi bfe2e-own:v1`, true);
+  }
+});

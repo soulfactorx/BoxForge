@@ -1489,7 +1489,11 @@ func (a *App) CopyContainer(key, id, targetID string, o CopyOptions) ([]string, 
 		}
 	}
 	say("받는 쪽에 컨테이너를 만드는 중")
-	_, notes, err := dst.Containers().CreateFrom(ctx, raw, ref)
+	made := ref
+	if o.Changes {
+		made = asOriginal(ctx, dst, ref, info.Config.Image)
+	}
+	_, notes, err := dst.Containers().CreateFrom(ctx, raw, made)
 	if notes == nil {
 		notes = []string{}
 	}

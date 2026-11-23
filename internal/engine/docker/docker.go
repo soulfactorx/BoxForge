@@ -563,11 +563,21 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 	// container (an app reaching a port published on the PC, a database
 	// say), and a plain Docker engine doesn't: given there too.
 	hostName := c.givesHostName(ctx)
+	var hosts []string
 	for _, h := range host.ExtraHosts {
-		if strings.HasPrefix(h, "host.docker.internal:") || strings.HasPrefix(h, "host.docker.internal=") {
+		ours := h == "host.docker.internal:host-gateway" || h == "host.docker.internal=host-gateway"
+		switch {
+		case ours && hostName:
+			// Given where it came from (by BoxForge, on a plain Docker
+			// engine): here the engine gives its own, which must not be
+			// covered.
+			continue
+		case strings.HasPrefix(h, "host.docker.internal:") || strings.HasPrefix(h, "host.docker.internal="):
 			hostName = true
 		}
+		hosts = append(hosts, h)
 	}
+	host.ExtraHosts = hosts
 	if !hostName {
 		host.ExtraHosts = append(host.ExtraHosts, "host.docker.internal:host-gateway")
 	}

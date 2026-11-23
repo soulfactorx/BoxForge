@@ -212,7 +212,7 @@ func (c containers) givesHostName(ctx context.Context) bool {
 	if err != nil {
 		return true // unknown: left to the engine
 	}
-	look := strings.ToLower(i.OperatingSystem + " " + i.Name + " " + i.DockerRootDir + " " + i.ServerVersion)
+	look := strings.ToLower(strings.Join(append([]string{i.OperatingSystem, i.Name, i.DockerRootDir, i.ServerVersion, i.Driver, i.InitBinary, i.KernelVersion}, i.Labels...), " "))
 	if strings.Contains(look, "docker desktop") || strings.Contains(look, "kiri") || strings.Contains(look, "podman") {
 		return true
 	}

@@ -442,7 +442,9 @@ func (a *App) ImportBundle(key, file string, start bool) ([]string, error) {
 		if err != nil {
 			return notes, err
 		}
-		id, more, err := rt.Containers().CreateFrom(ctx, raw, c.Image)
+		var desc struct{ Config struct{ Image string } }
+		_ = json.Unmarshal(raw, &desc)
+		id, more, err := rt.Containers().CreateFrom(ctx, raw, asOriginal(ctx, rt, c.Image, desc.Config.Image))
 		if err != nil {
 			return notes, fmt.Errorf("%s: %w", c.Name, portHint(err))
 		}
@@ -735,4 +737,22 @@ func (a *App) waitFor(ctx context.Context, d dependency, say func(string)) strin
 		}
 	}
 	return "wait-failed:" + d.name + "=not healthy within 15 minutes"
+}
+
+// asOriginal gives an image carried under a name of the journey (the
+// container's state made into an image, "boxforge-export/…") the name its
+// container's image had, unless the engine has that name already, and
+// returns the name to make the container from. Compose looks its images up
+// by those names: without them, "up" went to fetch nexadmin:v1 from the
+// internet.
+func asOriginal(ctx context.Context, rt engine.Runtime, carried, original string) string {
+	if original == "" || original == carried || strings.HasPrefix(original, "sha256:") || rt.Images().Exists(ctx, original) {
+		return carried
+	}
+	if err := rt.Images().Tag(ctx, carried, original); err != nil {
+		return carried
+	}
+	// The journey's name, no longer needed: only the name comes off.
+	_ = rt.Images().Remove(ctx, carried, false)
+	return original
 }
