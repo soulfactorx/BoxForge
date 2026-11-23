@@ -189,6 +189,17 @@ export default function Kubernetes({
   // Whether the lists have been read once: until then "none" would be a guess.
   const [loaded, setLoaded] = useKept("loaded", false);
   const [deploying, setDeploying] = useState(false);
+  // The deploy form's list of settings to pass in: read while it is open,
+  // whatever tab is behind it (a slow cluster may not answer the first time).
+  useEffect(() => {
+    if (!deploying) return;
+    const read = () => {
+      for (const [kind, set] of [["configmaps", setConfigs], ["secrets", setSecrets]] as const) call<string>("KubeGet", kind).then((j) => set(JSON.parse(j).items ?? []), () => {});
+    };
+    read();
+    const t = setInterval(read, 5000);
+    return () => clearInterval(t);
+  }, [deploying]);
   const [making, setMaking] = useState<"data" | "pvc" | null>(null);
   const [working, setWorking] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -526,8 +537,6 @@ export default function Kubernetes({
             <button
               className="primary"
               onClick={() => {
-                // Its list of settings to pass in: read now, whatever tab is open.
-                for (const [kind, set] of [["configmaps", setConfigs], ["secrets", setSecrets]] as const) call<string>("KubeGet", kind).then((j) => set(JSON.parse(j).items ?? []), () => {});
                 setDeployInit(undefined);
                 setDeploying(true);
               }}
