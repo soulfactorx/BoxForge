@@ -7,12 +7,16 @@ package app
 // said, not guessed at.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,6 +32,16 @@ type KubePlan struct {
 	Images []string `json:"images"`
 	// Notes: what doesn't carry over, in plain words.
 	Notes []string `json:"notes"`
+	// Volumes: the project's named volumes, each become a claim, whose data
+	// can be copied over after the deployment.
+	Volumes []KubeVolume `json:"volumes"`
+}
+
+// KubeVolume is one of a project's volumes and the claim it becomes.
+type KubeVolume struct {
+	Volume      string   `json:"volume"` // the engine's volume ("project_name")
+	Claim       string   `json:"claim"`
+	Deployments []string `json:"deployments"` // those that mount it
 }
 
 // ComposeToKube reads a Compose project as Compose itself does and turns it
@@ -58,7 +72,8 @@ type composeFile struct {
 	Name     string                        `json:"name"`
 	Services map[string]kubeComposeService `json:"services"`
 	Volumes  map[string]struct {
-		External bool `json:"external"`
+		Name     string `json:"name"`
+		External bool   `json:"external"`
 	} `json:"volumes"`
 }
 
@@ -107,7 +122,8 @@ func composeToKube(project string, raw []byte) (KubePlan, error) {
 		project = c.Name
 	}
 	ns := dnsName(project)
-	plan := KubePlan{Namespace: ns, Deployments: []string{}, Built: []string{}, Images: []string{}, Notes: []string{}}
+	plan := KubePlan{Namespace: ns, Deployments: []string{}, Built: []string{}, Images: []string{}, Notes: []string{}, Volumes: []KubeVolume{}}
+	byClaim := map[string]int{} // claim → index in plan.Volumes
 	note := func(format string, args ...any) { plan.Notes = append(plan.Notes, fmt.Sprintf(format, args...)) }
 
 	docs := []map[string]any{{
@@ -137,16 +153,20 @@ func composeToKube(project string, raw []byte) (KubePlan, error) {
 			note("서비스 %s에는 이미지가 없어 건너뜁니다.", svc)
 			continue
 		}
-		if s.Build != nil {
+		// Once each: services often share an image.
+		if s.Build != nil && !slices.Contains(plan.Built, image) {
 			plan.Built = append(plan.Built, image)
 		}
-		plan.Images = append(plan.Images, image)
-
-		container := map[string]any{"name": name, "image": image}
-		if s.Build != nil {
-			// Built here: what the cluster has, not fetched from anywhere.
-			container["imagePullPolicy"] = "IfNotPresent"
+		if !slices.Contains(plan.Images, image) {
+			plan.Images = append(plan.Images, image)
 		}
+
+		// What the cluster has is used before anything is fetched: the
+		// project's images are put in from the engine when it has them (a
+		// project often runs images made or tagged on this PC alone, not
+		// only the ones it builds), and ":latest" would otherwise be
+		// fetched again every time, and fail for those.
+		container := map[string]any{"name": name, "image": image, "imagePullPolicy": "IfNotPresent"}
 		// Compose's entrypoint is the program, its command the arguments:
 		// Kubernetes calls them command and args.
 		if len(s.Entrypoint) > 0 {
@@ -235,7 +255,17 @@ func composeToKube(project string, raw []byte) (KubePlan, error) {
 							"resources":   map[string]any{"requests": map[string]any{"storage": "1Gi"}},
 						},
 					})
-					note("볼륨 %s는 새 저장소 %s(1GB)가 됩니다. 지금 볼륨에 든 데이터는 옮겨지지 않습니다.", v.Source, claim)
+					engineName := c.Volumes[v.Source].Name
+					if engineName == "" {
+						engineName = project + "_" + v.Source
+					}
+					byClaim[claim] = len(plan.Volumes)
+					plan.Volumes = append(plan.Volumes, KubeVolume{Volume: engineName, Claim: claim, Deployments: []string{}})
+					note("볼륨 %s는 새 저장소 %s(1GB)가 됩니다.", v.Source, claim)
+				}
+				kv := &plan.Volumes[byClaim[claim]]
+				if len(kv.Deployments) == 0 || kv.Deployments[len(kv.Deployments)-1] != name {
+					kv.Deployments = append(kv.Deployments, name)
 				}
 				volumes = append(volumes, map[string]any{"name": vol, "persistentVolumeClaim": map[string]any{"claimName": claim}})
 			case v.Type == "volume" || v.Type == "tmpfs":
@@ -352,4 +382,115 @@ func composeToKube(project string, raw []byte) (KubePlan, error) {
 	}
 	plan.YAML = out.String()
 	return plan, nil
+}
+
+// The script that unpacks a volume's archive into a claim's folder in the
+// cluster container, in place of what is there. An archive of a folder
+// holds it under its own name: its content is what is copied.
+const kubeFillScript = `set -e
+d="$1"
+t=$(mktemp -d)
+tar -xf - -C "$t"
+find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+set -- "$t"/*
+if [ $# -eq 1 ] && [ -d "$1" ]; then src="$1"; else src="$t"; fi
+cp -a "$src"/. "$d"/
+rm -rf "$t"
+echo copied`
+
+// KubeMoveVolume copies an engine volume's data into a claim made from it.
+// The claim gets its place once a pod uses it; the deployments using it are
+// stopped meanwhile (an app such as a database must not run while its data
+// is swapped under it, and one that made itself an empty one is given the
+// real one), then started again as they were.
+func (a *App) KubeMoveVolume(namespace, claim, volume string, deployments []string) error {
+	if _, err := kubeRef("persistentvolumeclaim", namespace, claim); err != nil {
+		return err
+	}
+	for _, d := range deployments {
+		if _, err := kubeRef("deployment", namespace, d); err != nil {
+			return err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	// 1. Its place, made when a pod first uses it.
+	var pv string
+	for deadline := time.Now().Add(5 * time.Minute); ; {
+		out, _ := a.kubectl(ctx, nil, "get", "pvc", claim, "-n", namespace, "-o", "jsonpath={.status.phase} {.spec.volumeName}")
+		if f := strings.Fields(out); len(f) == 2 && f[0] == "Bound" {
+			pv = f[1]
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("storage %s got no place in 5 minutes (its pod hasn't started); its data was not copied", claim)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	path, err := a.kubectl(ctx, nil, "get", "pv", pv, "-o", "jsonpath={.spec.hostPath.path}{.spec.local.path}")
+	if err != nil {
+		return err
+	}
+	if path = strings.TrimSpace(path); !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("storage %s is not a folder in the cluster (%q); its data was not copied", claim, path)
+	}
+
+	// 2. Its users stopped, to be started again whatever happens.
+	replicas := map[string]string{}
+	for _, d := range deployments {
+		n, err := a.kubectl(ctx, nil, "get", "deployment", d, "-n", namespace, "-o", "jsonpath={.spec.replicas}")
+		if err != nil {
+			return err
+		}
+		replicas[d] = strings.TrimSpace(n)
+		if _, err := a.kubectl(ctx, nil, "scale", "deployment", d, "-n", namespace, "--replicas=0"); err != nil {
+			return err
+		}
+	}
+	defer func() {
+		back, stop := context.WithTimeout(context.Background(), time.Minute)
+		defer stop()
+		for d, n := range replicas {
+			if n == "" {
+				n = "1"
+			}
+			_, _ = a.kubectl(back, nil, "scale", "deployment", d, "-n", namespace, "--replicas="+n)
+		}
+	}()
+	for _, d := range deployments {
+		_, _ = a.kubectl(ctx, nil, "wait", "--for=delete", "pod", "-l", "app="+d, "-n", namespace, "--timeout=120s")
+	}
+
+	// 3. The data, from the engine's volume into its place.
+	data, err := a.eng().Volumes().Archive(ctx, volume, "/")
+	if err != nil {
+		return err
+	}
+	defer data.Close()
+	p, err := a.eng().Containers().Pipe(ctx, kubeContainer, []string{"sh", "-c", kubeFillScript, "sh", path})
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+	said := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(io.LimitReader(p, 1<<20))
+		said <- string(b)
+	}()
+	if _, err := io.Copy(p, data); err != nil {
+		return err
+	}
+	if c, ok := p.(interface{ CloseWrite() error }); ok {
+		_ = c.CloseWrite()
+	}
+	select {
+	case out := <-said:
+		if !strings.Contains(out, "copied") {
+			return fmt.Errorf("the data could not be put in place: %s", strings.TrimSpace(out))
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

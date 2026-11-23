@@ -114,9 +114,17 @@ func (a *App) KubeForward(namespace, service string, port, local int) (Forward, 
 	if err := a.forwardReady(ctx); err != nil {
 		return Forward{}, err
 	}
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(local)))
+	// The port asked for, or, when another program holds it, the next free
+	// one: the forward made says which it got.
+	var ln net.Listener
+	for try := local; ; try++ {
+		ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(try)))
+		if err == nil || local == 0 || try >= local+20 || try >= 65535 {
+			break
+		}
+	}
 	if err != nil {
-		return Forward{}, fmt.Errorf("port %d on this PC is taken or not allowed: %w", local, err)
+		return Forward{}, fmt.Errorf("ports %d to %d on this PC are all in use by other programs; leave the port empty to take any free one", local, min(local+20, 65535))
 	}
 	run, stop := context.WithCancel(context.Background())
 	forwards.Lock()

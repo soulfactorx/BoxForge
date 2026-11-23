@@ -161,7 +161,7 @@ function bindings(info: any, c: Container): { a: string; b: string }[] {
 }
 
 /** Reads a container's settings back into the form that made it. */
-async function settingsOf(c: Container): Promise<RunInit> {
+export async function settingsOf(c: Container): Promise<RunInit> {
   const info = JSON.parse(await call<string>("InspectContainer", c.id));
   const env: string[] = info?.Config?.Env ?? [];
   const mode: string = info?.HostConfig?.NetworkMode ?? "";

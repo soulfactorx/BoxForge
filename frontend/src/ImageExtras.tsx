@@ -1,60 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { call, on, type Run } from "./bridge";
 import { ago, bytes } from "./format";
-import { Dialog } from "./ui";
+import { CopyButton, Dialog, IconButton } from "./ui";
 
 interface Layer {
   command: string;
   size: number;
   created: number;
-}
-
-/** The steps an image was built in, with what each added. */
-export function LayersDialog({ image, showCli, onClose }: { image: string; showCli: (cmd: string) => void; onClose: () => void }) {
-  const [layers, setLayers] = useState<Layer[] | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    showCli(`docker history ${image}`);
-    call<Layer[]>("ImageHistory", image).then(setLayers, (e) => setError(e.message));
-  }, [image]);
-  const biggest = Math.max(1, ...(layers ?? []).map((l) => l.size));
-  const total = (layers ?? []).reduce((n, l) => n + l.size, 0);
-  return (
-    <Dialog title={`${image} 의 레이어`} onClose={onClose} wide>
-      <p className="muted">
-        이미지는 만들 때의 단계가 한 겹씩 쌓인 것입니다. 아래는 가장 나중 단계부터이며, 막대는 그 단계가 더한 크기입니다. 크기가 0인 단계는 파일을 바꾸지 않고 설정만
-        적은 것입니다.
-      </p>
-      {error && (
-        <p className="warn" role="alert">
-          {error}
-        </p>
-      )}
-      {!layers && !error && <p className="muted">읽는 중…</p>}
-      {layers && (
-        <ol className="layers" data-testid="layers">
-          {layers.map((l, i) => (
-            <li key={i} className={l.size === 0 ? "empty" : ""}>
-              <span className="layer-bar">
-                <span style={{ width: `${Math.max(l.size > 0 ? 2 : 0, (l.size * 100) / biggest)}%` }} />
-              </span>
-              <span className="layer-size">{l.size > 0 ? bytes(l.size) : "—"}</span>
-              <code title={l.command}>{l.command || "(명령 기록 없음)"}</code>
-            </li>
-          ))}
-        </ol>
-      )}
-      {layers && (
-        <p className="muted footnote">
-          {layers.length}단계 · 합계 {bytes(total)}
-          {layers[layers.length - 1]?.created > 0 && ` · 가장 아래 단계는 ${ago(layers[layers.length - 1].created)}에 만들어짐`}
-        </p>
-      )}
-      <div className="dialog-actions">
-        <button onClick={onClose}>닫기</button>
-      </div>
-    </Dialog>
-  );
 }
 
 let serial = 0;
@@ -209,5 +161,205 @@ export function HubSearch({ query, showCli, onPick, onClose }: { query: string; 
         <button onClick={onClose}>닫기</button>
       </div>
     </Dialog>
+  );
+}
+
+/** A history line as the Dockerfile step it was: "RUN apk add …", "CMD [\"sh\"]". */
+export function stepOf(command: string): { op: string; text: string } {
+  let c = command.trim();
+  if (!c) return { op: "", text: "" };
+  c = c.replace(/^\/bin\/sh -c #\(nop\)\s+/, "");
+  // BuildKit: "RUN |2 A=1 B=2 /bin/sh -c …" carries its build arguments first.
+  c = c.replace(/^RUN \|\d+ (?:\S+=\S* )*/, "RUN ");
+  c = c.replace(/^(RUN )?\/bin\/sh -c /, "RUN ");
+  const m = /^([A-Z]+)\s+([\s\S]*)$/.exec(c);
+  const ops = ["RUN", "COPY", "ADD", "ENV", "CMD", "ENTRYPOINT", "EXPOSE", "LABEL", "WORKDIR", "USER", "VOLUME", "ARG", "ONBUILD", "SHELL", "STOPSIGNAL", "HEALTHCHECK", "MAINTAINER"];
+  if (m && ops.includes(m[1])) return { op: m[1], text: m[2].replace(/\s+# buildkit$/, "").trim() };
+  return { op: "", text: c };
+}
+
+// What each step does, in a few words.
+const opMeaning: Record<string, string> = {
+  RUN: "명령 실행",
+  COPY: "파일 복사",
+  ADD: "파일 추가",
+  ENV: "환경변수",
+  CMD: "기본 실행 명령",
+  ENTRYPOINT: "실행 프로그램",
+  EXPOSE: "포트 알림",
+  LABEL: "라벨",
+  WORKDIR: "작업 폴더",
+  USER: "사용자",
+  VOLUME: "데이터 폴더",
+  ARG: "빌드 인자",
+  SHELL: "셸",
+  HEALTHCHECK: "상태 검사",
+  STOPSIGNAL: "멈춤 신호",
+  MAINTAINER: "만든 사람",
+  ONBUILD: "나중 빌드",
+};
+
+/** The layers, oldest first as they were built, each as its Dockerfile step. */
+function LayerList({ image, showCli }: { image: string; showCli: (cmd: string) => void }) {
+  const [layers, setLayers] = useState<Layer[] | null>(null);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState<number | null>(null);
+  const [hideEmpty, setHideEmpty] = useState(false);
+  useEffect(() => {
+    showCli(`docker history --no-trunc ${image}`);
+    setLayers(null);
+    call<Layer[]>("ImageHistory", image).then((l) => setLayers([...(l ?? [])].reverse()), (e) => setError(e.message));
+  }, [image]);
+  if (error) return <p className="warn">{error}</p>;
+  if (!layers) return <p className="muted">읽는 중…</p>;
+  const biggest = Math.max(1, ...layers.map((l) => l.size));
+  const total = layers.reduce((n, l) => n + l.size, 0);
+  const shown = layers.map((l, i) => ({ l, i })).filter(({ l }) => !hideEmpty || l.size > 0);
+  return (
+    <div className="layer-list" data-testid="layers">
+      <div className="layer-sum">
+        <span>{`${layers.length}단계 · 합계 ${bytes(total)} · 파일을 바꾼 단계 ${layers.filter((l) => l.size > 0).length}개`}</span>
+        <label className="check">
+          <input type="checkbox" checked={hideEmpty} onChange={(e) => setHideEmpty(e.target.checked)} />
+          크기가 0인 단계 숨기기
+        </label>
+      </div>
+      <p className="muted">위에서부터 만든 순서입니다. 아래로 갈수록 그 위에 쌓은 단계이고, 막대는 그 단계가 더한 크기입니다. 줄을 누르면 명령 전체가 보입니다.</p>
+      <ol className="steps">
+        {shown.map(({ l, i }) => {
+          const s = stepOf(l.command);
+          return (
+            <li key={i} className={(l.size === 0 ? "zero " : "") + (open === i ? "open" : "")} data-testid="layer">
+              <button type="button" className="step-row" aria-expanded={open === i} onClick={() => setOpen(open === i ? null : i)}>
+                <span className="step-no">{i + 1}</span>
+                <span className={"op op-" + (s.op || "none").toLowerCase()} title={opMeaning[s.op] ?? ""}>
+                  {s.op || "—"}
+                </span>
+                <code className="step-text">{s.text || "(명령 기록 없음)"}</code>
+                <span className="step-size">{l.size > 0 ? bytes(l.size) : "0 B"}</span>
+                <span className="layer-bar">
+                  <span style={{ width: `${Math.max(l.size > 0 ? 2 : 0, (l.size * 100) / biggest)}%` }} />
+                </span>
+              </button>
+              {open === i && (
+                <div className="step-more">
+                  <pre>{s.text || l.command}</pre>
+                  <span className="muted">
+                    {opMeaning[s.op] ? `${opMeaning[s.op]} · ` : ""}
+                    {l.created > 0 ? `${ago(l.created)}에 만들어짐` : ""}
+                  </span>
+                  <CopyButton text={l.command} label="명령 복사" />
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+/** What the image is: ids, how it runs, what it declares. */
+function ImageInfo({ image, showCli }: { image: string; showCli: (cmd: string) => void }) {
+  const [info, setInfo] = useState<any>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    showCli(`docker image inspect ${image}`);
+    call<string>("InspectImage", image).then((raw) => setInfo(JSON.parse(raw)), (e) => setError(e.message));
+  }, [image]);
+  if (error) return <p className="warn">{error}</p>;
+  if (!info) return <p className="muted">읽는 중…</p>;
+  const cfg = info.Config ?? {};
+  const list = (v: any) => (Array.isArray(v) ? v.join(" ") : "");
+  const rows: [string, string][] = [
+    ["ID", info.Id ?? ""],
+    ["태그", (info.RepoTags ?? []).join(", ")],
+    ["다이제스트", (info.RepoDigests ?? []).join("\n")],
+    ["만든 때", info.Created ? new Date(info.Created).toLocaleString() : ""],
+    ["크기", info.Size ? bytes(info.Size) : ""],
+    ["종류", [info.Os, info.Architecture, info.Variant].filter(Boolean).join(" / ")],
+    ["실행 프로그램 (ENTRYPOINT)", list(cfg.Entrypoint)],
+    ["기본 명령 (CMD)", list(cfg.Cmd)],
+    ["작업 폴더", cfg.WorkingDir ?? ""],
+    ["사용자", cfg.User ?? ""],
+    ["열어 두는 포트", Object.keys(cfg.ExposedPorts ?? {}).join(", ")],
+    ["데이터 폴더 (VOLUME)", Object.keys(cfg.Volumes ?? {}).join(", ")],
+    ["만든 사람", info.Author ?? ""],
+  ];
+  const env: string[] = cfg.Env ?? [];
+  const labels = Object.entries<string>(cfg.Labels ?? {});
+  return (
+    <div className="image-info" data-testid="image-info">
+      <dl className="facts">
+        {rows
+          .filter(([, v]) => v)
+          .map(([k, v]) => (
+            <div key={k} className="fact">
+              <dt>{k}</dt>
+              <dd>
+                <code>{v}</code>
+                <CopyButton text={v} label={`${k} 복사`} />
+              </dd>
+            </div>
+          ))}
+      </dl>
+      <h3>
+        환경변수 {env.length > 0 && <CopyButton text={env.join("\n")} label="환경변수 모두 복사" />}
+      </h3>
+      {env.length === 0 ? (
+        <p className="muted">—</p>
+      ) : (
+        <ul className="plain env">
+          {env.map((e) => (
+            <li key={e}>
+              <code>{e}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+      {labels.length > 0 && (
+        <>
+          <h3>라벨</h3>
+          <ul className="plain env">
+            {labels.map(([k, v]) => (
+              <li key={k}>
+                <code>{k}</code> = <code>{v}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** An image's own panel: its layers at once, and what it is. */
+export function ImageDetail(props: { image: string; title: string; tab?: "layers" | "info"; showCli: (cmd: string) => void; onRun?: () => void; onClose: () => void }) {
+  const [tab, setTab] = useState<"layers" | "info">(props.tab ?? "layers");
+  return (
+    <aside className="drawer" data-testid="image-detail">
+      <header>
+        <h2>{props.title}</h2>
+        {props.onRun && (
+          <button type="button" className="primary" onClick={props.onRun}>
+            실행
+          </button>
+        )}
+        <IconButton icon="close" label="닫기" onClick={props.onClose} />
+      </header>
+      <div className="tabs" role="tablist">
+        {(
+          [
+            ["layers", "레이어"],
+            ["info", "정보"],
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="drawer-body">{tab === "layers" ? <LayerList image={props.image} showCli={props.showCli} /> : <ImageInfo image={props.image} showCli={props.showCli} />}</div>
+    </aside>
   );
 }

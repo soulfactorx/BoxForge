@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Avatar, splitRef } from "./brand";
 import { call, on, type Container, type Image, type PullState, type Run } from "./bridge";
 import { ago, bytes, isUp, shortId } from "./format";
-import { HubSearch, LayersDialog, PushDialog } from "./ImageExtras";
+import { HubSearch, ImageDetail, PushDialog } from "./ImageExtras";
 import { Dialog, Icon, IconButton, Menu, Progress } from "./ui";
 
 interface Props {
@@ -34,7 +34,8 @@ interface Row {
 }
 
 export default function Images({ images, containers, run, showCli, onRun, onOpen }: Props) {
-  const [layersOf, setLayersOf] = useState<string | null>(null);
+  // The image whose panel is open: its layers, or what it is.
+  const [detailOf, setDetailOf] = useState<{ image: string; title: string; tab: "layers" | "info" } | null>(null);
   const [pushing, setPushing] = useState<string[] | null>(null);
   const [searching, setSearching] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -258,7 +259,14 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
                 <td className="name-cell">
                   <div className="name-wrap">
                     <Avatar image={r.ref} kind="layers" />
-                    <span className={"name" + (r.ref ? "" : " muted")}>{r.repo}</span>
+                    <button
+                      type="button"
+                      className={"link name" + (r.ref ? "" : " muted")}
+                      title="레이어와 정보 보기"
+                      onClick={() => setDetailOf({ image: r.ref || r.im.id, title: r.ref || shortId(r.im.id), tab: "layers" })}
+                    >
+                      {r.repo}
+                    </button>
                   </div>
                 </td>
                 <td>{r.tag ? <span className="pill">{r.tag}</span> : <span className="muted">—</span>}</td>
@@ -289,7 +297,8 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
                   <IconButton icon="trash" label="삭제" tone="danger" onClick={() => setRemoving(r)} />
                   <Menu
                     items={[
-                      { label: "레이어 보기", onClick: () => setLayersOf(r.ref || r.im.id) },
+                      { label: "레이어 보기", onClick: () => setDetailOf({ image: r.ref || r.im.id, title: r.ref || shortId(r.im.id), tab: "layers" }) },
+                      { label: "정보 보기", onClick: () => setDetailOf({ image: r.ref || r.im.id, title: r.ref || shortId(r.im.id), tab: "info" }) },
                       ...(r.ref ? [{ label: "레지스트리에 올리기 (push)", onClick: () => setPushing([r.ref, ...r.im.tags.filter((t) => t !== r.ref)]) }] : []),
                     ]}
                   />
@@ -336,7 +345,17 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
         </Dialog>
       )}
 
-      {layersOf && <LayersDialog image={layersOf} showCli={showCli} onClose={() => setLayersOf(null)} />}
+      {detailOf && (
+        <ImageDetail
+          key={detailOf.image + detailOf.tab}
+          image={detailOf.image}
+          title={detailOf.title}
+          tab={detailOf.tab}
+          showCli={showCli}
+          onRun={detailOf.image.startsWith("sha256:") ? undefined : () => onRun(detailOf.image)}
+          onClose={() => setDetailOf(null)}
+        />
+      )}
       {pushing && (
         <PushDialog
           tags={pushing}

@@ -67,6 +67,32 @@ test("change settings by remaking the container, keeping its data", async ({ pag
   expect(sh(`docker exec bfe2e-one sh -c 'echo $MODE; cat /data/k.txt'`)).toBe("second\nkept");
 });
 
+test("processes, log levels and editing the environment from the detail", async ({ page }) => {
+  sh(`docker run -d --name bfe2e-lv ${ALPINE} sh -c 'echo "level=info started"; echo "ERROR disk full"; echo "WARN slow"; sleep 1d'`);
+  await open(page);
+  await go(page, "containers");
+  await page.locator("tr", { hasText: "bfe2e-lv" }).getByRole("button", { name: "bfe2e-lv" }).first().click();
+  await page.getByRole("tab", { name: "로그" }).click();
+  await expect(page.getByTestId("logs")).toContainText("ERROR disk full");
+  const levels = page.getByRole("group", { name: "로그 수준" });
+  await levels.getByRole("button", { name: /오류/ }).click();
+  await expect(page.getByTestId("logs")).toContainText("ERROR disk full");
+  await expect(page.getByTestId("logs")).not.toContainText("WARN slow");
+  await levels.getByRole("button", { name: /전체/ }).click();
+  await expect(page.getByTestId("logs")).toContainText("WARN slow");
+
+  await page.getByRole("tab", { name: "프로세스" }).click();
+  await expect(page.getByTestId("processes")).toContainText("sleep");
+
+  await page.getByRole("tab", { name: "개요" }).click();
+  await page.getByRole("button", { name: "고치기" }).click();
+  const dlg = page.getByRole("dialog");
+  await expect(dlg.getByRole("button", { name: "지우고 다시 만들기" })).toBeVisible();
+  await dlg.getByRole("button", { name: "취소" }).click();
+  await closeDetail(page);
+  sh(`docker rm -f bfe2e-lv`, true);
+});
+
 test("rename, stop and delete", async ({ page }) => {
   await open(page);
   await go(page, "containers");

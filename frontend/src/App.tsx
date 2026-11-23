@@ -4,7 +4,7 @@ import Networks from "./Networks";
 import Volumes from "./Volumes";
 import Builds from "./Builds";
 import Compose from "./Compose";
-import Containers from "./Containers";
+import Containers, { settingsOf } from "./Containers";
 import Detail, { type Tab } from "./Detail";
 import EngineDialog from "./EngineDialog";
 import Home from "./Home";
@@ -464,6 +464,7 @@ export default function App() {
           onClose={() => setDetail(null)}
           showCli={showCli}
           run={run}
+          onEdit={viewer() ? undefined : () => settingsOf(open).then(setRunning, () => {})}
         />
       )}
 

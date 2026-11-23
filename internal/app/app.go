@@ -331,6 +331,21 @@ func (a *App) RemoveContainer(id string, force, volumes bool) error {
 
 // InspectContainer returns the engine's own description of the container,
 // as indented JSON.
+// ContainerTop lists the processes running in a container.
+func (a *App) ContainerTop(id string) (engine.Top, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return a.eng().Containers().Top(ctx, id)
+}
+
+// InspectImage returns the engine's own description of an image.
+func (a *App) InspectImage(ref string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	raw, err := a.eng().Images().Inspect(ctx, strings.TrimSpace(ref))
+	return string(raw), err
+}
+
 func (a *App) InspectContainer(id string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()

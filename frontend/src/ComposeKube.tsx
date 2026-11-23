@@ -6,7 +6,14 @@ import { call } from "./bridge";
 import type { KubeMove } from "./Kubernetes";
 import { Dialog } from "./ui";
 
+interface KubeVolume {
+  volume: string;
+  claim: string;
+  deployments: string[];
+}
+
 interface KubePlan {
+  volumes: KubeVolume[];
   namespace: string;
   yaml: string;
   deployments: string[];
@@ -23,6 +30,8 @@ export default function ComposeKube(props: { project: string; files: string[]; s
   // The project's images the engine has, and which go into the cluster.
   const [here, setHere] = useState<string[]>([]);
   const [load, setLoad] = useState<string[]>([]);
+  // The volumes whose data is copied over, by claim.
+  const [copy, setCopy] = useState<string[]>([]);
 
   useEffect(() => {
     props.showCli(`docker compose -p ${props.project} config  # 를 Kubernetes 매니페스트로 (Deployment · Service · PVC)`);
@@ -30,14 +39,16 @@ export default function ComposeKube(props: { project: string; files: string[]; s
       async (p) => {
         setPlan(p);
         setYaml(p.yaml);
+        setCopy(p.volumes.map((v) => v.claim));
         const have: string[] = [];
         for (const image of p.images) {
           if (await call("ImageDefaults", image).then(() => true, () => false)) have.push(image);
         }
         setHere(have);
-        // What is built here exists nowhere else: in by default. The rest
-        // the cluster fetches itself.
-        setLoad(p.built.filter((b) => have.includes(b)));
+        // All the engine has, by default: the project runs them here now,
+        // and some may exist nowhere else (built, or tagged on this PC).
+        // Big ones can be left to the cluster to fetch.
+        setLoad(have);
       },
       (e) => setError(e.message),
     );
@@ -72,12 +83,24 @@ export default function ComposeKube(props: { project: string; files: string[]; s
           {here.length > 0 && (
             <fieldset>
               <legend>클러스터에 넣을 이 PC(엔진)의 이미지</legend>
-              <p className="help">클러스터는 이미지를 스스로 받습니다. 이 PC에서 빌드한 이미지는 넣어야 쓸 수 있고, 다른 것은 넣으면 다시 받지 않습니다(크면 오래 걸립니다).</p>
+              <p className="help">지금 이 PC에서 돌고 있는 이미지를 그대로 클러스터에 넣습니다. 이 PC에서 만든 이미지는 넣어야 쓸 수 있습니다. Docker Hub 등에서 받을 수 있는 큰 이미지는 꺼서 클러스터가 직접 받게 해도 됩니다.</p>
               {here.map((image) => (
                 <label key={image} className="check">
                   <input type="checkbox" checked={load.includes(image)} onChange={(e) => setLoad(e.target.checked ? [...load, image] : load.filter((x) => x !== image))} />
                   <code>{image}</code>
                   {plan.built.includes(image) && <span className="muted">{" · 이 PC에서 빌드한 이미지"}</span>}
+                </label>
+              ))}
+            </fieldset>
+          )}
+          {plan.volumes.length > 0 && (
+            <fieldset>
+              <legend>클러스터로 옮길 볼륨의 데이터</legend>
+              <p className="help">배포한 뒤, 볼륨의 지금 데이터를 새 저장소에 그대로 복사합니다. 복사하는 동안 그 저장소를 쓰는 앱은 잠깐 0개로 줄었다가 다시 켜집니다. 끄면 빈 저장소로 시작합니다.</p>
+              {plan.volumes.map((v) => (
+                <label key={v.claim} className="check">
+                  <input type="checkbox" checked={copy.includes(v.claim)} onChange={(e) => setCopy(e.target.checked ? [...copy, v.claim] : copy.filter((x) => x !== v.claim))} />
+                  <span>{`${v.volume} → 저장소 ${v.claim} (${v.deployments.join(", ")})`}</span>
                 </label>
               ))}
             </fieldset>
@@ -99,7 +122,7 @@ export default function ComposeKube(props: { project: string; files: string[]; s
               type="button"
               className="primary"
               disabled={!yaml.trim() || missing.length > 0}
-              onClick={() => props.onMove({ namespace: plan.namespace, yaml, load, deployments: plan.deployments })}
+              onClick={() => props.onMove({ namespace: plan.namespace, yaml, load, deployments: plan.deployments, copy: plan.volumes.filter((v) => copy.includes(v.claim)) })}
             >
               Kubernetes에 배포
             </button>

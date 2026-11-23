@@ -28,7 +28,49 @@ const paths: Record<string, ReactNode> = {
   gear: <path d="M10 12.500a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5zM10 3v2M10 15v2M3 10h2M15 10h2M5.050 5.050l1.400 1.400M13.550 13.550l1.400 1.400M5.050 14.950l1.400-1.400M13.550 6.450l1.400-1.400" />,
   search: <path d="M9 14.500a5.500 5.500 0 1 0 0-11 5.500 5.500 0 0 0 0 11zM13 13l3.500 3.500" />,
   sort: <path d="M6 8l4-4 4 4M6 12l4 4 4-4" />,
+  copy: <path d="M7.500 7.500h8v8h-8zM4.500 12.500v-8h8" />,
+  check: <path d="M4.500 10.500l3.500 3.500 7.500-8" />,
 };
+
+/** Puts text on the clipboard, also where the page isn't a secure one. */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const t = document.createElement("textarea");
+    t.value = text;
+    t.style.position = "fixed";
+    t.style.opacity = "0";
+    document.body.appendChild(t);
+    t.select();
+    const ok = document.execCommand("copy");
+    t.remove();
+    return ok;
+  }
+}
+
+/** A small button that copies a value, showing it did. */
+export function CopyButton({ text, label = "복사" }: { text: string; label?: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      className={"icon-btn copy-btn" + (done ? " done" : "")}
+      title={done ? "복사했습니다" : label}
+      aria-label={label}
+      onClick={async (e) => {
+        e.stopPropagation();
+        if (await copyText(text)) {
+          setDone(true);
+          setTimeout(() => setDone(false), 1200);
+        }
+      }}
+    >
+      <Icon name={done ? "check" : "copy"} />
+    </button>
+  );
+}
 
 export function Icon({ name }: { name: keyof typeof paths | string }) {
   return (

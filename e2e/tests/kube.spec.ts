@@ -384,6 +384,8 @@ volumes:
 `,
   );
   sh(`docker compose -p bfe2e-kmove -f ${join(dir, "compose.yaml")} up -d`);
+  // data in the volume, to be found in the cluster's storage after the move
+  sh(`docker compose -p bfe2e-kmove -f ${join(dir, "compose.yaml")} exec -T db sh -c 'echo moved-data > /var/lib/data/k.txt'`);
   try {
     await kube(page);
     await go(page, "compose");
@@ -393,10 +395,17 @@ volumes:
     await expect(d.getByTestId("compose-kube")).toContainText("네임스페이스 bfe2e-kmove에 서비스 2개(db, web)");
     const notes = d.getByTestId("compose-kube-notes");
     await expect(notes).toContainText("/srv/site"); // a folder of this PC: left out, and said so
-    await expect(notes).toContainText("데이터는 옮겨지지 않습니다");
+    await expect(notes).toContainText("새 저장소 dbdata");
     await expect(notes).toContainText("depends_on");
     await d.getByRole("button", { name: "만들어질 YAML 보기 · 고치기" }).click();
     await expect(d.getByLabel("옮길 YAML")).toHaveValue(/kind: PersistentVolumeClaim/);
+    await expect(d.getByLabel("옮길 YAML")).toHaveValue(/imagePullPolicy: IfNotPresent/);
+    // The images the project runs here go in by default: they may exist nowhere else.
+    await expect(d.getByRole("checkbox", { name: ALPINE })).toBeChecked();
+    const copy = d.getByRole("checkbox", { name: /dbdata → 저장소 dbdata/ });
+    await expect(copy).toBeChecked();
+    // Storage is given out only to a running pod: without pods there is nothing to copy into.
+    if (process.env.E2E_KUBE_NO_PODS) await copy.uncheck();
     await d.getByRole("button", { name: "Kubernetes에 배포" }).click();
 
     await expect(page.getByTestId("applied")).toContainText("namespace/bfe2e-kmove created", { timeout: 120_000 });
@@ -423,7 +432,22 @@ volumes:
         console.log(sh("docker exec boxforge-k3s sh -c 'iptables-save | grep -c KUBE-SVC; ip route; lsmod 2>/dev/null | grep -E \"br_netfilter|vxlan\"'", true));
         throw e;
       }
+      await expect(page.getByTestId("volume-copying")).toBeHidden({ timeout: 300_000 });
+      await expect.poll(() => kubectl(`exec -n bfe2e-kmove deploy/db -- cat /var/lib/data/k.txt`), { timeout: 120_000, intervals: [3000] }).toBe("moved-data");
     }
+
+    // The whole project goes at once, after saying what goes.
+    await page.getByRole("tab", { name: "흐름 그림" }).click();
+    const moved = page.getByTestId("moved-projects");
+    await expect(moved).toContainText("bfe2e-kmove");
+    await moved.getByRole("button", { name: "통째로 지우기" }).click();
+    const ask = page.getByRole("dialog");
+    await expect(ask).toContainText("워크로드 2개");
+    await expect(ask).toContainText("bfe2e-kmove 프로젝트 지우기");
+    await ask.getByRole("button", { name: "삭제" }).click();
+    await expect.poll(() => kubectl("get namespace bfe2e-kmove -o jsonpath={.status.phase}"), { timeout: 120_000 }).not.toBe("Active");
+    // Compose's own containers stay.
+    expect(sh(`docker compose -p bfe2e-kmove -f ${join(dir, "compose.yaml")} ps -q`).split("\n").filter(Boolean)).toHaveLength(2);
   } finally {
     kubectl("delete namespace bfe2e-kmove --wait=false");
     sh(`docker compose -p bfe2e-kmove -f ${join(dir, "compose.yaml")} down -v`, true);

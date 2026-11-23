@@ -152,6 +152,8 @@ export interface KubeMove {
   yaml: string;
   load: string[]; // the engine's images to put into the cluster first
   deployments: string[];
+  // Engine volumes whose data goes into the claims made from them, after.
+  copy: { volume: string; claim: string; deployments: string[] }[];
 }
 
 export default function Kubernetes({
@@ -180,6 +182,7 @@ export default function Kubernetes({
   const [configs, setConfigs] = useKept<Item[]>("configs", []);
   const [secrets, setSecrets] = useKept<Item[]>("secrets", []);
   const [pvcs, setPvcs] = useKept<Item[]>("pvcs", []);
+  const [namespaces, setNamespaces] = useKept<Item[]>("namespaces", []);
   // Whether the lists have been read once: until then "none" would be a guess.
   const [loaded, setLoaded] = useKept("loaded", false);
   const [deploying, setDeploying] = useState(false);
@@ -214,8 +217,11 @@ export default function Kubernetes({
     if (!fwd) return;
     const local = +fwd.local || 0;
     setFwdBusy(true);
-    const ok = await run(kubectl(`port-forward svc/${fwd.name} ${local || ""}:${fwd.port} -n ${fwd.namespace}`), () => call("KubeForward", fwd.namespace, fwd.name, fwd.port, local));
+    let got: Forward | null = null;
+    const ok = await run(kubectl(`port-forward svc/${fwd.name} ${local || ""}:${fwd.port} -n ${fwd.namespace}`), async () => (got = await call<Forward>("KubeForward", fwd.namespace, fwd.name, fwd.port, local)));
     setFwdBusy(false);
+    const made = got as Forward | null;
+    if (ok && made && local && made.local !== local) setNote(`이 PC의 ${local}번 포트는 다른 프로그램이 쓰고 있어서 ${made.local}번 포트로 이었습니다.`);
     if (ok) {
       setFwd(null);
       loadForwards();
@@ -256,6 +262,7 @@ export default function Kubernetes({
       list("services", setServices),
       list("events", setEvents),
       list("ingresses", setIngresses),
+      list("namespaces", setNamespaces),
       ...(t === "config" ? [list("configmaps", setConfigs), list("secrets", setSecrets)] : []),
       ...(t === "storage" ? [list("persistentvolumeclaims", setPvcs)] : []),
     ]);
@@ -344,7 +351,19 @@ export default function Kubernetes({
     if ("yaml" in deployFrom) {
       // A whole project: applied at once, its deployments followed.
       const m = deployFrom as KubeMove;
-      deploy(m.yaml, m.load, m.deployments.map((d) => `${m.namespace}/${d}`));
+      (async () => {
+        if (!(await deploy(m.yaml, m.load, m.deployments.map((d) => `${m.namespace}/${d}`)))) return;
+        // Then the data, one volume at a time: its users stop meanwhile.
+        for (const v of m.copy) {
+          setCopying(v.volume);
+          await run(
+            `docker run --rm -v ${v.volume}:/from alpine tar -c -C /from . | ${kubectl(`exec -i -n ${m.namespace} … tar -x`)}  # 그동안 ${v.deployments.join(", ")} 은 0개로`,
+            () => call("KubeMoveVolume", m.namespace, v.claim, v.volume, v.deployments),
+          );
+        }
+        setCopying("");
+        refresh();
+      })();
     } else {
       setDeployInit(deployFrom);
       setDeploying(true);
@@ -358,6 +377,8 @@ export default function Kubernetes({
   // Deployments just applied, followed until their pods are ready.
   const [tracking, setTracking] = useKept<string[]>("tracking", []);
   const [trackSince, setTrackSince] = useKept("trackSince", 0);
+  // An engine volume whose data is being copied into the cluster.
+  const [copying, setCopying] = useKept("copying", "");
   useEffect(() => {
     if (tracking.length === 0) return;
     const t = setInterval(refresh, 2500);
@@ -386,6 +407,7 @@ export default function Kubernetes({
       setTab("flow");
       refresh();
     }
+    return ok;
   };
 
   const makeData = async (kind: "configmap" | "secret", name: string, data: Record<string, string>) => {
@@ -439,6 +461,8 @@ export default function Kubernetes({
   const shownWork = useMemo(() => mine(workloads).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [workloads, showSystem]);
   const shownIng = useMemo(() => mine(ingresses).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [ingresses, showSystem]);
   const shownData = useMemo(() => mine([...configs, ...secrets]).filter((c) => c.metadata.name !== "kube-root-ca.crt").sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [configs, secrets, showSystem]);
+  // Namespaces a Compose project was moved into.
+  const moved = namespaces.filter((n) => n.metadata.labels?.["boxforge.compose/project"] && !n.metadata.deletionTimestamp);
   const shownPvc = useMemo(() => mine(pvcs).sort((a, b) => a.metadata.name.localeCompare(b.metadata.name)), [pvcs, showSystem]);
   const traefik = forwards.find((f) => f.namespace === "kube-system" && f.service === "traefik" && f.port === 80);
   // k3s installs its way in a minute or two after it first starts.
@@ -615,6 +639,11 @@ export default function Kubernetes({
             <pre className="note-box applied" data-testid="applied">
               {applied}
             </pre>
+          )}
+          {copying && (
+            <p className="note" role="status" data-testid="volume-copying">
+              <span className="spinner" /> {`볼륨 ${copying}의 데이터를 클러스터의 저장소로 옮기는 중입니다. 그동안 이 저장소를 쓰는 앱은 잠깐 멈춥니다.`}
+            </p>
           )}
           {sendingSince !== null && !deploying && applying === null && (
             <p className="note" role="status" data-testid="deploy-sending">
@@ -821,6 +850,34 @@ export default function Kubernetes({
             <p className="muted" role="status" data-testid="kube-loading">
               <span className="spinner" /> 클러스터에서 목록을 읽는 중… 느린 기계에서는 시간이 걸립니다.
             </p>
+          )}
+          {view === "flow" && moved.length > 0 && (
+            <div className="kube-bar moved-projects" data-testid="moved-projects">
+              <span className="muted">Compose에서 옮긴 프로젝트</span>
+              {moved.map((ns) => {
+                const name = ns.metadata.name;
+                const apps = workloads.filter((w) => w.metadata.namespace === name).length;
+                return (
+                  <span key={name} className="chip">
+                    {name}
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() =>
+                        setConfirm({
+                          title: `${name} 프로젝트 지우기`,
+                          body: `네임스페이스 ${name}와 그 안의 모든 것(워크로드 ${apps}개, 서비스, 저장소와 그 데이터)을 지웁니다. 되돌릴 수 없습니다. Compose로 띄운 컨테이너와 볼륨은 그대로입니다.`,
+                          command: kubectl(`delete namespace ${name}`),
+                          go: () => call("KubeDelete", "namespace", "", name),
+                        })
+                      }
+                    >
+                      통째로 지우기
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
           )}
           {view === "flow" && <Flow workloads={shownWork} services={shownSvc} ingresses={shownIng} pods={shownPods} events={events} podTone={(p) => podStatus(p).tone} />}
 

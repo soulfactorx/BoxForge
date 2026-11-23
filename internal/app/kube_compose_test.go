@@ -39,8 +39,11 @@ func TestComposeToKube(t *testing.T) {
 	if strings.Contains(y, "FROM_HOST") || strings.Contains(y, "/tmp/cz/html") {
 		t.Errorf("what can't be moved is in the YAML:\n%s", y)
 	}
+	if len(p.Volumes) != 1 || p.Volumes[0].Volume != "demo_dbdata" || p.Volumes[0].Claim != "dbdata" || strings.Join(p.Volumes[0].Deployments, ",") != "db" {
+		t.Errorf("volumes: %+v", p.Volumes)
+	}
 	notes := strings.Join(p.Notes, "\n")
-	for _, want := range []string{"FROM_HOST", "/tmp/cz/html", "8080→80", "depends_on", "my-worker", "privileged", "demo-my_worker", "데이터는 옮겨지지 않습니다"} {
+	for _, want := range []string{"FROM_HOST", "/tmp/cz/html", "8080→80", "depends_on", "my-worker", "privileged", "demo-my_worker", "새 저장소 dbdata"} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("notes lack %q:\n%s", want, notes)
 		}

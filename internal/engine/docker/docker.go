@@ -263,6 +263,19 @@ func (c containers) Inspect(ctx context.Context, id string) ([]byte, error) {
 	return raw, err
 }
 
+func (c containers) Top(ctx context.Context, id string) (engine.Top, error) {
+	// With the figures people look for; an engine that won't take ps
+	// options (Kiri's) answers with its own.
+	t, err := c.cli.ContainerTop(ctx, id, []string{"-eo", "pid,user,pcpu,pmem,etime,args"})
+	if err != nil {
+		t, err = c.cli.ContainerTop(ctx, id, nil)
+	}
+	if err != nil {
+		return engine.Top{}, err
+	}
+	return engine.Top{Titles: t.Titles, Processes: t.Processes}, nil
+}
+
 func (c containers) Logs(ctx context.Context, id string, tail int, w io.Writer) error {
 	info, err := c.cli.ContainerInspect(ctx, id)
 	if err != nil {
@@ -775,6 +788,14 @@ func (i images) Defaults(ctx context.Context, ref string) (engine.ImageDefaults,
 	sort.Strings(d.Volumes)
 	d.Shell = engine.BareShell(in.Config.Entrypoint, in.Config.Cmd)
 	return d, nil
+}
+
+func (i images) Inspect(ctx context.Context, ref string) ([]byte, error) {
+	in, err := i.cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(in)
 }
 
 func (i images) History(ctx context.Context, ref string) ([]engine.Layer, error) {

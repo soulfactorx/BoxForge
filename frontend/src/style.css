@@ -322,7 +322,7 @@ ul.plain li { word-break: break-all; }
 .used { display: grid; gap: 1px; justify-items: start; }
 .used button.link { padding: 0; }
 
-.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .charts-note { grid-column: 1 / -1; font-size: 12px; margin: 0; }
 .spark { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 6px; min-width: 0; }
 .spark-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
@@ -1207,3 +1207,45 @@ textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
 .deploy-steps { margin: 4px 0 0; padding-left: 20px; font-size: 13px; display: grid; gap: 2px; overflow-wrap: anywhere; }
 .deploy-steps li.warn { color: var(--bad); }
 .plain-list { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.moved-projects .chip { display: inline-flex; align-items: center; gap: 8px; }
+.copy-btn { width: 22px; height: 22px; padding: 2px; vertical-align: middle; margin-left: 4px; opacity: 0.7; }
+.copy-btn:hover, .copy-btn:focus { opacity: 1; }
+.copy-btn.done { color: var(--ok); opacity: 1; }
+.copy-btn svg { width: 14px; height: 14px; }
+
+/* Container panel: log levels, processes */
+.level-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.level-chips .count { opacity: 0.7; font-size: 11px; margin-left: 2px; }
+.level-chips .lv-error.on { border-color: var(--bad); color: var(--bad); }
+.level-chips .lv-warn.on { border-color: var(--warn); color: var(--warn); }
+.log-line.lv-error { color: var(--bad); }
+.log-line.lv-warn { color: var(--warn); }
+.log-line.lv-debug { opacity: 0.65; }
+.processes td.cmd code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.grid.compact td, .grid.compact th { padding-top: 5px; padding-bottom: 5px; font-size: 13px; }
+
+/* Image panel: the layers as Dockerfile steps */
+.layer-sum { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; font-weight: 600; }
+.steps { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; }
+.steps li { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.steps li.zero { opacity: 0.65; }
+.step-row { width: 100%; display: grid; grid-template-columns: 26px 92px minmax(0, 1fr) 72px 70px; gap: 8px; align-items: center; text-align: left; border: none; background: none; padding: 6px 8px; border-radius: 8px; }
+.step-row:hover { background: var(--hover); }
+.step-no { color: var(--muted); font-size: 12px; text-align: right; }
+.step-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+.step-size { text-align: right; font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.steps .layer-bar { height: 6px; background: var(--hover); border-radius: 3px; overflow: hidden; display: block; }
+.steps .layer-bar span { display: block; height: 100%; background: var(--accent); }
+.op { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; border-radius: 4px; padding: 2px 6px; text-align: center; background: var(--hover); color: var(--muted); }
+.op-run { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.op-copy, .op-add { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.op-cmd, .op-entrypoint { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.step-more { padding: 0 10px 10px 42px; display: grid; gap: 6px; justify-items: start; }
+.step-more pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; background: var(--bg); border-radius: 6px; padding: 8px 10px; width: 100%; box-sizing: border-box; }
+.image-info .fact { display: contents; }
+.image-info dd code { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .step-row { grid-template-columns: 22px 70px minmax(0, 1fr) 60px; } .steps .layer-bar { display: none; } }
+.level-chips .chip { background: var(--panel); }
+.level-chips .chip.on { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.level-chips .chip.lv-error.on { background: color-mix(in srgb, var(--bad) 14%, var(--panel)); }
+.level-chips .chip.lv-warn.on { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); }

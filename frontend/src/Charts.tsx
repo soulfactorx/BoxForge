@@ -85,10 +85,14 @@ export default function Charts({ id }: { id: string }) {
   const mem = samples.map((s) => s.memUsed);
   const mib = 2 ** 20;
   const memTop = ceil(Math.max(...mem, 1), [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384].map((m) => m * mib));
+  // Bytes a second through the network: the change from one sample to the next.
+  const net = samples.map((s, i) => (i === 0 ? 0 : Math.max(0, s.netRx + s.netTx - samples[i - 1].netRx - samples[i - 1].netTx)));
+  const netTop = ceil(Math.max(...net, 1024), [1, 8, 64, 512, 4096, 32768, 262144].map((k) => k * 1024));
   return (
     <div className="charts" data-testid="charts">
       <Spark title="CPU" values={cpu} top={ceil(Math.max(...cpu, 1), [10, 25, 50, 100, 200, 400, 800])} format={(v) => `${v.toFixed(1)}%`} />
       <Spark title="메모리" values={mem} top={memTop} format={bytes} />
+      <Spark title="네트워크 (초당)" values={net} top={netTop} format={(v) => `${bytes(v)}/s`} />
       {last && (
         <p className="muted charts-note">
           메모리 한도 {bytes(last.memLimit)} · 네트워크 받음 {bytes(last.netRx)}, 보냄 {bytes(last.netTx)} · CPU 100%는 코어 하나를 다 쓰는

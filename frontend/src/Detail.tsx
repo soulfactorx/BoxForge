@@ -6,9 +6,9 @@ import { published } from "./Containers";
 import Terminal from "./Terminal";
 import VolumeBrowser from "./VolumeBrowser";
 import { ago, shortId, stateLabel, statusText } from "./format";
-import { IconButton } from "./ui";
+import { CopyButton, IconButton } from "./ui";
 
-export type Tab = "overview" | "logs" | "terminal" | "files" | "inspect";
+export type Tab = "overview" | "logs" | "terminal" | "files" | "processes" | "inspect";
 
 // The most lines a log view keeps; older ones are dropped.
 const maxLines = 5000;
@@ -17,10 +17,31 @@ const ansi = /\u001b\[[0-9;?]*[A-Za-z]/g;
 // Environment variable names whose values are hidden until asked for.
 const secret = /pass|secret|token|key|credential/i;
 
+// How serious a log line is, from the words programs mark them with.
+type Level = "error" | "warn" | "info" | "debug" | "";
+const levels: [Level, string][] = [
+  ["", "전체"],
+  ["error", "오류"],
+  ["warn", "경고"],
+  ["info", "정보"],
+  ["debug", "디버그"],
+];
+const levelWords: [Level, RegExp][] = [
+  ["error", /\b(error|err|fatal|panic|crit(ical)?|severe|emerg(ency)?|alert|exception)\b|level=(error|fatal)|\[e\]|"level":"(error|fatal)"/i],
+  ["warn", /\b(warn(ing)?)\b|level=warn|\[w\]|"level":"warn/i],
+  ["debug", /\b(debug|trace|verbose)\b|level=(debug|trace)|\[d\]|"level":"(debug|trace)"/i],
+  ["info", /\b(info|notice)\b|level=info|\[i\]|"level":"info"/i],
+];
+export function levelOf(line: string): Level {
+  for (const [level, re] of levelWords) if (re.test(line)) return level;
+  return "";
+}
+
 function Logs({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) {
   const [lines, setLines] = useState<string[]>([]);
   const [ended, setEnded] = useState("");
   const [query, setQuery] = useState("");
+  const [level, setLevel] = useState<Level>("");
   const [follow, setFollow] = useState(true);
   const box = useRef<HTMLPreElement>(null);
   const partial = useRef("");
@@ -47,10 +68,16 @@ function Logs({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) 
     // The stream restarts when the container starts again: its state is in the key.
   }, [c.id, c.state === "running"]);
 
+  const marked = useMemo(() => lines.map((text) => ({ text, level: levelOf(text) })), [lines]);
+  const counts = useMemo(() => {
+    const n: Record<string, number> = {};
+    for (const l of marked) n[l.level] = (n[l.level] ?? 0) + 1;
+    return n;
+  }, [marked]);
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q ? lines.filter((l) => l.toLowerCase().includes(q)) : lines;
-  }, [lines, query]);
+    return marked.filter((l) => (!level || l.level === level) && (!q || l.text.toLowerCase().includes(q)));
+  }, [marked, query, level]);
 
   useEffect(() => {
     if (follow && box.current) box.current.scrollTop = box.current.scrollHeight;
@@ -65,9 +92,26 @@ function Logs({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) 
           새 줄 따라가기
         </label>
         <button onClick={() => setLines([])}>화면 지우기</button>
+        <CopyButton text={shown.map((l) => l.text).join("\n")} label="보이는 로그 복사" />
+      </div>
+      <div className="level-chips" role="group" aria-label="로그 수준">
+        {levels.map(([id, label]) => (
+          <button key={id || "all"} type="button" className={"chip" + (level === id ? " on" : "") + (id ? " lv-" + id : "")} aria-pressed={level === id} onClick={() => setLevel(id)}>
+            {label} <span className="count">{id ? counts[id] ?? 0 : lines.length}</span>
+          </button>
+        ))}
       </div>
       <pre ref={box} className="log-box" data-testid="logs">
-        {shown.length === 0 ? <span className="muted">{query ? "찾는 내용이 없습니다." : "아직 출력이 없습니다."}</span> : shown.join("\n")}
+        {shown.length === 0 ? (
+          <span className="muted">{query || level ? "찾는 내용이 없습니다." : "아직 출력이 없습니다."}</span>
+        ) : (
+          shown.map((l, i) => (
+            <span key={i} className={"log-line" + (l.level ? " lv-" + l.level : "")}>
+              {l.text}
+              {"\n"}
+            </span>
+          ))
+        )}
       </pre>
       {ended && <p className="muted">{ended}</p>}
     </div>
@@ -112,7 +156,7 @@ function reason(code: number, oom: boolean, message: string, info?: any): { titl
   return { title: `프로그램이 오류를 내고 끝났습니다 (종료 코드 ${code})`, text: "무엇이 잘못됐는지는 프로그램이 남긴 마지막 로그에 있습니다. 필수 환경변수(비밀번호 등)가 빠졌을 때 흔히 이렇게 됩니다.", logs: true };
 }
 
-function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () => void }) {
+function Overview({ c, raw, onLogs, onEdit }: { c: Container; raw: string; onLogs: () => void; onEdit?: () => void }) {
   const [reveal, setReveal] = useState(false);
   const info = useMemo(() => {
     try {
@@ -168,10 +212,14 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
           </>
         )}
         <dt>이미지</dt>
-        <dd>{c.image}</dd>
+        <dd>
+          {c.image}
+          <CopyButton text={c.image} label="이미지 이름 복사" />
+        </dd>
         <dt>ID</dt>
         <dd>
-          <code>{shortId(c.id)}</code>
+          <code title={c.id}>{shortId(c.id)}</code>
+          <CopyButton text={c.id} label="ID 전체 복사" />
         </dd>
         <dt>만든 때</dt>
         <dd>{ago(c.created)}</dd>
@@ -188,6 +236,7 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
             <dt>실행 명령</dt>
             <dd>
               <code>{command}</code>
+              <CopyButton text={command} label="실행 명령 복사" />
             </dd>
           </>
         )}
@@ -208,8 +257,8 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
             <li key={p.public}>
               <button className="link" onClick={() => openURL(`http://localhost:${p.public}`)}>
                 localhost:{p.public}
-              </button>{" "}
-              → 컨테이너의 {p.private}/{p.proto}
+              </button>
+              <CopyButton text={`http://localhost:${p.public}`} label="주소 복사" /> → 컨테이너의 {p.private}/{p.proto}
             </li>
           ))}
         </ul>
@@ -222,7 +271,8 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
         <ul className="plain">
           {mounts.map((m) => (
             <li key={m.Destination}>
-              <code>{m.Type === "volume" ? m.Name : m.Source}</code> → <code>{m.Destination}</code>{" "}
+              <code>{m.Type === "volume" ? m.Name : m.Source}</code> → <code>{m.Destination}</code>
+              <CopyButton text={m.Type === "volume" ? m.Name : m.Source} label="이름 · 경로 복사" />{" "}
               <span className="muted">{m.Type === "volume" ? "볼륨" : "폴더"}</span>
             </li>
           ))}
@@ -237,6 +287,8 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
           {networks.map(([name, n]) => (
             <li key={name}>
               {name} {n.IPAddress && <code className="muted">{n.IPAddress}</code>}
+              {n.IPAddress && <CopyButton text={n.IPAddress} label="IP 주소 복사" />}
+              {n.MacAddress && <span className="sub">MAC {n.MacAddress} · 게이트웨이 {n.Gateway || "—"}</span>}
             </li>
           ))}
         </ul>
@@ -249,7 +301,14 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
             {reveal ? "비밀값 가리기" : "비밀값 보기"}
           </button>
         )}
+        {env.length > 0 && <CopyButton text={env.join("\n")} label="환경변수 모두 복사 (KEY=값)" />}
+        {onEdit && (
+          <button type="button" className="link" onClick={onEdit}>
+            고치기
+          </button>
+        )}
       </h3>
+      {onEdit && <p className="help">환경변수는 실행 중에는 바꿀 수 없어서, 고치면 같은 설정으로 컨테이너를 다시 만듭니다(볼륨의 데이터는 그대로).</p>}
       {env.length === 0 ? (
         <p className="muted">—</p>
       ) : (
@@ -261,6 +320,7 @@ function Overview({ c, raw, onLogs }: { c: Container; raw: string; onLogs: () =>
             return (
               <li key={key}>
                 <code>{key}</code> = <code>{secret.test(key) && !reveal ? "••••••••" : value}</code>
+                <CopyButton text={value} label={`${key} 값 복사`} />
               </li>
             );
           })}
@@ -277,9 +337,60 @@ interface Props {
   onClose: () => void;
   showCli: (cmd: string) => void;
   run: Run;
+  /** Opens the form that remakes the container with changed settings. */
+  onEdit?: () => void;
 }
 
-export default function Detail({ c, tab, onTab, onClose, showCli, run }: Props) {
+/** What runs inside the container, read again every few seconds. */
+function Processes({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) {
+  const [top, setTop] = useState<{ titles: string[]; processes: string[][] } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    showCli(`docker top ${c.name} -eo pid,user,pcpu,pmem,etime,args`);
+    if (c.state !== "running") return;
+    const read = () => call<{ titles: string[]; processes: string[][] }>("ContainerTop", c.id).then((t) => (setTop(t), setError("")), (e) => setError(e.message));
+    read();
+    const t = setInterval(read, 3000);
+    return () => clearInterval(t);
+  }, [c.id, c.state]);
+  if (c.state !== "running") return <p className="muted">프로세스는 실행 중인 컨테이너에서만 볼 수 있습니다.</p>;
+  const names: Record<string, string> = { PID: "PID", USER: "사용자", UID: "사용자", "%CPU": "CPU", "%MEM": "메모리", ELAPSED: "실행 시간", TIME: "CPU 시간", CMD: "명령", COMMAND: "명령", PPID: "부모 PID", STIME: "시작", TTY: "터미널", C: "C" };
+  return (
+    <div className="processes" data-testid="processes">
+      {error && <p className="warn">{error}</p>}
+      {!top && !error && <p className="muted">읽는 중…</p>}
+      {top && (
+        <>
+          <p className="muted">{`프로세스 ${top.processes.length}개 · 3초마다 다시 읽습니다.`}</p>
+          <table className="grid compact">
+            <thead>
+              <tr>
+                {top.titles.map((t) => (
+                  <th key={t} className={/^(PID|PPID|%CPU|%MEM)$/.test(t) ? "num" : ""}>
+                    {names[t] ?? t}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {top.processes.map((p, i) => (
+                <tr key={i}>
+                  {p.map((v, j) => (
+                    <td key={j} className={/^(PID|PPID|%CPU|%MEM)$/.test(top.titles[j]) ? "num" : j === p.length - 1 ? "cmd" : "nowrap"}>
+                      {j === p.length - 1 ? <code>{v}</code> : v}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function Detail({ c, tab, onTab, onClose, showCli, run, onEdit }: Props) {
   const [raw, setRaw] = useState("");
   const [error, setError] = useState("");
 
@@ -302,6 +413,7 @@ export default function Detail({ c, tab, onTab, onClose, showCli, run }: Props) 
     ["logs", "로그"],
     ["terminal", "터미널"],
     ["files", "파일"],
+    ["processes", "프로세스"],
     ["inspect", "원본"],
   ];
   return (
@@ -319,7 +431,8 @@ export default function Detail({ c, tab, onTab, onClose, showCli, run }: Props) 
       </div>
       <div className="drawer-body">
         {error && <p className="warn">{error}</p>}
-        {tab === "overview" && <Overview c={c} raw={raw} onLogs={() => onTab("logs")} />}
+        {tab === "overview" && <Overview c={c} raw={raw} onLogs={() => onTab("logs")} onEdit={onEdit} />}
+        {tab === "processes" && <Processes c={c} showCli={showCli} />}
         {tab === "logs" && <Logs c={c} showCli={showCli} />}
         {tab === "terminal" &&
           (c.state === "running" ? (
@@ -330,7 +443,9 @@ export default function Detail({ c, tab, onTab, onClose, showCli, run }: Props) 
         {tab === "files" && <VolumeBrowser key={c.id} kind="Container" name={c.id} label={c.name} run={run} showCli={showCli} embedded />}
         {tab === "inspect" && (
           <>
-            <p className="muted">엔진이 이 컨테이너에 대해 알고 있는 전부입니다.</p>
+            <p className="muted">
+              엔진이 이 컨테이너에 대해 알고 있는 전부입니다. <CopyButton text={raw} label="원본 JSON 복사" />
+            </p>
             <pre className="log-box json">{raw}</pre>
           </>
         )}

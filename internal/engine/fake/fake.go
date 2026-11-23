@@ -230,6 +230,13 @@ func (c containers) Remove(_ context.Context, id string, force, _ bool) error {
 	})
 }
 
+func (c containers) Top(_ context.Context, id string) (engine.Top, error) {
+	return engine.Top{
+		Titles:    []string{"PID", "USER", "%CPU", "%MEM", "ELAPSED", "COMMAND"},
+		Processes: [][]string{{"1", "root", "0.3", "0.5", "01:02", "nginx: master process nginx -g daemon off;"}, {"29", "nginx", "0.0", "0.2", "01:02", "nginx: worker process"}},
+	}, nil
+}
+
 func (c containers) Inspect(_ context.Context, id string) ([]byte, error) {
 	c.r.mu.Lock()
 	defer c.r.mu.Unlock()
@@ -450,6 +457,13 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func (i images) Inspect(_ context.Context, ref string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"Id": "sha256:" + ref, "RepoTags": []string{ref}, "Architecture": "amd64", "Os": "linux", "Size": 42 << 20,
+		"Config": map[string]any{"Env": []string{"PATH=/usr/local/bin:/usr/bin:/bin"}, "Cmd": []string{"nginx", "-g", "daemon off;"}, "ExposedPorts": map[string]any{"80/tcp": map[string]any{}}, "WorkingDir": "/"},
+	})
 }
 
 func (i images) History(context.Context, string) ([]engine.Layer, error) {

@@ -202,6 +202,38 @@ func (s containers) Remove(ctx context.Context, id string, force, vols bool) err
 	return s.r.do(ctx, "container", append(args, id)...)
 }
 
+func (s containers) Top(ctx context.Context, id string) (engine.Top, error) {
+	b, err := s.r.out(ctx, "top", id, "-eo", "pid,user,pcpu,pmem,etime,args")
+	if err != nil {
+		if b, err = s.r.out(ctx, "top", id); err != nil {
+			return engine.Top{}, err
+		}
+	}
+	return parseTop(string(b)), nil
+}
+
+// parseTop reads ps's table: the header's columns, and each line split
+// into as many, the last (the command) keeping its spaces.
+func parseTop(out string) engine.Top {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	t := engine.Top{Titles: []string{}, Processes: [][]string{}}
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) == "" {
+		return t
+	}
+	t.Titles = strings.Fields(lines[0])
+	for _, l := range lines[1:] {
+		f := strings.Fields(l)
+		if len(f) == 0 {
+			continue
+		}
+		if n := len(t.Titles); len(f) > n && n > 0 {
+			f = append(f[:n-1], strings.Join(f[n-1:], " "))
+		}
+		t.Processes = append(t.Processes, f)
+	}
+	return t
+}
+
 func (s containers) Inspect(ctx context.Context, id string) ([]byte, error) {
 	b, err := s.r.out(ctx, "inspect", id)
 	if err != nil {

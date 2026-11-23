@@ -158,6 +158,12 @@ type Stats struct {
 	NetTx    int64   `json:"netTx"`
 }
 
+// Top is a container's processes: a header, and one row of fields each.
+type Top struct {
+	Titles    []string   `json:"titles"`
+	Processes [][]string `json:"processes"`
+}
+
 // Session is a command running in a container with a terminal attached:
 // reads are its output, writes its keyboard.
 type Session interface {
@@ -259,6 +265,8 @@ type ContainerService interface {
 	Remove(ctx context.Context, id string, force, volumes bool) error
 	// Inspect returns the engine's own JSON for the container, unchanged.
 	Inspect(ctx context.Context, id string) ([]byte, error)
+	// Top lists the processes running in the container, as `docker top`.
+	Top(ctx context.Context, id string) (Top, error)
 	// Logs writes the last tail lines and then every new one to w, until
 	// ctx ends or the container's log does.
 	Logs(ctx context.Context, id string, tail int, w io.Writer) error
@@ -361,6 +369,8 @@ type ImageService interface {
 	Prune(ctx context.Context) (int64, error)
 	// Defaults returns the ports and data folders the image declares.
 	Defaults(ctx context.Context, ref string) (ImageDefaults, error)
+	// Inspect returns the engine's own JSON for the image.
+	Inspect(ctx context.Context, ref string) ([]byte, error)
 	// History returns the steps the image was built in, newest first.
 	History(ctx context.Context, ref string) ([]Layer, error)
 	// Save returns the image as a tar stream, as `docker save` writes it.

@@ -591,6 +591,18 @@ func (r *runtime) writing(ctx context.Context, in io.Reader, args ...string) err
 	return nil
 }
 
+func (s images) Inspect(ctx context.Context, ref string) ([]byte, error) {
+	b, err := s.r.out(ctx, "image", "inspect", ref)
+	if err != nil {
+		return nil, err
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(b, &list); err != nil || len(list) == 0 {
+		return nil, errors.New("no such image: " + ref)
+	}
+	return list[0], nil
+}
+
 func (s images) History(ctx context.Context, ref string) ([]engine.Layer, error) {
 	b, err := s.r.out(ctx, "history", "--no-trunc", "--format", "{{json .}}", ref)
 	if err != nil {
