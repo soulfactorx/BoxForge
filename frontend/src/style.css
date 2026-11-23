@@ -1259,3 +1259,8 @@ textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
 .reach td .state { margin-right: 10px; }
 .project-logs .log-box { max-height: 55vh; }
 .log-src { color: var(--accent); font-weight: 600; }
+/* On a phone every tab shows: in rows, not hidden past the edge. */
+@media (max-width: 640px) {
+  .kube-tabs { flex-wrap: wrap; overflow-x: visible; }
+  .kube-tabs button { padding: 7px 10px; }
+}
