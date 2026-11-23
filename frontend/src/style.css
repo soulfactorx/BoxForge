@@ -968,7 +968,8 @@ button.link.add-remote { padding: 0; }
 .settings .run-form { margin-bottom: 4px; }
 
 .forwards { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-.forward { display: flex; align-items: center; gap: 10px; }
+.forward { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.forward > .sub { flex-basis: 100%; }
 .forward .spacer { flex: 1; }
 
 .grid .state, .grid td .sub { white-space: nowrap; }
@@ -1249,3 +1250,12 @@ textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
 .level-chips .chip.on { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .level-chips .chip.lv-error.on { background: color-mix(in srgb, var(--bad) 14%, var(--panel)); }
 .level-chips .chip.lv-warn.on { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); }
+.note.closable { display: flex; align-items: flex-start; gap: 8px; }
+.note.closable > span, .note.closable > pre { flex: 1; min-width: 0; }
+.note.closable > .icon-btn { margin: -4px -6px -4px 0; flex: none; }
+.note.applied > pre { margin: 0; font: 13px/1.5 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; white-space: pre-wrap; }
+.note-box > .box-close { float: right; margin: -6px -8px 0 8px; }
+.reach .row-actions { margin: 6px 0 10px; }
+.reach td .state { margin-right: 10px; }
+.project-logs .log-box { max-height: 55vh; }
+.log-src { color: var(--accent); font-weight: 600; }

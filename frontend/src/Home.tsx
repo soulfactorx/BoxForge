@@ -3,7 +3,7 @@ import { Avatar } from "./brand";
 import { call, type Container, type EngineStatus, type Image, type Run, type Volume } from "./bridge";
 import { bytes, isUp, statusText } from "./format";
 import { recipes, type RunInit } from "./recipes";
-import { Dialog, Icon } from "./ui";
+import { Dialog, Icon, Note } from "./ui";
 
 interface Usage {
   images: number;
@@ -217,7 +217,7 @@ export default function Home({ engine, containers, images, volumes, run, go, onR
 
             <div className="panel" data-testid="disk">
               <h2>디스크</h2>
-              {note && <p className="note">{note}</p>}
+              {note && <Note onClose={() => setNote("")}>{note}</Note>}
               {!usage ? (
                 <p className="muted">재는 중…</p>
               ) : (

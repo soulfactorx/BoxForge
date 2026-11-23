@@ -25,7 +25,8 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
           go vet ./internal/... ./cmd/... ./frontend
-          go test ./internal/...
+          docker pull -q alpine:3
+          BOXFORGE_DOCKER_IMAGE=alpine:3 go test ./internal/...
       - name: Compile for Windows
         run: GOOS=windows GOARCH=amd64 go build -o /tmp/boxforge.exe .
 

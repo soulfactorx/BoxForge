@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { call, type Container, type Run, type Volume } from "./bridge";
 import { ago, bytes } from "./format";
 import EngineCopy from "./EngineCopy";
-import { Dialog, Icon, IconButton } from "./ui";
+import { Dialog, Icon, IconButton, Note } from "./ui";
 import VolumeBrowser from "./VolumeBrowser";
 
 interface Props {
@@ -98,7 +98,7 @@ export default function Volumes({ volumes, containers, run, showCli, onOpen }: P
       <p className="lead">
         볼륨은 컨테이너를 지워도 남는 데이터 보관함입니다. 데이터베이스처럼 잃으면 안 되는 데이터는 볼륨에 둡니다.
       </p>
-      {note && <p className="note">{note}</p>}
+      {note && <Note onClose={() => setNote("")}>{note}</Note>}
 
       {shown.length === 0 ? (
         <p className="empty">{volumes.length === 0 ? "볼륨이 없습니다." : "조건에 맞는 볼륨이 없습니다."}</p>

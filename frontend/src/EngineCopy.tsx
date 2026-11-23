@@ -141,7 +141,12 @@ export function explain(notes: string[]) {
   return notes.map((n) => {
     const [kind, ...rest] = n.split(":");
     const value = rest.join(":");
-    if (kind === "network") return `네트워크 "${value}"에는 연결하지 않았습니다. 받는 쪽 엔진에서 같은 네트워크를 만들고 연결해 주세요.`;
+    if (kind === "network") return `네트워크 "${value}"에는 연결하지 못했습니다(받는 쪽에서 만들 수 없음). 받는 쪽 엔진에서 같은 네트워크를 만들고 연결해 주세요.`;
+    if (kind === "network-made") return `받는 쪽에 없던 네트워크 "${value}"를 같은 설정(주소 범위)으로 만들고, 별칭 · 고정 IP · MAC 주소를 그대로 두어 연결했습니다.`;
+    if (kind === "ip") {
+      const [net, ip] = value.split("=");
+      return `네트워크 "${net}"의 주소 범위가 받는 쪽에서 이미 쓰이고 있어, 고정 IP ${ip}를 지키지 못했습니다(엔진이 새 주소를 줌).`;
+    }
     if (kind === "bind") return `내 PC의 폴더 ${value} 를 그대로 가리킵니다. 받는 쪽 엔진에서도 같은 경로가 보여야 합니다.`;
     return n;
   });

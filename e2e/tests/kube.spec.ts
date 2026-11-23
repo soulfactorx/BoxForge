@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, request as playwrightRequest, test, type Page } from "@playwright/test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -377,6 +377,8 @@ test("a Compose project is moved to Kubernetes as a whole, in a namespace of its
     image: ${ALPINE}
     tty: true
     expose: ["5432"]
+    mac_address: 02:42:ac:11:00:99
+    hostname: licdb
     volumes:
       - dbdata:/var/lib/data
 volumes:
@@ -400,6 +402,10 @@ volumes:
     await d.getByRole("button", { name: "만들어질 YAML 보기 · 고치기" }).click();
     await expect(d.getByLabel("옮길 YAML")).toHaveValue(/kind: PersistentVolumeClaim/);
     await expect(d.getByLabel("옮길 YAML")).toHaveValue(/imagePullPolicy: IfNotPresent/);
+    // Found by name on any port, as in Compose; the MAC address set before the app starts.
+    await expect(d.getByLabel("옮길 YAML")).toHaveValue(/clusterIP: None/);
+    await expect(d.getByLabel("옮길 YAML")).toHaveValue(/name: set-mac/);
+    await expect(notes).toContainText("02:42:ac:11:00:99");
     // The images the project runs here go in by default: they may exist nowhere else.
     await expect(d.getByRole("checkbox", { name: ALPINE })).toBeChecked();
     const copy = d.getByRole("checkbox", { name: /dbdata → 저장소 dbdata/ });
@@ -434,12 +440,27 @@ volumes:
       }
       await expect(page.getByTestId("volume-copying")).toBeHidden({ timeout: 300_000 });
       await expect.poll(() => kubectl(`exec -n bfe2e-kmove deploy/db -- cat /var/lib/data/k.txt`), { timeout: 120_000, intervals: [3000] }).toBe("moved-data");
+      // The licence-style checks: the pod has the MAC address and the hostname it had in Compose.
+      await expect.poll(() => kubectl(`exec -n bfe2e-kmove deploy/db -- sh -c "cat /sys/class/net/eth0/address; hostname"`), { timeout: 120_000, intervals: [3000] }).toBe("02:42:ac:11:00:99\nlicdb");
+      // A port no one declared is still reached by name, as in Compose.
+      kubectl(`exec -n bfe2e-kmove deploy/db -- sh -c "nohup nc -lk -p 7777 -e echo hi >/dev/null 2>&1 &"`);
+      await expect.poll(() => kubectl(`exec -n bfe2e-kmove deploy/web -- sh -c "nc -w 3 db 7777 </dev/null; true"`), { timeout: 60_000, intervals: [3000] }).toContain("hi");
     }
 
     // The whole project goes at once, after saying what goes.
     await page.getByRole("tab", { name: "흐름 그림" }).click();
     const moved = page.getByTestId("moved-projects");
     await expect(moved).toContainText("bfe2e-kmove");
+    // Looked into as a whole: each service's name and ports tried from inside the cluster, and all logs in one list.
+    await moved.getByRole("button", { name: "연결 점검" }).click();
+    const check = page.getByRole("dialog", { name: "bfe2e-kmove 점검" });
+    await expect(check.getByTestId("reach-db")).toBeVisible({ timeout: 60_000 });
+    await expect(check.getByTestId("reach-web")).toBeVisible();
+    // Nothing listens on db's 5432 (an alpine shell): said, with what to look at.
+    if (!process.env.E2E_KUBE_NO_PODS) await expect(check.getByTestId("reach-db")).toContainText("5432 닫힘");
+    await check.getByRole("tab", { name: "로그 모아 보기" }).click();
+    await expect(check.getByTestId("project-logs")).not.toContainText("읽는 중", { timeout: 60_000 });
+    await check.getByRole("button", { name: "닫기", exact: true }).click();
     await moved.getByRole("button", { name: "통째로 지우기" }).click();
     const ask = page.getByRole("dialog");
     await expect(ask).toContainText("워크로드 2개");
@@ -452,4 +473,44 @@ volumes:
     kubectl("delete namespace bfe2e-kmove --wait=false");
     sh(`docker compose -p bfe2e-kmove -f ${join(dir, "compose.yaml")} down -v`, true);
   }
+});
+
+test("a port connected to this PC ends each answer when the far side does, and notes can be closed", async ({ page, request }) => {
+  await kube(page);
+  await page.getByRole("tab", { name: /서비스/ }).click();
+  const row = page.locator("tr", { hasText: "kubernetes" }).first();
+  await row.getByRole("button", { name: "내 PC로 연결" }).click();
+  const dlg = page.getByRole("dialog");
+  await dlg.getByLabel("내 PC 포트").fill("18443");
+  await dlg.locator("button.primary").click();
+  const forwards = page.getByTestId("forwards");
+  await expect(forwards).toContainText("localhost:");
+  const local = (await forwards.locator("code").first().innerText()).split(":")[1];
+  // The API's port, as a browser opens it: https, and the note says it is no web page.
+  await expect(forwards.getByRole("link", { name: "브라우저로 열기" })).toHaveAttribute("href", `https://localhost:${local}`);
+  await expect(page.getByTestId("api-forward-note")).toBeVisible();
+  // Asked in plain HTTP, it answers and closes: the answer used to never end.
+  const started = Date.now();
+  const res = await request.get(`http://127.0.0.1:${local}/`, { timeout: 10_000 });
+  expect(await res.text()).toContain("HTTP request to an HTTPS server");
+  expect(Date.now() - started).toBeLessThan(8_000);
+  // Many in a row (TLS), none stalls; once the client has closed them, nothing of the relays is left running.
+  const api = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
+  for (let i = 0; i < 6; i++) {
+    const r = await api.get(`https://127.0.0.1:${local}/version`, { timeout: 10_000 });
+    expect([401, 403]).toContain(r.status());
+  }
+  await api.dispose();
+  await expect.poll(() => sh(`docker exec boxforge-forward ps -o args`).split("\n").filter((l) => l.includes("dd bs")).length, { timeout: 10_000 }).toBe(0);
+  // The same port again: taken (by the first), so the next free one; the note says so, and closes.
+  await row.getByRole("button", { name: "내 PC로 연결" }).click();
+  await dlg.getByLabel("내 PC 포트").fill(local);
+  await dlg.locator("button.primary").click();
+  const note = page.locator(".note.closable", { hasText: `${local}번 포트는 다른 프로그램이 쓰고 있어서` });
+  await expect(note).toBeVisible();
+  await note.getByRole("button", { name: "닫기" }).click();
+  await expect(note).toBeHidden();
+  await forwards.getByRole("button", { name: "끊기" }).first().click();
+  await forwards.getByRole("button", { name: "끊기" }).first().click();
+  await expect(forwards).toBeHidden();
 });

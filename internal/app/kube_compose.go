@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"regexp"
 	"slices"
 	"sort"
@@ -103,15 +104,82 @@ type kubeComposeService struct {
 	Deploy      *struct {
 		Replicas *int `json:"replicas"`
 	} `json:"deploy"`
-	Scale *int `json:"scale"`
+	Scale      *int            `json:"scale"`
+	Privileged bool            `json:"privileged"`
+	CapAdd     []string        `json:"cap_add"`
+	CapDrop    []string        `json:"cap_drop"`
+	ExtraHosts json.RawMessage `json:"extra_hosts"`
+	User       string          `json:"user"`
+	Hostname   string          `json:"hostname"`
+	Domainname string          `json:"domainname"`
+	MacAddress string          `json:"mac_address"`
+	Networks   map[string]*struct {
+		Aliases    []string `json:"aliases"`
+		IPv4       string   `json:"ipv4_address"`
+		IPv6       string   `json:"ipv6_address"`
+		MacAddress string   `json:"mac_address"`
+	} `json:"networks"`
 	// Settings with no plain counterpart: named in the notes.
-	Privileged  bool             `json:"privileged"`
 	NetworkMode string           `json:"network_mode"`
-	CapAdd      []string         `json:"cap_add"`
 	Devices     *json.RawMessage `json:"devices"`
-	ExtraHosts  *json.RawMessage `json:"extra_hosts"`
-	User        string           `json:"user"`
 }
+
+// extraHosts reads Compose's extra_hosts, a list ("name=ip", or "name:ip"
+// in older versions) or a map, as ip → names.
+func extraHosts(raw json.RawMessage) (map[string][]string, []string) {
+	out := map[string][]string{}
+	var skipped []string
+	addOne := func(name, ip string) {
+		name, ip = strings.TrimSpace(name), strings.Trim(strings.TrimSpace(ip), "[]")
+		if net.ParseIP(ip) == nil {
+			skipped = append(skipped, name+"="+ip) // host-gateway and the like
+			return
+		}
+		out[ip] = append(out[ip], name)
+	}
+	var list []string
+	var dict map[string]any
+	switch {
+	case len(raw) == 0 || string(raw) == "null":
+	case json.Unmarshal(raw, &list) == nil:
+		for _, e := range list {
+			if name, ip, ok := strings.Cut(e, "="); ok {
+				addOne(name, ip)
+			} else if name, ip, ok := strings.Cut(e, ":"); ok {
+				addOne(name, ip)
+			}
+		}
+	case json.Unmarshal(raw, &dict) == nil:
+		for name, v := range dict {
+			switch v := v.(type) {
+			case string:
+				addOne(name, v)
+			case []any:
+				for _, ip := range v {
+					addOne(name, fmt.Sprint(ip))
+				}
+			}
+		}
+	}
+	return out, skipped
+}
+
+// kubeMacScript gives a pod's network the MAC address the service had in
+// Compose (software licensed to a MAC address checks it). It runs in an
+// init container, which shares the pod's network, with the cluster node's
+// own static ip and busybox mounted in (the app's image may have neither),
+// and changes the address in place, or, where the interface won't, with it
+// briefly down and its routes put back.
+const kubeMacScript = `set -e
+mac="$1"
+if ! /bf/ip link set dev eth0 address "$mac" 2>/dev/null; then
+  routes=$(/bf/ip route show)
+  /bf/ip link set dev eth0 down
+  /bf/ip link set dev eth0 address "$mac"
+  /bf/ip link set dev eth0 up
+  echo "$routes" | while read -r r; do [ -n "$r" ] && /bf/ip route replace $r || true; done
+fi
+/bf/ip -o link show dev eth0`
 
 func composeToKube(project string, raw []byte) (KubePlan, error) {
 	var c composeFile
@@ -300,8 +368,121 @@ func composeToKube(project string, raw []byte) (KubePlan, error) {
 			note("서비스 %s는 파드 %d개가 같은 저장소를 씁니다. 이 클러스터(노드 하나)에서는 되지만, 동시에 쓰면 안 되는 앱(데이터베이스 등)은 1개로 두세요.", svc, replicas)
 		}
 
+		// Who it runs as, and what it may do.
+		sec := map[string]any{}
+		if s.Privileged {
+			sec["privileged"] = true
+		}
+		caps := map[string]any{}
+		if len(s.CapAdd) > 0 {
+			caps["add"] = capNames(s.CapAdd)
+		}
+		if len(s.CapDrop) > 0 {
+			caps["drop"] = capNames(s.CapDrop)
+		}
+		if len(caps) > 0 {
+			sec["capabilities"] = caps
+		}
+		if s.User != "" {
+			u, g, _ := strings.Cut(s.User, ":")
+			uid, err1 := strconv.Atoi(u)
+			gid, err2 := strconv.Atoi(g)
+			switch {
+			case err1 == nil && (g == "" || err2 == nil):
+				sec["runAsUser"] = uid
+				if g != "" {
+					sec["runAsGroup"] = gid
+				}
+			default:
+				note("서비스 %s의 user(%s)는 이름이라 옮기지 않습니다. Kubernetes는 숫자(UID)만 받습니다. 그 이름의 UID를 YAML의 runAsUser에 넣으세요.", svc, s.User)
+			}
+		}
+		if len(sec) > 0 {
+			container["securityContext"] = sec
+		}
+
 		labels := map[string]any{"app": name}
 		pod := map[string]any{"containers": []any{container}}
+
+		// Its name and the names it was given for other machines.
+		if s.Hostname != "" {
+			h, rest, _ := strings.Cut(s.Hostname, ".")
+			pod["hostname"] = dnsName(h)
+			if rest != "" || dnsName(h) != h {
+				note("서비스 %s의 hostname %s는 Kubernetes에서 %s입니다(점 뒤는 빠짐).", svc, s.Hostname, dnsName(h))
+			}
+		}
+		if s.Domainname != "" {
+			note("서비스 %s의 domainname(%s)은 옮기지 않습니다.", svc, s.Domainname)
+		}
+		hosts, skipped := extraHosts(s.ExtraHosts)
+		if len(hosts) > 0 {
+			ips := make([]string, 0, len(hosts))
+			for ip := range hosts {
+				ips = append(ips, ip)
+			}
+			sort.Strings(ips)
+			var ha []map[string]any
+			for _, ip := range ips {
+				ha = append(ha, map[string]any{"ip": ip, "hostnames": hosts[ip]})
+			}
+			pod["hostAliases"] = ha
+		}
+		if len(skipped) > 0 {
+			note("서비스 %s의 extra_hosts 중 %s는 IP 주소가 아니라(host-gateway 등) 옮기지 않습니다.", svc, strings.Join(skipped, ", "))
+		}
+
+		// Its MAC address, given to the pod's network before the app starts.
+		mac := s.MacAddress
+		var aliases, fixed []string
+		netNames := make([]string, 0, len(s.Networks))
+		for n := range s.Networks {
+			netNames = append(netNames, n)
+		}
+		sort.Strings(netNames)
+		for _, n := range netNames {
+			e := s.Networks[n]
+			if e == nil {
+				continue
+			}
+			if mac == "" && e.MacAddress != "" {
+				mac = e.MacAddress
+			}
+			aliases = append(aliases, e.Aliases...)
+			if e.IPv4 != "" {
+				fixed = append(fixed, e.IPv4)
+			}
+			if e.IPv6 != "" {
+				fixed = append(fixed, e.IPv6)
+			}
+		}
+		if len(netNames) > 1 {
+			note("서비스 %s는 Compose 네트워크 %d개(%s)에 있었습니다. Kubernetes에서는 프로젝트 전체가 한 네트워크라 서로 다 보입니다.", svc, len(netNames), strings.Join(netNames, ", "))
+		}
+		if len(fixed) > 0 {
+			note("서비스 %s의 고정 IP(%s)는 옮길 수 없습니다. 파드는 클러스터가 주는 주소를 받습니다. 다른 서비스는 IP 대신 이름(%s)으로 찾게 하세요.", svc, strings.Join(fixed, ", "), name)
+		}
+		if mac != "" {
+			if _, err := net.ParseMAC(mac); err != nil {
+				note("서비스 %s의 MAC 주소 %s는 형식이 맞지 않아 옮기지 않습니다.", svc, mac)
+			} else {
+				file := "File"
+				pod["initContainers"] = []any{map[string]any{
+					"name": "set-mac", "image": image, "imagePullPolicy": "IfNotPresent",
+					"command":         []string{"/bf/busybox", "sh", "-c", kubeMacScript, "sh", mac},
+					"securityContext": map[string]any{"runAsUser": 0, "capabilities": map[string]any{"add": []string{"NET_ADMIN"}}},
+					"volumeMounts": []map[string]any{
+						{"name": "bf-busybox", "mountPath": "/bf/busybox", "readOnly": true},
+						{"name": "bf-ip", "mountPath": "/bf/ip", "readOnly": true},
+					},
+				}}
+				volumes = append(volumes,
+					map[string]any{"name": "bf-busybox", "hostPath": map[string]any{"path": "/bin/busybox", "type": file}},
+					map[string]any{"name": "bf-ip", "hostPath": map[string]any{"path": "/bin/ip", "type": file}},
+				)
+				note("서비스 %s의 MAC 주소 %s는 파드가 시작할 때 맞춥니다(BoxForge의 클러스터에서만 되는 방식: 노드의 도구를 씀). 파드마다 같은 MAC이 되니 파드는 1개로 두세요.", svc, mac)
+			}
+		}
 		if volumes != nil {
 			pod["volumes"] = volumes
 		}
@@ -316,16 +497,33 @@ func composeToKube(project string, raw []byte) (KubePlan, error) {
 		})
 		plan.Deployments = append(plan.Deployments, name)
 
-		if len(ports) > 0 {
-			var sps []map[string]any
-			for _, p := range ports {
-				sps = append(sps, map[string]any{"name": fmt.Sprintf("p%d", p), "port": p, "targetPort": p})
+		// Found by name on any port, as in Compose (where a service reaches
+		// another on any port, declared or not): a headless Service, whose
+		// name is the pods' own addresses. The ports listed are those known.
+		// Its Compose aliases are names of the same kind.
+		var sps []map[string]any
+		for _, p := range ports {
+			sps = append(sps, map[string]any{"name": fmt.Sprintf("p%d", p), "port": p, "targetPort": p})
+		}
+		svcNames := []string{name}
+		for _, a := range aliases {
+			if an := dnsName(a); an != "" && !slices.Contains(svcNames, an) {
+				svcNames = append(svcNames, an)
+			}
+		}
+		for _, sn := range svcNames {
+			spec := map[string]any{"selector": labels, "clusterIP": "None", "publishNotReadyAddresses": true}
+			if sps != nil {
+				spec["ports"] = sps
 			}
 			docs = append(docs, map[string]any{
 				"apiVersion": "v1", "kind": "Service",
-				"metadata": map[string]any{"name": name, "namespace": ns},
-				"spec":     map[string]any{"selector": labels, "ports": sps},
+				"metadata": map[string]any{"name": sn, "namespace": ns, "labels": map[string]any{"boxforge.compose/service": svc}},
+				"spec":     spec,
 			})
+		}
+		if len(svcNames) > 1 {
+			note("서비스 %s의 별칭(%s)도 같은 파드를 가리키는 이름으로 만듭니다.", svc, strings.Join(svcNames[1:], ", "))
 		}
 
 		if len(s.DependsOn) > 0 {
@@ -335,23 +533,11 @@ func composeToKube(project string, raw []byte) (KubePlan, error) {
 			note("서비스 %s의 상태 검사(healthcheck)는 옮기지 않습니다.", svc)
 		}
 		var odd []string
-		if s.Privileged {
-			odd = append(odd, "privileged")
-		}
 		if s.NetworkMode != "" {
 			odd = append(odd, "network_mode")
 		}
-		if len(s.CapAdd) > 0 {
-			odd = append(odd, "cap_add")
-		}
 		if s.Devices != nil {
 			odd = append(odd, "devices")
-		}
-		if s.ExtraHosts != nil {
-			odd = append(odd, "extra_hosts")
-		}
-		if s.User != "" {
-			odd = append(odd, "user")
 		}
 		if len(odd) > 0 {
 			note("서비스 %s의 %s 설정은 옮기지 않습니다. 필요하면 만들어진 YAML을 고치세요.", svc, strings.Join(odd, ", "))
@@ -493,4 +679,13 @@ func (a *App) KubeMoveVolume(namespace, claim, volume string, deployments []stri
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// capNames is Compose's capabilities as Kubernetes writes them (no CAP_).
+func capNames(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, c := range list {
+		out = append(out, strings.TrimPrefix(strings.ToUpper(c), "CAP_"))
+	}
+	return out
 }

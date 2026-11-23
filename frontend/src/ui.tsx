@@ -197,3 +197,13 @@ export function Progress({ percent }: { percent: number }) {
     </div>
   );
 }
+
+/** A note with a close button: it stays until read and closed, or replaced. */
+export function Note(props: { children: ReactNode; onClose: () => void; className?: string; testid?: string; pre?: boolean }) {
+  return (
+    <div className={"note closable " + (props.className ?? "")} data-testid={props.testid} role="status">
+      {props.pre ? <pre>{props.children}</pre> : <span>{props.children}</span>}
+      <IconButton icon="close" label="닫기" onClick={props.onClose} />
+    </div>
+  );
+}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { call, type Run } from "./bridge";
 import { bytes } from "./format";
-import { Dialog } from "./ui";
+import { Dialog, Note } from "./ui";
 
 interface Res {
   available: boolean;
@@ -66,7 +66,7 @@ export default function EngineResources({ run }: { run: Run }) {
         WSL 안의 엔진이 쓸 수 있는 메모리와 CPU입니다. WSL 전체의 설정이라 다른 WSL 배포판도 같이 적용되고, WSL을 다시 시작해야 반영됩니다. 비워 두면 WSL의 기본값(메모리의
         절반, CPU 전부)을 씁니다.
       </p>
-      {note && <p className="note">{note}</p>}
+      {note && <Note onClose={() => setNote("")}>{note}</Note>}
       {r.pending && <p className="note-box">저장한 값이 아직 적용되지 않았습니다. WSL을 다시 시작하면 적용됩니다.</p>}
       <form
         className="run-form resources-form"

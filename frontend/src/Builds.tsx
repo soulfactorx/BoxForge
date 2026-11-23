@@ -2,7 +2,7 @@ import { pick } from "./PathPicker";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, type Run } from "./bridge";
 import { shq } from "./format";
-import { Dialog } from "./ui";
+import { Dialog, Note } from "./ui";
 
 interface Step {
   id: string;
@@ -263,7 +263,7 @@ export default function Builds({ run, onRun }: { run: Run; onRun: (image: string
           <strong>이 PC에서 docker 명령을 찾지 못했습니다.</strong> 빌드는 docker 명령으로 하므로 지금은 할 수 없습니다.
         </div>
       )}
-      {note && <p className="note">{note}</p>}
+      {note && <Note onClose={() => setNote("")}>{note}</Note>}
 
       <form
         className="run-form build-form"

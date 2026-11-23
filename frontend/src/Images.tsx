@@ -3,7 +3,7 @@ import { Avatar, splitRef } from "./brand";
 import { call, on, type Container, type Image, type PullState, type Run } from "./bridge";
 import { ago, bytes, isUp, shortId } from "./format";
 import { HubSearch, ImageDetail, PushDialog } from "./ImageExtras";
-import { Dialog, Icon, IconButton, Menu, Progress } from "./ui";
+import { Dialog, Icon, IconButton, Menu, Note, Progress } from "./ui";
 
 interface Props {
   images: Image[];
@@ -236,7 +236,7 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
           <Progress percent={pull.percent} />
         </div>
       )}
-      {note && !pull && <p className="note">{note}</p>}
+      {note && !pull && <Note onClose={() => setNote("")}>{note}</Note>}
 
       {shown.length === 0 ? (
         <p className="empty">{images.length === 0 ? "이미지가 없습니다. 위에서 이름을 넣어 받아 보세요." : "조건에 맞는 이미지가 없습니다."}</p>

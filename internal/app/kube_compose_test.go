@@ -8,6 +8,7 @@ import (
 const sampleCompose = `{"name":"demo","services":{
 "db":{"image":"postgres:16","environment":{"POSTGRES_PASSWORD":"secret","FROM_HOST":null},"volumes":[{"type":"volume","source":"dbdata","target":"/var/lib/postgresql/data"}],"expose":["5432"]},
 "web":{"image":"nginx:alpine","environment":{"MODE":"prod"},"volumes":[{"type":"bind","source":"/tmp/cz/html","target":"/usr/share/nginx/html"}],"depends_on":{"db":{}},"ports":[{"target":80,"published":"8080","protocol":"tcp"}]},
+"lic":{"image":"me/licensed:1","mac_address":"02:42:ac:11:00:99","hostname":"lichost","extra_hosts":["license.local=10.1.2.3","gw=host-gateway"],"user":"1000:1000","cap_add":["NET_ADMIN"],"networks":{"backend":{"aliases":["license"],"ipv4_address":"172.30.5.9"}}},
 "my_worker":{"build":{"context":"/tmp/cz"},"command":["python","w.py"],"entrypoint":["/bin/sh","-c"],"tty":true,"deploy":{"replicas":2},"privileged":true}},
 "volumes":{"dbdata":{"name":"demo_dbdata"}}}`
 
@@ -16,7 +17,7 @@ func TestComposeToKube(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Namespace != "demo" || strings.Join(p.Deployments, ",") != "db,my-worker,web" {
+	if p.Namespace != "demo" || strings.Join(p.Deployments, ",") != "db,lic,my-worker,web" {
 		t.Fatalf("namespace %q, deployments %q", p.Namespace, p.Deployments)
 	}
 	if strings.Join(p.Built, ",") != "demo-my_worker" {
@@ -30,7 +31,11 @@ func TestComposeToKube(t *testing.T) {
 		"containerPort: 5432", "containerPort: 80",
 		"image: nginx:alpine", "image: demo-my_worker", "imagePullPolicy: IfNotPresent",
 		"command:\n", "- /bin/sh", "args:\n", "- w.py", "tty: true", "stdin: true", "replicas: 2",
-		"kind: Service", "port: 80", "targetPort: 5432",
+		"kind: Service", "port: 80", "targetPort: 5432", "clusterIP: None", "privileged: true",
+		// the licensed one: its MAC address, name, hosts, user and rights
+		"initContainers:", "name: set-mac", "- 02:42:ac:11:00:99", "path: /bin/ip", "- NET_ADMIN",
+		"hostname: lichost", "ip: 10.1.2.3", "- license.local", "runAsUser: 1000", "runAsGroup: 1000",
+		"name: license\n",
 	} {
 		if !strings.Contains(y, want) {
 			t.Errorf("YAML lacks %q", want)
@@ -43,7 +48,7 @@ func TestComposeToKube(t *testing.T) {
 		t.Errorf("volumes: %+v", p.Volumes)
 	}
 	notes := strings.Join(p.Notes, "\n")
-	for _, want := range []string{"FROM_HOST", "/tmp/cz/html", "8080→80", "depends_on", "my-worker", "privileged", "demo-my_worker", "새 저장소 dbdata"} {
+	for _, want := range []string{"FROM_HOST", "/tmp/cz/html", "8080→80", "depends_on", "my-worker", "demo-my_worker", "새 저장소 dbdata", "172.30.5.9", "gw=host-gateway", "02:42:ac:11:00:99", "별칭(license)"} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("notes lack %q:\n%s", want, notes)
 		}

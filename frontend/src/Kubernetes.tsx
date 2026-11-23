@@ -3,7 +3,8 @@ import { call, on, type PullState, type Run } from "./bridge";
 import { ago } from "./format";
 import Terminal from "./Terminal";
 import { appliedDeployments, DataDialog, type Deploy, DeployDialog, DeployProgress, Flow, type Item, PvcDialog, podsOf, routes, useElapsed, whyPod } from "./KubeExtras";
-import { Dialog, IconButton, Menu, Progress } from "./ui";
+import ProjectCheck from "./ProjectCheck";
+import { Dialog, IconButton, Menu, Note, Progress } from "./ui";
 
 interface KubeState {
   exists: boolean;
@@ -71,6 +72,8 @@ const meaning: Record<string, string> = {
   CreateContainerConfigError: "설정(ConfigMap · Secret)을 찾지 못함",
 };
 
+// Ports that by custom speak HTTPS: opened in the browser as https.
+const secure = (port: number) => port === 443 || port === 8443 || port === 6443;
 const system = (ns: string) => ns === "kube-system" || ns === "kube-public" || ns === "kube-node-lease";
 const since = (iso: string) => ago(Date.parse(iso) / 1000);
 const kubectl = (rest: string) => `docker exec boxforge-k3s kubectl ${rest}`;
@@ -234,6 +237,10 @@ export default function Kubernetes({
   const [applied, setApplied] = useKept("applied", "");
   const [removing, setRemoving] = useState(false);
   const [note, setNote] = useState("");
+  // The other clusters' notice, once closed, stays closed while the app runs.
+  const [othersSeen, setOthersSeen] = useKept("othersSeen", false);
+  // A moved project being looked into.
+  const [inspect, setInspect] = useState<{ namespace: string; tab: "reach" | "logs" } | null>(null);
   const busy = useRef(false);
 
   const refresh = async () => {
@@ -540,7 +547,7 @@ export default function Kubernetes({
         Kubernetes는 컨테이너 여러 개를 알아서 띄우고, 죽으면 다시 살리고, 개수를 늘리고 줄여 주는 시스템입니다. 여기서는 연습과 개발에 쓰는
         작은 클러스터(k3s)를 컨테이너 하나로 돌립니다.
       </p>
-      {note && <p className="note">{note}</p>}
+      {note && <Note onClose={() => setNote("")}>{note}</Note>}
       {deployFrom && state && !state.ready && (
         <p className="note" role="status" data-testid="kube-pending">
           {"yaml" in deployFrom
@@ -548,8 +555,11 @@ export default function Kubernetes({
             : "Kubernetes가 준비되면 앱 배포 창이 열립니다. 아래에서 켜 주세요."}
         </p>
       )}
-      {state && state.others.length > 0 && (
+      {state && state.others.length > 0 && !othersSeen && (
         <div className="note-box" data-testid="kube-others">
+          <span className="box-close">
+            <IconButton icon="close" label="닫기" onClick={() => setOthersSeen(true)} />
+          </span>
           <strong>이 엔진에는 BoxForge 것이 아닌 Kubernetes 클러스터도 있습니다</strong>
           {state.others.map((o) => (
             <span key={o.name} className="block">
@@ -636,9 +646,9 @@ export default function Kubernetes({
             />
           )}
           {applied && (
-            <pre className="note-box applied" data-testid="applied">
+            <Note className="applied" testid="applied" pre onClose={() => setApplied("")}>
               {applied}
-            </pre>
+            </Note>
           )}
           {copying && (
             <p className="note" role="status" data-testid="volume-copying">
@@ -781,10 +791,15 @@ export default function Kubernetes({
                     {f.service}:{f.port} <span className="muted">({f.namespace})</span>
                   </span>
                   <span className="spacer" />
-                  <a className="link" href={`http://localhost:${f.local}`} target="_blank" rel="noreferrer">
+                  <a className="link" href={`${secure(f.port) ? "https" : "http"}://localhost:${f.local}`} target="_blank" rel="noreferrer">
                     브라우저로 열기
                   </a>
                   <button onClick={() => unforward(f)}>끊기</button>
+                  {f.namespace === "default" && f.service === "kubernetes" && (
+                    <span className="sub" data-testid="api-forward-note">
+                      이것은 앱이 아니라 Kubernetes 자신의 관리 창구(API)입니다. 웹 페이지가 없고, 열면 인증서 경고 뒤에 "권한 없음"(Unauthorized) 응답만 나옵니다. 내 앱은 그 앱의 서비스를 연결하세요.
+                    </span>
+                  )}
                 </div>
               ))}
               <span className="sub">BoxForge가 켜져 있는 동안만 이어집니다.</span>
@@ -815,14 +830,14 @@ export default function Kubernetes({
                         </td>
                         <td>{s.spec?.type}</td>
                         <td>
-                          <code>{s.spec?.clusterIP}</code>
+                          {s.spec?.clusterIP === "None" ? <span className="muted" title="주소 없이 이름이 파드의 주소를 가리킵니다(모든 포트). Compose에서 옮긴 서비스가 이렇게 됩니다.">이름으로 찾기</span> : <code>{s.spec?.clusterIP}</code>}
                           <span className="sub">
                             {name}.{namespace}
                           </span>
                         </td>
                         <td>{(s.spec?.ports ?? []).map((p: any) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}/${p.protocol}`).join(", ") || "—"}</td>
                         <td className="actions">
-                          {tcpPorts(s).length > 0 && s.spec?.clusterIP && s.spec.clusterIP !== "None" && (
+                          {tcpPorts(s).length > 0 && s.spec?.clusterIP && (
                             <button
                               onClick={() => {
                                 const ports = tcpPorts(s);
@@ -860,6 +875,12 @@ export default function Kubernetes({
                 return (
                   <span key={name} className="chip">
                     {name}
+                    <button type="button" className="link" onClick={() => setInspect({ namespace: name, tab: "reach" })}>
+                      연결 점검
+                    </button>
+                    <button type="button" className="link" onClick={() => setInspect({ namespace: name, tab: "logs" })}>
+                      로그 모아 보기
+                    </button>
                     <button
                       type="button"
                       className="link"
@@ -1223,6 +1244,7 @@ export default function Kubernetes({
       {deploying && <DeployDialog data={[...configs, ...secrets]} init={deployInit} busy={working} busyText={`클러스터에 보내는 중입니다 (${sent}초). 느린 기계에서는 1분 넘게 걸리기도 합니다.`} onApply={(y, d) => deploy(y, d.fromEngine ? [d.image.trim()] : [])} onYaml={(y) => (setDeploying(false), setApplying(y))} onClose={() => setDeploying(false)} />}
       {making === "data" && <DataDialog busy={working} onCreate={makeData} onClose={() => setMaking(null)} />}
       {making === "pvc" && <PvcDialog busy={working} onCreate={(y) => deploy(y)} onClose={() => setMaking(null)} />}
+      {inspect && <ProjectCheck namespace={inspect.namespace} tab={inspect.tab} showCli={showCli} onClose={() => setInspect(null)} />}
       {confirm && (
         <Dialog title={confirm.title} onClose={() => setConfirm(null)}>
           <p>{confirm.body}</p>

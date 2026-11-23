@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { choose, chosen, lang } from "./i18n";
 import EngineResources from "./EngineResources";
+import WSLDisks from "./WSLDisks";
 import { pick } from "./PathPicker";
 import { allowSystem, setAlerts } from "./Alerts";
 import { call, openURL, type Run, remote, signOut as leaveServer, viewer } from "./bridge";
-import { Dialog } from "./ui";
+import { Dialog, Note } from "./ui";
 
 export interface UpdateInfo {
   current: string;
@@ -144,7 +145,7 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
       <header className="page-head">
         <h1>설정</h1>
       </header>
-      {note && <p className="note">{note}</p>}
+      {note && <Note onClose={() => setNote("")}>{note}</Note>}
 
       <div className="panel">
         <h2>화면</h2>
@@ -319,6 +320,7 @@ export default function Settings({ run, theme, onTheme, autoUpdate, onAutoUpdate
       </div>
 
       <EngineResources run={run} />
+      <WSLDisks run={run} />
 
       <div className="panel" data-testid="network-panel">
         <h2>회사 네트워크</h2>

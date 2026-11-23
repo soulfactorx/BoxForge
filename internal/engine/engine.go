@@ -139,6 +139,10 @@ type RunSpec struct {
 	// own: "container:<name>" shares that container's.
 	Network string            `json:"network"`
 	Labels  map[string]string `json:"labels,omitempty"`
+	// From is the engine's description of the container this one replaces
+	// (settings changed): what the form doesn't show is kept from it, and
+	// its place on its networks (aliases, fixed address, MAC address).
+	From []byte `json:"-"`
 }
 
 // Size is the disk a container takes. RootFS is everything it sees, its

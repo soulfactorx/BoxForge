@@ -587,6 +587,10 @@ func (a *App) RecreateContainer(id string, spec engine.RunSpec) (string, error) 
 	if strings.TrimSpace(spec.Name) == "" {
 		spec.Name = old.Name
 	}
+	// What the form doesn't show, and its place on its networks, are kept.
+	if raw, err := cs.Inspect(ctx, id); err == nil {
+		spec.From = raw
+	}
 	if nerdctl.Is(a.eng()) {
 		return a.recreateByRemoving(ctx, *old, wasUp, spec)
 	}

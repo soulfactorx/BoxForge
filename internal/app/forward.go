@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/soulfactorx/boxforge/internal/engine"
 )
@@ -86,7 +87,9 @@ func (a *App) forwardReady(ctx context.Context) error {
 	}
 	_, err = cs.Run(ctx, engine.RunSpec{
 		Image: img, Name: forwardHelper, Network: "container:" + kubeContainer,
-		Command: []string{"tail", "-f", "/dev/null"},
+		// A shell that waits, as its first process: it also clears away the
+		// relays' finished processes, which would otherwise pile up.
+		Command: []string{"sh", "-c", "trap exit TERM; while :; do sleep 3600 & wait; done"},
 	})
 	return err
 }
@@ -108,7 +111,22 @@ func (a *App) KubeForward(namespace, service string, port, local int) (Forward, 
 		return Forward{}, err
 	}
 	ip = strings.TrimSpace(ip)
-	if net.ParseIP(ip) == nil {
+	// A headless service (as a moved Compose project's are) has no address
+	// of its own: each connection goes to one of its pods, looked up then
+	// (pods come and go with new addresses).
+	headless := ip == "None"
+	podIP := func(ctx context.Context) (string, error) {
+		out, err := a.kubectl(ctx, nil, "get", "endpoints", service, "-n", namespace, "-o", "jsonpath={.subsets[*].addresses[*].ip}")
+		if f := strings.Fields(out); err == nil && len(f) > 0 {
+			return f[0], nil
+		}
+		return "", fmt.Errorf("no pod of the service is running")
+	}
+	if headless {
+		if _, err := podIP(ctx); err != nil {
+			return Forward{}, fmt.Errorf("the service has no running pod to connect to yet")
+		}
+	} else if net.ParseIP(ip) == nil {
 		return Forward{}, fmt.Errorf("the service has no address inside the cluster to connect to")
 	}
 	if err := a.forwardReady(ctx); err != nil {
@@ -140,20 +158,52 @@ func (a *App) KubeForward(namespace, service string, port, local int) (Forward, 
 	forwards.Unlock()
 
 	rt := a.eng()
-	target := []string{"nc", ip, strconv.Itoa(port)}
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go carry(run, rt, conn, target)
+			go func() {
+				to := ip
+				if headless {
+					ctx, cancel := context.WithTimeout(run, 20*time.Second)
+					to, err = podIP(ctx)
+					cancel()
+					if err != nil {
+						conn.Close()
+						return
+					}
+				}
+				carry(run, rt, conn, []string{"sh", "-c", forwardRelay, "sh", to, strconv.Itoa(port)})
+			}()
 		}
 	}()
 	return f.Forward, nil
 }
 
-// carry joins one connection to the command's input and output.
+// forwardRelay carries one connection in the helper. A plain `nc HOST PORT`
+// keeps running after the far side closes, as long as its input is open, so
+// an answer whose end is the close (HTTP/1.0, an error page) never ended in
+// the browser. With -e, nc hands the connection to a small program that
+// copies both ways (the relay's own input and output reach it as fds 7 and
+// 8) and, as soon as either side ends, ends every process of the relay
+// (kill 0: each exec is a process group of its own), so none is left.
+// dd, not cat: busybox's cat moves data with sendfile, which between a pipe
+// and a socket sometimes stalls (seen as TLS handshakes that never end).
+// A busybox without -e falls back to plain nc; -w 10: a connection that
+// can't be made fails in 10 seconds instead of waiting.
+const forwardRelay = `exec 7<&0 8>&1
+nc -w 10 "$1" "$2" -e sh -c 'exec 2>/dev/null 6<&0
+{ dd bs=65536 <&6 >&8; kill 0; } &
+dd bs=65536 <&7; kill 0' 2>/dev/null || exec nc -w 10 "$1" "$2"`
+
+// carry joins one connection to the command's input and output. When the
+// far side has said all it will (it closed, so nc ended), the connection is
+// closed at once: a browser waits for that end when the answer has no
+// length (HTTP/1.0, an error page), and would otherwise wait forever. When
+// the browser is done sending, the far side is told so and its answer still
+// comes back.
 func carry(ctx context.Context, rt engine.Runtime, conn net.Conn, cmd []string) {
 	defer conn.Close()
 	p, err := rt.Containers().Pipe(ctx, forwardHelper, cmd)
@@ -161,24 +211,19 @@ func carry(ctx context.Context, rt engine.Runtime, conn net.Conn, cmd []string) 
 		return
 	}
 	defer p.Close()
-	done := make(chan struct{}, 2)
+	answered := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(p, conn)
 		if h, ok := p.(interface{ CloseWrite() error }); ok {
 			_ = h.CloseWrite()
 		}
-		done <- struct{}{}
 	}()
 	go func() {
 		_, _ = io.Copy(conn, p)
-		done <- struct{}{}
+		close(answered)
 	}()
 	select {
-	case <-done: // either side ended: the far side's answer, if any, has been copied
-		select {
-		case <-done:
-		case <-ctx.Done():
-		}
+	case <-answered:
 	case <-ctx.Done():
 	}
 }

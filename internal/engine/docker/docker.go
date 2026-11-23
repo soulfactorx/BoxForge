@@ -327,23 +327,40 @@ func (c containers) Run(ctx context.Context, spec engine.RunSpec) (string, error
 			tmpfs[dir] = ""
 		}
 	}
-	created, err := c.cli.ContainerCreate(ctx,
-		&container.Config{
-			Image: spec.Image, Env: spec.Env, Cmd: spec.Command, ExposedPorts: exposed, Labels: spec.Labels,
-			Tty: spec.Interactive, OpenStdin: spec.Interactive,
-		},
-		&container.HostConfig{
-			PortBindings:  bindings,
-			Binds:         binds,
-			Privileged:    spec.Privileged,
-			Tmpfs:         tmpfs,
-			NetworkMode:   container.NetworkMode(spec.Network),
-			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(spec.Restart)},
-		},
-		nil, nil, spec.Name)
+	cfg := &container.Config{
+		Image: spec.Image, Env: spec.Env, Cmd: spec.Command, ExposedPorts: exposed, Labels: spec.Labels,
+		Tty: spec.Interactive, OpenStdin: spec.Interactive,
+	}
+	host := &container.HostConfig{
+		PortBindings:  bindings,
+		Binds:         binds,
+		Privileged:    spec.Privileged,
+		Tmpfs:         tmpfs,
+		NetworkMode:   container.NetworkMode(spec.Network),
+		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(spec.Restart)},
+	}
+	// Made again in place of another: what the form doesn't show is kept,
+	// and, on the same network, the place on it (and on the others).
+	var j joined
+	var in container.InspectResponse
+	if spec.From != nil && json.Unmarshal(spec.From, &in) == nil && in.ContainerJSONBase != nil && in.Config != nil && in.HostConfig != nil {
+		keepUnshown(cfg, host, in)
+		was := string(in.HostConfig.NetworkMode)
+		if was == "default" {
+			was = ""
+		}
+		if spec.Network == was || (spec.Network == "" && was == "bridge") {
+			j, _ = c.rejoin(ctx, in, cfg.MacAddress) //nolint:staticcheck // what API 1.51 still reports
+			host.NetworkMode = container.NetworkMode(j.primary)
+		} else {
+			cfg.MacAddress = "" //nolint:staticcheck // a new network: a new place on it
+		}
+	}
+	created, err := c.cli.ContainerCreate(ctx, cfg, host, j.networking(), nil, spec.Name)
 	if err != nil {
 		return "", err
 	}
+	c.connectRest(ctx, created.ID, j)
 	if err := c.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		// Created but not started (a taken port, say): it stays, visible
 		// in the list, for the user to fix or remove.
@@ -497,14 +514,11 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 	if cfg.Hostname != "" && strings.HasPrefix(in.ID, cfg.Hostname) {
 		cfg.Hostname = ""
 	}
-	// Networks are the other engine's own: a container on one that the
-	// user made starts on the default one there instead.
-	switch mode := string(host.NetworkMode); {
-	case mode == "" || mode == "default" || mode == "bridge" || mode == "host" || mode == "none":
-	default:
-		notes = append(notes, "network:"+mode)
-		host.NetworkMode = ""
-	}
+	// Its networks: made here when missing, each with its aliases, fixed
+	// address and MAC address.
+	j, more := c.rejoin(ctx, in, cfg.MacAddress) //nolint:staticcheck // what API 1.51 still reports
+	notes = append(notes, more...)
+	host.NetworkMode = container.NetworkMode(j.primary)
 	host.Links, host.VolumesFrom = nil, nil
 	named := map[string]bool{}
 	for _, b := range host.Binds {
@@ -524,10 +538,11 @@ func (c containers) CreateFrom(ctx context.Context, inspect []byte, img string) 
 			host.Binds = append(host.Binds, m.Name+":"+m.Destination)
 		}
 	}
-	created, err := c.cli.ContainerCreate(ctx, cfg, host, nil, nil, strings.TrimPrefix(in.Name, "/"))
+	created, err := c.cli.ContainerCreate(ctx, cfg, host, j.networking(), nil, strings.TrimPrefix(in.Name, "/"))
 	if err != nil {
 		return "", notes, err
 	}
+	notes = append(notes, c.connectRest(ctx, created.ID, j)...)
 	return created.ID, notes, nil
 }
 
