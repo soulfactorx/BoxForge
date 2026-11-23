@@ -1092,8 +1092,70 @@ func (v volumes) Put(ctx context.Context, name, dir string, tar io.Reader) error
 	}
 	defer remove()
 	// Started first: some engines attach a container's volumes only while it runs.
-	_ = v.cli.ContainerStart(ctx, id, container.StartOptions{})
+	started := v.cli.ContainerStart(ctx, id, container.StartOptions{}) == nil
+	if started && v.canUntar(ctx, id) {
+		return v.untar(ctx, id, inVolume(dir), tar)
+	}
 	return v.cli.CopyToContainer(ctx, id, inVolume(dir), tar, container.CopyToContainerOptions{})
+}
+
+// canUntar reports whether the running helper has a tar to unpack with.
+func (v volumes) canUntar(ctx context.Context, id string) bool {
+	created, err := v.cli.ContainerExecCreate(ctx, id, container.ExecOptions{User: "0", Cmd: []string{"tar", "--help"}, AttachStdout: true, AttachStderr: true})
+	if err != nil {
+		return false
+	}
+	att, err := v.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return false
+	}
+	help, _ := io.ReadAll(io.LimitReader(att.Reader, 64<<10))
+	att.Close()
+	res, err := v.cli.ContainerExecInspect(ctx, created.ID)
+	return err == nil && res.ExitCode == 0 && bytes.Contains(help, []byte("numeric-owner"))
+}
+
+// untar unpacks a tar stream into dir inside the running helper, as root,
+// each file with the owner the archive gives it. The engine's own copy
+// into a container may not keep owners (Kiri's makes them root: a database
+// that runs as its own user, Oracle say, then can't open its files).
+func (v volumes) untar(ctx context.Context, id, dir string, r io.Reader) error {
+	created, err := v.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+		User: "0", Cmd: []string{"tar", "--numeric-owner", "-xf", "-", "-C", dir},
+		AttachStdin: true, AttachStdout: true, AttachStderr: true,
+	})
+	if err != nil {
+		return err
+	}
+	att, err := v.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return err
+	}
+	defer att.Close()
+	said := make(chan []byte, 1)
+	go func() {
+		var out bytes.Buffer
+		_, _ = stdcopy.StdCopy(&out, &out, att.Reader)
+		said <- out.Bytes()
+	}()
+	if _, err := io.Copy(att.Conn, r); err != nil {
+		return err
+	}
+	_ = att.CloseWrite()
+	var out []byte
+	select {
+	case out = <-said:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	res, err := v.cli.ContainerExecInspect(ctx, created.ID)
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("unpacking failed (tar %d): %s", res.ExitCode, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (v volumes) Files(ctx context.Context, name, p string) ([]engine.FileEntry, error) {
@@ -1275,9 +1337,13 @@ func (v volumes) Restore(ctx context.Context, name string, tar io.Reader) error 
 	// Started first: some engines attach a container's volumes only while
 	// it runs. Where the image has no shell to run, Docker still attaches
 	// them for a copy into a container that never ran.
-	_ = v.cli.ContainerStart(ctx, id, container.StartOptions{})
+	started := v.cli.ContainerStart(ctx, id, container.StartOptions{}) == nil
 	// The archive's top entry is the helper's mount point itself, so it
-	// unpacks from the root into the volume.
+	// unpacks from the root into the volume. Unpacked by tar in the helper
+	// where it can, so that owners are kept on every engine.
+	if started && v.canUntar(ctx, id) {
+		return v.untar(ctx, id, "/", tar)
+	}
 	return v.cli.CopyToContainer(ctx, id, "/", tar, container.CopyToContainerOptions{})
 }
 

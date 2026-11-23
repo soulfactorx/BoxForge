@@ -170,3 +170,40 @@ func TestKiriShapeLive(t *testing.T) {
 		t.Fatalf("aliases %s", aliases)
 	}
 }
+
+// TestVolumeOwnersLive takes a volume's data out and puts it into another
+// volume: owners and modes stay (an Oracle database's files are its own
+// user's, mode 0640, and it can't open them as root's).
+func TestVolumeOwnersLive(t *testing.T) {
+	img := os.Getenv("BOXFORGE_DOCKER_IMAGE")
+	if img == "" {
+		t.Skip("BOXFORGE_DOCKER_IMAGE is not set")
+	}
+	run := func(args ...string) string {
+		out, err := exec.Command("docker", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("docker %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	clean := func() { _ = exec.Command("docker", "volume", "rm", "-f", "bfk-own-a", "bfk-own-b").Run() }
+	clean()
+	t.Cleanup(clean)
+	run("run", "--rm", "-v", "bfk-own-a:/v", img, "sh", "-c", "mkdir -p /v/dbs && echo x > /v/dbs/spfile.ora && chown -R 54321:54322 /v/dbs && chmod 0640 /v/dbs/spfile.ora")
+	rt, err := Connect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	rc, err := rt.Volumes().Archive(ctx, "bfk-own-a", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	if err := rt.Volumes().Restore(ctx, "bfk-own-b", rc); err != nil {
+		t.Fatal(err)
+	}
+	if got := run("run", "--rm", "-v", "bfk-own-b:/v", img, "stat", "-c", "%u:%g %a", "/v/dbs/spfile.ora", "/v/dbs"); got != "54321:54322 640\n54321:54322 755" {
+		t.Fatalf("owners after restore:\n%s", got)
+	}
+}
