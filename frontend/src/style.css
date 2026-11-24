@@ -1303,7 +1303,7 @@ tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .agent-form .with-button { display: flex; gap: 8px; }
 .agent-form .with-button input { flex: 1; min-width: 0; }
 .agent-form textarea.mono, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
-.agent-term .terminal, .agent-term .term { min-height: 380px; }
+.agent-term .term-box { flex: none; height: 440px; }
 .change-list, .snapshot-list, .key-list { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 4px; }
 .change-list li { display: flex; gap: 10px; align-items: baseline; }
 .change-list li > span { font-size: 12px; min-width: 56px; color: var(--muted); }
