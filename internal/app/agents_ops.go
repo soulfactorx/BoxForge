@@ -304,8 +304,11 @@ func (a *App) AgentChanges(name string) (map[string]any, error) {
 if command -v git >/dev/null && git -c safe.directory='*' rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo GIT; git -c safe.directory='*' status --porcelain=v1 -uall | head -n 2000
 else
-  echo FILES; find . \( -name .git -o -name node_modules \) -prune -o -type f -newermt @%d -print 2>/dev/null | head -n 2000
-fi`, s.Mark)
+  echo FILES
+  # -newermt is GNU find's; busybox's (alpine) knows only minutes.
+  { find . \( -name .git -o -name node_modules \) -prune -o -type f -newermt @%d -print 2>/dev/null ||
+    find . \( -name .git -o -name node_modules \) -prune -o -type f -mmin -%d -print; } | head -n 2000
+fi`, s.Mark, (time.Now().Unix()-s.Mark)/60+1)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	out, errOut, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-agent", []string{"sh", "-c", script}, nil)
