@@ -229,6 +229,9 @@ type Change struct {
 	Action string `json:"action"` // keep, create, recreate, start, remove
 }
 
+// A dry run that stopped at a dependency it can't start (it starts nothing).
+var dryDependency = regexp.MustCompile(`dependency failed to start: container (\S+) (?:exited|is unhealthy)`)
+
 // What Compose's dry run says about an object, and what that comes to.
 var dryActions = map[string]string{
 	"Running": "keep", "Recreate": "recreate", "Recreated": "recreate",
@@ -314,6 +317,18 @@ func (a *App) ComposePreview(project string, files []string, file, text string) 
 	var lines []string
 	err := clirunner.Run(ctx, "", env, name, full, func(line string) { lines = append(lines, line) })
 	if err != nil {
+		// A dry run starts nothing: a service that waits for another to be
+		// healthy, where that one is stopped now, makes it end there
+		// ("dependency failed to start: container db exited (143)"). That
+		// is no fault of the file: a real up starts db first and waits.
+		// What it found so far is the plan, and the wait is said with it.
+		if m := dryDependency.FindStringSubmatch(err.Error()); m != nil {
+			changes := parseDryRun(lines)
+			if changes == nil {
+				changes = []Change{}
+			}
+			return append(changes, Change{Kind: "Waits", Name: m[1], Action: "waits"}), nil
+		}
 		// The trial file's name means nothing to the user.
 		return nil, fmt.Errorf("%s", strings.ReplaceAll(err.Error(), trial, filepath.Base(file)))
 	}

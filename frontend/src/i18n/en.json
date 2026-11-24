@@ -1274,6 +1274,7 @@
  "지금 다른 기기의 브라우저로 서버의 BoxForge를 쓰고 있습니다. 파일을 저장하면 이 브라우저가 내려받고, 폴더 · 파일 경로를 적는 칸은 서버 쪽 경로입니다. 업데이트 뒤 \"다시 시작\"을 누르면 서버가 새 버전으로 다시 켜지고, 비밀번호를 한 번 다시 넣어야 합니다. 컨테이너는 그대로 돕니다.": "You are using BoxForge on a server from a browser on another device. Saved files are downloaded by this browser, and boxes for folder · file paths take paths on the server. After an update, clicking \"Restart\" turns the server back on with the new version, and you will need to enter the password once more. Containers keep running.",
  "지금 다시 시작": "Restart now",
  "지금 멈춰 있는 컨테이너가 쓰는 볼륨은 남습니다. 컨테이너까지 지운 볼륨만 여기에 나옵니다.": "Volumes used by containers that are stopped right now are kept. Only volumes whose containers have been deleted appear here.",
+ "지금 멈춰 있어, 적용하면 먼저 켜고 준비(healthy)될 때까지 기다린 뒤 그것을 기다리는 서비스들을 켭니다. 미리 보기는 실제로 켜 보지 않아 그 뒤는 따라가지 못했습니다.": "Stopped now: applying starts it first, waits until it is ready (healthy), then starts the services waiting for it. The preview doesn't really start anything, so it couldn't follow past that.",
  "지금 보고 있는 폴더에 넣습니다. 같은 이름의 파일이 있으면 바뀝니다.": "Goes into the folder shown. A file of the same name is replaced.",
  "지금 상태를 이미지로 만들어 보냅니다. 끄면 원래 이미지 그대로 새로 만듭니다.": "Makes an image of its current state and sends it. If turned off, it is created fresh from the original image.",
  "지금 실행 중입니다. 강제로 멈춘 뒤 삭제합니다.": "It is running now. It will be force stopped and then deleted.",

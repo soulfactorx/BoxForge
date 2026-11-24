@@ -29,7 +29,7 @@ interface Service {
 interface Change {
   kind: string;
   name: string;
-  action: "keep" | "create" | "recreate" | "start" | "remove";
+  action: "keep" | "create" | "recreate" | "start" | "remove" | "waits";
 }
 
 interface Props {
@@ -51,6 +51,7 @@ const changeText: Record<Change["action"], string> = {
   recreate: "다시 만듦 (잠깐 멈췄다 켜짐)",
   start: "시작함",
   remove: "삭제함",
+  waits: "",
 };
 
 // ---- the graph: who needs whom
@@ -380,7 +381,9 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
   // Changed text is saved only once compose has read it and found nothing
   // wrong: an empty or broken file never replaces a working one.
   const unsure = dirty && (checking || !text.trim());
-  const news = (changes ?? []).filter((c) => c.action !== "keep");
+  // A dependency the trial run couldn't start (stopped now): said apart.
+  const waits = (changes ?? []).filter((c) => c.action === "waits");
+  const news = (changes ?? []).filter((c) => c.action !== "keep" && c.action !== "waits");
 
   const jump = (line: number) => {
     const el = box.current;
@@ -481,10 +484,19 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
           </p>
         ) : changes === null ? (
           <p className="muted">확인하는 중…</p>
-        ) : news.length === 0 ? (
+        ) : news.length === 0 && waits.length === 0 ? (
           <p className="muted">{dirty ? "바뀐 내용이 실행 중인 것과 같아, 아무것도 다시 만들지 않습니다." : "없습니다. 파일이 실행 중인 내용과 같습니다."}</p>
         ) : (
           <ul className="plan">
+            {waits.map((c) => (
+              <li key={"waits" + c.name} className="start" data-testid="plan-waits">
+                <span className="dot" />
+                <span>
+                  <strong>{c.name}</strong>
+                  <span className="sub">지금 멈춰 있어, 적용하면 먼저 켜고 준비(healthy)될 때까지 기다린 뒤 그것을 기다리는 서비스들을 켭니다. 미리 보기는 실제로 켜 보지 않아 그 뒤는 따라가지 못했습니다.</span>
+                </span>
+              </li>
+            ))}
             {news.map((c) => (
               <li key={c.kind + c.name} className={c.action}>
                 <span className="dot" />

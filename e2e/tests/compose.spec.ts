@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -103,4 +103,40 @@ test("a folder that isn't the user's is said above the file, the editor's column
   const index = (await page.locator(".svc-index").boundingBox())!;
   expect(index.y).toBeGreaterThan(n.y + n.height - 1);
   expect(Math.abs(index.x - n.x)).toBeLessThan(2);
+});
+
+test("a stopped dependency is said in the plan, and applying stays possible", async ({ page }) => {
+  // A service waiting for another to be healthy, that one stopped now: the
+  // trial run can't start it (it starts nothing) and ends there.
+  const where = mkdtempSync(join(tmpdir(), "bfe2e-dry-"));
+  writeFileSync(
+    join(where, "compose.yaml"),
+    `services:
+  app:
+    image: ${ALPINE}
+    command: sleep 1d
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: ${ALPINE}
+    command: sleep 1d
+    healthcheck: { test: ["CMD", "true"], interval: 2s }
+`,
+  );
+  const compose = `docker compose -p bfe2e-dry -f ${join(where, "compose.yaml")}`;
+  sh(`${compose} up -d`);
+  sh(`${compose} stop`);
+  try {
+    await open(page);
+    await go(page, "compose");
+    await page.locator(".project", { hasText: "bfe2e-dry" }).getByRole("button", { name: "자세히" }).first().click();
+    await page.getByRole("tab", { name: "Compose 파일" }).click();
+    const plan = page.getByTestId("apply-plan");
+    await expect(plan.getByTestId("plan-waits")).toContainText("bfe2e-dry-db-1", { timeout: 30_000 });
+    await expect(plan).not.toContainText("이대로는 적용할 수 없습니다");
+    await expect(page.getByRole("button", { name: "적용", exact: true })).toBeEnabled();
+  } finally {
+    sh(`${compose} down`, true);
+  }
 });
