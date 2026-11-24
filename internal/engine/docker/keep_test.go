@@ -231,18 +231,24 @@ func TestChownLive(t *testing.T) {
 	if err := rt.Volumes().Put(ctx, dir, "/", &one); err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.Volumes().(engine.HostOwner).Chown(ctx, dir, 4321, 4322); err != nil {
+	// To the user running the test, as BoxForge does for its user (who can
+	// then remove it); one made up when that is root.
+	uid, gid := os.Getuid(), os.Getgid()
+	if uid == 0 {
+		uid, gid = 4321, 4322
+	}
+	if err := rt.Volumes().(engine.HostOwner).Chown(ctx, dir, uid, gid); err != nil {
 		t.Fatal(err)
 	}
 	st, err := os.Stat(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sys := st.Sys().(*syscall.Stat_t); sys.Uid != 4321 || sys.Gid != 4322 {
+	if sys := st.Sys().(*syscall.Stat_t); int(sys.Uid) != uid || int(sys.Gid) != gid {
 		t.Fatalf("owner %d:%d", sys.Uid, sys.Gid)
 	}
 	inner, _ := os.Stat(dir + "/compose.yaml")
-	if sys := inner.Sys().(*syscall.Stat_t); sys.Uid != 4321 {
+	if sys := inner.Sys().(*syscall.Stat_t); int(sys.Uid) != uid {
 		t.Fatalf("the file in it: owner %d", sys.Uid)
 	}
 }
