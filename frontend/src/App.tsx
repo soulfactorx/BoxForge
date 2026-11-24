@@ -14,6 +14,7 @@ import Settings, { type Theme, type UpdateInfo } from "./Settings";
 import Images from "./Images";
 import Kubernetes, { type KubeMove } from "./Kubernetes";
 import type { Deploy } from "./KubeExtras";
+import Agents from "./Agents";
 import Alerts from "./Alerts";
 import PathPicker from "./PathPicker";
 import RunDialog from "./RunDialog";
@@ -21,7 +22,7 @@ import Topology from "./Topology";
 import { bytes } from "./format";
 import { Dialog, Icon, IconButton } from "./ui";
 
-type Page = "home" | "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds" | "kube" | "settings";
+type Page = "home" | "containers" | "map" | "images" | "volumes" | "networks" | "compose" | "builds" | "kube" | "agents" | "settings";
 
 // The sidebar, in the order shown; a null starts a new group.
 const menu: ({ id: Page; label: string; icon: string } | null)[] = [
@@ -37,6 +38,8 @@ const menu: ({ id: Page; label: string; icon: string } | null)[] = [
   null,
   { id: "builds", label: "빌드", icon: "build" },
   { id: "kube", label: "Kubernetes", icon: "kube" },
+  null,
+  { id: "agents", label: "AI 에이전트", icon: "agent" },
 ];
 
 const pageCommand: Record<Page, string> = {
@@ -50,6 +53,7 @@ const pageCommand: Record<Page, string> = {
   networks: "docker network ls",
   builds: "docker buildx version",
   kube: "docker exec boxforge-k3s kubectl get pods,deployments,services -A",
+  agents: "docker compose ls -a --filter name=bfa-",
 };
 
 function gib(bytes: number) {
@@ -445,6 +449,10 @@ export default function App() {
             onGo={(to) => setPage(to)}
           />
         )}
+        {/* Kept alive too: a box being built, or an agent's terminal. */}
+        <div hidden={page !== "agents"}>
+          <Agents containers={containers} run={run} showCli={showCli} onOpen={(id) => setDetail({ id, tab: "overview" })} />
+        </div>
         <div hidden={page !== "builds"}>
           <Builds run={run} onRun={(image) => setRunning({ image })} />
         </div>

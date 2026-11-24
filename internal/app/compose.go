@@ -52,11 +52,16 @@ var composeActions = map[string][]string{
 	"start":   {"start"},
 	"restart": {"restart"},
 	"pull":    {"pull"},
+	// For AI agent boxes: build the agent's image again from what is
+	// newest (an agent's update), and take a box away with all it made.
+	"upbuild": {"up", "-d", "--build", "--remove-orphans"},
+	"build":   {"build", "--pull", "--no-cache"},
+	"purge":   {"down", "--volumes", "--rmi", "local", "--remove-orphans"},
 }
 
 // Actions that read the compose file; the others work from the project's
 // name alone.
-var composeNeedsFile = map[string]bool{"up": true, "pull": true}
+var composeNeedsFile = map[string]bool{"up": true, "pull": true, "upbuild": true, "build": true, "purge": true}
 
 // ComposeAction runs one compose command, sending its output as "compose"
 // events, and returns when it has ended.
@@ -94,7 +99,7 @@ func (a *App) ComposeAction(req ComposeRequest) error {
 			return fmt.Errorf("%q is not a service name", s)
 		}
 	}
-	if req.Action != "down" && req.Action != "pull" {
+	if req.Action != "down" && req.Action != "pull" && req.Action != "purge" {
 		tail = append(append([]string{}, tail...), req.Services...)
 	}
 	name, full, env := a.docker(append(args, tail...)...)

@@ -30,6 +30,7 @@ const paths: Record<string, ReactNode> = {
   sort: <path d="M6 8l4-4 4 4M6 12l4 4 4-4" />,
   copy: <path d="M7.500 7.500h8v8h-8zM4.500 12.500v-8h8" />,
   check: <path d="M4.500 10.500l3.500 3.500 7.500-8" />,
+  agent: <path d="M5 7.500h10v7.500H5zM10 4v3.500M8 11h.01M12 11h.01M3.500 10.500v2M16.500 10.500v2M8.500 13.500h3" />,
 };
 
 /** Puts text on the clipboard, also where the page isn't a secure one. */

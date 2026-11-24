@@ -202,6 +202,18 @@ BoxForge가 만든 클러스터만 다룬다. 임의의 kubeconfig는 없다. �
 
 ---
 
+## 7.5 AI 에이전트 상자 (`internal/app/agents.go`, `agents_ops.go`, `frontend/src/Agents.tsx`)
+
+에이전트 하나(또는 여럿)를 위한 상자는 BoxForge가 써 주는 Compose 프로젝트 `bfa-<이름>`이다. 파일은 설정 폴더의 `BoxForge/agents/<이름>/`(`BOXFORGE_AGENTS_DIR`로 바꿈)에 둔다: `spec.json`(화면에서 고른 것), `compose.yaml`, `Dockerfile`, `egress/proxy.js` · `egress/allow.txt`, `secrets.env`(0600), `snapshots.json`. Compose 화면에도 보통 프로젝트로 보인다.
+
+- **이미지**: `node:24-bookworm-slim`(`BOXFORGE_AGENT_BASE`) 위에 git · ripgrep · python3 등과 고른 에이전트를 설치한다(npm, Cursor는 설치 스크립트를 `/opt/cursor`에, Hermes는 `/opt/hermes` venv). 사용자 `agent`는 Linux에서 BoxForge 사용자의 uid · gid(root면 1000), 그 밖에서는 1000. 홈 `/home/agent`는 볼륨(로그인 · 설정 · 대화가 남음), npm 전역 설치도 홈으로 간다. "내 이미지"는 설치 없이 그 이미지를 같은 uid로, `HOME=/tmp`로 돌린다.
+- **보호(늘)**: `cap_drop: [ALL]`, `no-new-privileges`, `init`, 작업 폴더 하나만 `/workspace`에 쓰기로, 더 고른 폴더는 `/mnt/read-only/…`에 읽기 전용. 고를 것: `mem_limit` · `cpus` · `pids_limit`, `read_only` 루트(+ `/tmp` tmpfs).
+- **네트워크**: "AI 서비스만"은 상자를 `internal: true` 네트워크에만 두고, 그 네트워크와 바깥 네트워크 둘 다에 있는 `egress`(같은 node 이미지에서 `proxy.js`, 사용자 node, 읽기 전용 · 특권 없음)를 `HTTPS_PROXY`로 준다. 프록시는 `allow.txt`(바뀌면 다시 읽음)의 이름(`*.x`는 그 아래, `host:port`는 그 포트, 없으면 443 · 80)만 CONNECT · HTTP로 통과시키고, 모든 시도를 JSON 한 줄로 로그에 쓴다(연결 기록 = 그 로그). 프록시를 쓰지 않는 연결은 네트워크가 없어 실패한다. 포트는 내부 네트워크가 열 수 없으므로 프록시가 127.0.0.1에 열고 상자로 넘긴다(`FORWARD`). `host.docker.internal`은 프록시에서 PC로 이어진다(로컬 AI). "인터넷 전체"는 기본 네트워크, "끊김"은 `network_mode: none`.
+- **API 키**: Compose `secrets`(파일)로 `/run/secrets/agent_env`에만 들어간다. 상자 안의 명령은 `sh -c '<키 파일 읽기>; cd /workspace; exec "$@"'`로 시작해 키를 환경에 넣는다(컨테이너 설정 · `docker inspect` · 내보내기에는 없다). 화면은 이름만 받는다.
+- **늘 켜 두기**: 같은 이미지 · 같은 보호의 `service` 서비스(`restart: unless-stopped`)로 에이전트의 게이트웨이(OpenClaw `gateway --port 18789 --bind lan`, Hermes `gateway`)를 돌린다. 셸 상자와 따로라서 서비스가 죽어도 터미널은 남는다.
+- **제어판**: 터미널은 `Exec`(`AgentTermOpen`) · 외부 터미널. 바뀐 파일은 작업 폴더가 git이면 `git status`/`git diff HEAD`, 아니면 상자를 만들거나 마지막으로 저장한 때 이후(`find -newermt`). 저장은 `Archive(/workspace)`를 상자가 모르는 볼륨 `bfa-<이름>-snap-<시각>`에 담고, 되돌리기는 상자 사용자로 작업 폴더를 비운 뒤 그 볼륨을 `Put`한다(소유자는 tar대로). 업데이트는 `compose build --pull --no-cache` 후 `up --build`. 삭제는 `down --volumes --rmi local` 후 복사본 볼륨과 설정 폴더를 지운다(작업 폴더는 남음).
+- 원격 엔진(SSH · 다른 PC)에서는 작업 폴더 · 키 파일이 그 엔진의 PC에 없으므로 쓸 수 없다.
+
 ## 8. 내보내기 · 가져오기 (`.boxforge`)
 
 컨테이너를 다른 PC로 옮기거나 동료에게 주기 위한 파일. zip이며(크기를 모르는 부분을 받는 대로 쓸 수 있다) 안에는:
@@ -293,7 +305,7 @@ Kiri 엔진의 설명은 Docker와 모양이 조금 다르다(실제 사용자�
 | 화면이 없는 명령을 위한 범용 폼, 커버리지 검사 | 터미널로 대신한다 |
 | 한국어 · 영어 밖의 언어 | 영어는 화면을 그리면서 옮기는 방식(10.5절)이라 표만 더하면 다른 언어도 된다 |
 
-확인이 덜 된 곳: 실제 Windows에서의 프록시 · 인증서 · 엔진 유지 · 엔진 자원 · 디스크 자동 줄이기 · 로그인할 때 시작, 실제 Mac에서의 실행과 Colima 설치, 실제 Linux 데스크톱에서의 pkexec 설치, 실제 휴대폰에서의 사용감, WSL 안의 containerd, 사내 인증서를 넣은 클러스터가 실제 회사망에서 이미지를 받는지. 개발 환경에서 실행해 볼 수 없어 흐름만 확인했다.
+확인이 덜 된 곳: 실제 Windows에서의 프록시 · 인증서 · 엔진 유지 · 엔진 자원 · 디스크 자동 줄이기 · 로그인할 때 시작, 실제 Mac에서의 실행과 Colima 설치, 실제 Linux 데스크톱에서의 pkexec 설치, 실제 휴대폰에서의 사용감, WSL 안의 containerd, 사내 인증서를 넣은 클러스터가 실제 회사망에서 이미지를 받는지. 개발 환경에서 실행해 볼 수 없어 흐름만 확인했다. AI 에이전트 상자는 Pi 상자를 만드는 것까지(CI) 확인했고, 다른 에이전트의 설치 · 로그인과 Windows(WSL 엔진)에서의 상자는 실제로 돌려 보지 않았다.
 
 ---
 

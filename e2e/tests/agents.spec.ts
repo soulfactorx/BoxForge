@@ -1,0 +1,119 @@
+import { expect, test, type Page } from "@playwright/test";
+import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ALPINE, go, open, sh, sweep } from "./helpers";
+
+test.describe.configure({ mode: "serial" });
+test.setTimeout(600_000);
+
+// The box's user is an ordinary one (1000 when the tests run as root):
+// the folder is opened to it as a user's own folder would be.
+const work = mkdtempSync(join(tmpdir(), "bfe2e-agent-"));
+chmodSync(work, 0o777);
+const box = "bfa-bfe2e-box";
+const inBox = (cmd: string) => sh(`docker exec ${box}-agent sh -c '${cmd}'`);
+
+test.afterAll(() => {
+  sh(`docker compose -p ${box} down --volumes --remove-orphans`, true);
+  sh(`docker compose -p bfa-bfe2e-pi down --volumes --rmi local --remove-orphans`, true);
+  sweep();
+});
+
+async function make(page: Page, name: string, fill: (d: ReturnType<Page["getByRole"]>) => Promise<void>) {
+  await open(page);
+  await go(page, "agents");
+  await page.getByRole("button", { name: "새 에이전트 상자" }).click();
+  const d = page.getByRole("dialog");
+  await d.getByLabel("상자 이름").fill(name);
+  await d.getByRole("textbox", { name: "작업 폴더" }).fill(work);
+  await fill(d);
+  await d.getByRole("button", { name: "만들고 시작" }).click();
+}
+
+test("an agent box: keys kept out of the container's settings, only listed addresses, changes, saved copies, delete", async ({ page }) => {
+  await make(page, "bfe2e-box", async (d) => {
+    await d.getByLabel("내가 가진 이미지로 (에이전트를 넣지 않음)").check();
+    await d.getByLabel("이미지", { exact: true }).fill(ALPINE);
+    await d.getByLabel("에이전트를 시작하는 명령").fill("sh");
+    await d.getByLabel("연결해도 되는 주소").fill("example.org");
+  });
+  await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 180_000 });
+  await expect(page.getByTestId("agent-output")).toContainText("끝났습니다");
+
+  // Made safe whatever the image: an ordinary user, no privileges, no way out but the proxy.
+  const cfg = JSON.parse(sh(`docker inspect ${box}-agent`))[0];
+  expect(cfg.Config.User).not.toBe("");
+  expect(cfg.HostConfig.CapDrop).toContain("ALL");
+  expect(cfg.HostConfig.SecurityOpt.join()).toContain("no-new-privileges");
+  expect(Object.keys(cfg.NetworkSettings.Networks)).toEqual([`${box}_inside`]);
+
+  // A key: in the box's file, not in what the engine shows.
+  await page.getByRole("tab", { name: "API 키" }).click();
+  await page.getByLabel("키 이름").fill("BFE2E_KEY");
+  await page.getByLabel("키 값").fill("s3cret-value");
+  await page.getByRole("button", { name: "저장", exact: true }).click();
+  await expect(page.getByTestId("agent-keys")).toContainText("BFE2E_KEY");
+  await expect(page.getByTestId("agent-keys")).not.toContainText("s3cret-value");
+  expect(sh(`docker inspect ${box}-agent`)).not.toContain("s3cret-value");
+
+  // The terminal: the key is there, and an address not on the list is stopped.
+  await page.getByRole("tab", { name: "터미널" }).click();
+  const term = page.locator(".xterm");
+  await expect(term).toBeVisible();
+  await term.click();
+  await page.keyboard.type("wget -q -T 5 -O- http://blocked.bfe2e.test; echo key-is-$BFE2E_KEY\n");
+  await expect(page.locator(".xterm-rows")).toContainText("key-is-s3cret-value", { timeout: 30_000 });
+
+  await page.getByRole("tab", { name: "연결 기록" }).click();
+  const conns = page.getByTestId("agent-connections");
+  const row = conns.getByRole("row", { name: /blocked\.bfe2e\.test/ });
+  await expect(row).toContainText("막힘", { timeout: 15_000 });
+  await row.getByRole("button", { name: "허용" }).click();
+  await expect(row).toContainText("허용함");
+  const dir = sh(`docker inspect ${box}-egress --format '{{range .Mounts}}{{.Source}}{{end}}'`);
+  expect(readFileSync(join(dir, "allow.txt"), "utf8")).toContain("blocked.bfe2e.test");
+
+  // What the agent changed, and going back to a saved copy.
+  inBox("echo first > /workspace/notes.txt");
+  await page.getByRole("tab", { name: "저장 · 되돌리기" }).click();
+  await page.getByLabel("저장 이름").fill("before");
+  await page.getByRole("button", { name: "지금 상태 저장" }).click();
+  await expect(page.getByTestId("agent-snapshots")).toContainText("before");
+  inBox("echo second > /workspace/notes.txt; echo x > /workspace/extra.txt");
+
+  await page.getByRole("tab", { name: "바뀐 파일" }).click();
+  const changes = page.getByTestId("agent-changes");
+  await expect(changes).toContainText("extra.txt");
+  await changes.getByRole("button", { name: "notes.txt" }).click();
+  await expect(page.locator(".log-box.diff")).toContainText("second");
+
+  await page.getByRole("tab", { name: "저장 · 되돌리기" }).click();
+  await page.getByTestId("agent-snapshots").getByRole("button", { name: "되돌리기" }).click();
+  const ask = page.getByRole("dialog");
+  await expect(ask).toContainText("모두 지워지고");
+  await ask.getByRole("button", { name: "되돌리기" }).click();
+  await expect.poll(() => inBox("cat /workspace/notes.txt; ls /workspace")).toBe("first\nnotes.txt");
+
+  // Deleting says what goes, and takes the box and its copies away; the folder stays.
+  await page.getByRole("button", { name: "상자 삭제" }).click();
+  const del = page.getByRole("dialog");
+  await expect(del).toContainText("저장해 둔 작업 폴더 복사본");
+  await expect(del).toContainText(work);
+  await del.getByRole("button", { name: "삭제" }).click();
+  await expect(page.getByRole("button", { name: "새 에이전트 상자" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("agent-bfe2e-box")).toHaveCount(0);
+  expect(sh(`docker ps -aq --filter name=${box}`)).toBe("");
+  expect(sh(`docker volume ls -q --filter name=${box}`)).toBe("");
+  expect(readFileSync(join(work, "notes.txt"), "utf8")).toBe("first\n");
+});
+
+test("a Pi box is built with the agent in it", async ({ page }) => {
+  // Builds install from the internet: not where builds can't reach it.
+  test.skip(!!process.env.E2E_NO_AGENT_BUILD, "builds can't reach the internet here");
+  await make(page, "bfe2e-pi", async (d) => {
+    await expect(d.getByLabel(/Pi Coding Agent/)).toBeChecked();
+  });
+  await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 540_000 });
+  expect(sh(`docker exec bfa-bfe2e-pi-agent sh -c 'id -u; command -v pi'`)).toMatch(/^\d+\n.*\/pi$/);
+});
