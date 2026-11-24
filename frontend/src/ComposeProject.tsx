@@ -418,9 +418,9 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
       </p>
     );
   return (
-    <div className="compose-file">
+    <>
       {notMine && (
-        <div className="note-box" role="alert" data-testid="not-mine">
+        <div className="note-box not-mine" role="alert" data-testid="not-mine">
           <strong>{`이 폴더(${notMine})는 다른 사용자(root)의 것이라 고친 것을 저장할 수 없습니다.`}</strong>
           <span className="sub">가져오기로 되살린 폴더는 엔진이 root 권한으로 만들어서 그렇습니다. 이 프로젝트 폴더와 그 안의 파일을 지금 사용자의 것으로 바꾸면 고칠 수 있습니다.</span>
           <span>
@@ -430,6 +430,7 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
           </span>
         </div>
       )}
+    <div className="compose-file">
       <aside className="svc-index">
         <strong>서비스 {index.length}개</strong>
         {index.map((s) => (
@@ -504,6 +505,7 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
         </p>
       </aside>
     </div>
+    </>
   );
 }
 

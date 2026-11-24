@@ -87,3 +87,20 @@ test("join two services in the picture by dragging, part them by clicking the li
   expect(await box.inputValue()).not.toContain("depends_on");
   expect(await box.inputValue()).toContain("# 내 PC의");
 });
+
+test("a folder that isn't the user's is said above the file, the editor's columns kept", async ({ page }) => {
+  // As a folder an import made as root looks to a user who isn't (the tests run as root here).
+  await page.route("**/api/call/ComposeNotMine", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ result: dir }) }));
+  await open(page);
+  await go(page, "compose");
+  await page.locator(".project", { hasText: "bfe2e-shop" }).getByRole("button", { name: "자세히" }).first().click();
+  await page.getByRole("tab", { name: "Compose 파일" }).click();
+  const note = page.getByTestId("not-mine");
+  await expect(note).toContainText("다른 사용자(root)의 것");
+  await expect(note.getByRole("button", { name: "내 것으로 바꾸기" })).toBeVisible();
+  // Above the services, the file and the preview: not one of their columns.
+  const n = (await note.boundingBox())!;
+  const index = (await page.locator(".svc-index").boundingBox())!;
+  expect(index.y).toBeGreaterThan(n.y + n.height - 1);
+  expect(Math.abs(index.x - n.x)).toBeLessThan(2);
+});

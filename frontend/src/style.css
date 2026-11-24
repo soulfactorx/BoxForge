@@ -1271,3 +1271,5 @@ textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
 .bulk-bar .spacer { flex: 1; }
 .bulk-list { max-height: 40vh; overflow: auto; margin: 6px 0; padding-left: 20px; }
 tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.note-box.not-mine { display: grid; gap: 6px; margin-bottom: 12px; }
+.note-box.not-mine button { justify-self: start; }
