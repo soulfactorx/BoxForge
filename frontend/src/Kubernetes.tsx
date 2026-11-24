@@ -191,14 +191,27 @@ export default function Kubernetes({
   const [deploying, setDeploying] = useState(false);
   // The deploy form's list of settings to pass in: read while it is open,
   // whatever tab is behind it (a slow cluster may not answer the first time).
+  // One read at a time: on a slow cluster, reads started while the last
+  // ones are unanswered pile up, and in a browser (6 requests to a server
+  // at once) the deploy itself would wait behind them.
   useEffect(() => {
     if (!deploying) return;
-    const read = () => {
-      for (const [kind, set] of [["configmaps", setConfigs], ["secrets", setSecrets]] as const) call<string>("KubeGet", kind).then((j) => set(JSON.parse(j).items ?? []), () => {});
+    let reading = false;
+    let gone = false;
+    const read = async () => {
+      if (reading || gone) return;
+      reading = true;
+      for (const [kind, set] of [["configmaps", setConfigs], ["secrets", setSecrets]] as const) {
+        await call<string>("KubeGet", kind).then((j) => !gone && set(JSON.parse(j).items ?? []), () => {});
+      }
+      reading = false;
     };
     read();
     const t = setInterval(read, 5000);
-    return () => clearInterval(t);
+    return () => {
+      gone = true;
+      clearInterval(t);
+    };
   }, [deploying]);
   const [making, setMaking] = useState<"data" | "pvc" | null>(null);
   const [working, setWorking] = useState(false);
@@ -255,10 +268,16 @@ export default function Kubernetes({
   const busy = useRef(false);
 
   const refresh = async () => {
+    // A round at a time: on a slow cluster, rounds started while the last
+    // one is unanswered pile up and keep other requests (a deploy) waiting.
+    if (busy.current) return;
+    busy.current = true;
     const st = await call<KubeState>("KubeStatus").catch(() => null);
     if (st) setState(st);
-    if (!st?.ready || busy.current) return;
-    busy.current = true;
+    if (!st?.ready) {
+      busy.current = false;
+      return;
+    }
     const list = async (kind: string, set: (items: Item[]) => void) => {
       try {
         set(JSON.parse(await call<string>("KubeGet", kind)).items ?? []);
@@ -308,7 +327,12 @@ export default function Kubernetes({
   const booting = !!state?.running && !state.ready && !starting;
   useEffect(() => {
     if (!booting) return;
-    const read = () => call<string[]>("KubeLogTail", 100).then(setBootLog, () => {});
+    let reading = false;
+    const read = () => {
+      if (reading) return;
+      reading = true;
+      call<string[]>("KubeLogTail", 100).then(setBootLog, () => {}).finally(() => (reading = false));
+    };
     read();
     const t = setInterval(read, 3000);
     return () => clearInterval(t);
