@@ -47,6 +47,7 @@ function Steps({ steps, busy }: { steps: string[]; busy: boolean }) {
 export function importNotes(notes: string[]) {
   return explain(notes).map((n) => {
     if (n.startsWith("volume-kept:")) return `볼륨 "${n.slice(12)}"은(는) 이미 있어서 그대로 두었습니다. 파일의 데이터로 바꾸려면 그 볼륨을 지운 뒤 다시 가져오세요.`;
+    if (n === "start-stopped") return "시작을 그만두었습니다. 가져온 컨테이너는 멈춘 채로 있습니다. 고칠 것을 고친 뒤 Compose 화면이나 컨테이너 목록에서 시작하세요.";
     if (n.startsWith("wait-failed:")) {
       const [name, ...why] = n.slice(12).split("=");
       return `"${name}"이(가) 준비(healthy)되지 않아 기다리지 않고 다음 것을 시작했습니다: ${why.join("=")}. 그 컨테이너의 로그를 보세요.`;
@@ -217,6 +218,7 @@ export function ImportDialog({ run, onClose, onDone }: ImportProps) {
   const [file, setFile] = useState("");
   const [info, setInfo] = useState<Info | null>(null);
   const [start, setStart] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const key = useRef(`b${++serial}`).current;
@@ -274,6 +276,7 @@ export function ImportDialog({ run, onClose, onDone }: ImportProps) {
   const go = async () => {
     if (!info) return;
     setBusy(true);
+    setStopping(false);
     setError("");
     setSteps([]);
     let failed = "";
@@ -356,6 +359,14 @@ export function ImportDialog({ run, onClose, onDone }: ImportProps) {
       )}
       {info && <p className="muted footnote">같은 이름의 컨테이너나 볼륨이 이미 있으면 건드리지 않고 건너뜁니다. 같은 경로에 내용이 이미 있는 폴더도 그대로 둡니다. 모르는 사람이 준 파일은 가져오지 마세요: 컨테이너는 내 PC의 폴더와 포트를 쓸 수 있습니다.</p>}
       <Steps steps={steps} busy={busy} />
+      {busy && start && (
+        <div className="row-actions" data-testid="stop-start">
+          <button type="button" disabled={stopping} onClick={() => (setStopping(true), call("StopImportStart", key).catch(() => {}))}>
+            {stopping ? "그만두는 중…" : "시작 그만두기"}
+          </button>
+          <span className="help">가져온 것은 그대로 두고, 아직 시작하지 않은 것은 시작하지 않으며, 이미 시작한 컨테이너는 멈춥니다. Compose 파일을 먼저 고친 뒤 시작하려면 누르세요.</span>
+        </div>
+      )}
       {error && (
         <p className="warn" role="alert">
           {error}

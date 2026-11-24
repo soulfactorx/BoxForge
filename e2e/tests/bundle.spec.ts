@@ -201,3 +201,50 @@ test("a file whose containers ran on carried images still gives back the images'
     sh(`docker rmi bfe2e-cmp:v1 boxforge-export/bfe2e-cmp:old`, true);
   }
 });
+
+test("starting after an import can be given up while it waits, the imported things kept", async ({ page }) => {
+  const dir = mkdtempSync(join(tmpdir(), "bfe2e-never-"));
+  writeFileSync(
+    join(dir, "compose.yaml"),
+    `services:
+  app:
+    image: ${ALPINE}
+    command: sleep 1d
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: ${ALPINE}
+    command: sleep 1d
+    healthcheck: { test: ["CMD", "false"], interval: 2s, retries: 1000 }
+`,
+  );
+  const compose = `docker compose -p bfe2e-never -f ${join(dir, "compose.yaml")}`;
+  sh(`${compose} create`);
+  const file = join(mkdtempSync(join(tmpdir(), "bfe2e-bundle-")), "never.boxforge");
+  try {
+    await open(page);
+    await go(page, "containers");
+    await page.locator("tr", { hasText: "bfe2e-never-app" }).getByRole("button", { name: "더보기" }).click();
+    await page.getByRole("menuitem", { name: "파일로 내보내기" }).click();
+    const dlg = page.getByRole("dialog");
+    await dlg.getByRole("button", { name: "bfe2e-never" }).click();
+    await dlg.getByLabel("저장할 파일").fill(file);
+    await dlg.getByRole("button", { name: "내보내기", exact: true }).click();
+    await expect(page.getByText("파일로 내보냈습니다")).toBeVisible({ timeout: 90_000 });
+
+    sh(`${compose} down`);
+    await page.getByRole("button", { name: "가져오기", exact: true }).click();
+    await dlg.getByLabel("가져올 파일").fill(file);
+    await dlg.getByRole("button", { name: "열기" }).click();
+    await dlg.getByRole("checkbox", { name: /가져온 뒤 바로 시작/ }).check();
+    await dlg.getByRole("button", { name: "가져오기", exact: true }).click();
+    // db never gets healthy: the wait says so, and can be given up.
+    await expect(dlg.getByText(/bfe2e-never-db-1가 준비\(healthy\)되기를 기다리는 중/)).toBeVisible({ timeout: 90_000 });
+    await dlg.getByRole("button", { name: "시작 그만두기" }).click();
+    await expect(page.getByText("시작을 그만두었습니다")).toBeVisible({ timeout: 30_000 });
+    expect(sh(`docker inspect -f '{{.State.Running}}' bfe2e-never-db-1 bfe2e-never-app-1`)).toBe("false\nfalse");
+  } finally {
+    sh(`${compose} down`, true);
+  }
+});

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/soulfactorx/boxforge/internal/engine"
@@ -505,19 +506,50 @@ func (a *App) ImportBundle(key, file string, start bool) ([]string, error) {
 		}
 	}
 	if start {
+		// Starting can be given up from the screen (StopImportStart): the
+		// rest isn't started, and what was started is stopped again; what
+		// was imported stays.
+		stop := make(chan struct{})
+		importStops.Store(key, stop)
+		defer importStops.Delete(key)
+		stopped := func() bool {
+			select {
+			case <-stop:
+				return true
+			default:
+				return false
+			}
+		}
+		var started []madeContainer
 		order, waits := startOrder(made, composeDeps(zr, info))
+	starting:
 		for _, m := range order {
 			// What it waits for, as Compose would: those it depends on
 			// being healthy (or done) first.
 			for _, w := range waits[m.name] {
-				if msg := a.waitFor(ctx, w, say); msg != "" {
+				if msg := a.waitFor(ctx, w, say, stop); msg != "" {
 					notes = append(notes, msg)
 				}
+				if stopped() {
+					break starting
+				}
+			}
+			if stopped() {
+				break
 			}
 			say(fmt.Sprintf("%s: 시작하는 중", m.name))
 			if err := rt.Containers().Start(ctx, m.id); err != nil {
 				notes = append(notes, "start-failed:"+m.name+"="+portHint(err).Error())
+			} else {
+				started = append(started, m)
 			}
+		}
+		if stopped() {
+			say("시작을 그만두는 중: 시작한 컨테이너를 멈춥니다")
+			for i := len(started) - 1; i >= 0; i-- {
+				_ = rt.Containers().Stop(context.Background(), started[i].id)
+			}
+			notes = append(notes, "start-stopped")
 		}
 	}
 	return notes, nil
@@ -772,21 +804,32 @@ func startOrder(made []madeContainer, fromFiles map[string][]dependency) ([]made
 // waitFor waits, up to 15 minutes, for a started container to be healthy
 // (or to have ended well, for service_completed_successfully). It returns
 // a note when it gave up: "wait-failed:<name>=<why>".
-func (a *App) waitFor(ctx context.Context, d dependency, say func(string)) string {
-	deadline := time.Now().Add(15 * time.Minute)
-	for first := true; time.Now().Before(deadline); first = false {
+func (a *App) waitFor(ctx context.Context, d dependency, say func(string), stop <-chan struct{}) string {
+	began := time.Now()
+	deadline := began.Add(15 * time.Minute)
+	restarts := -1
+	var told time.Time
+	for time.Now().Before(deadline) {
 		raw, err := a.eng().Containers().Inspect(ctx, d.name)
 		if err != nil {
 			return ""
 		}
 		var st struct {
-			State struct {
+			RestartCount int
+			State        struct {
 				Status   string
 				ExitCode int
 				Health   *struct{ Status string }
 			}
 		}
 		_ = json.Unmarshal(raw, &st)
+		// One that keeps falling over and being started again won't get
+		// ready by waiting: given up after a few rounds.
+		if restarts < 0 {
+			restarts = st.RestartCount
+		} else if st.RestartCount-restarts >= 3 {
+			return fmt.Sprintf("wait-failed:%s=restarted %d times while waiting", d.name, st.RestartCount-restarts)
+		}
 		switch {
 		case d.condition == "service_completed_successfully":
 			if st.State.Status == "exited" {
@@ -802,12 +845,20 @@ func (a *App) waitFor(ctx context.Context, d dependency, say func(string)) strin
 		case st.State.Status == "exited" || st.State.Status == "dead":
 			return fmt.Sprintf("wait-failed:%s=%s", d.name, st.State.Status)
 		}
-		if first {
-			say(fmt.Sprintf("%s가 준비(healthy)되기를 기다리는 중", d.name))
+		// Where it stands, now and then: how long, and its state.
+		if time.Since(told) > 15*time.Second {
+			told = time.Now()
+			state := st.State.Status
+			if st.State.Health != nil {
+				state += ", " + st.State.Health.Status
+			}
+			say(fmt.Sprintf("%s가 준비(healthy)되기를 기다리는 중 · %d초 · 지금 %s", d.name, int(time.Since(began).Seconds()), state))
 		}
 		select {
 		case <-ctx.Done():
 			return "wait-failed:" + d.name + "=" + ctx.Err().Error()
+		case <-stop:
+			return ""
 		case <-time.After(3 * time.Second):
 		}
 	}
@@ -869,5 +920,18 @@ func giveToUser(ctx context.Context, rt engine.Runtime, made string) {
 	}
 	if o, ok := rt.Volumes().(engine.HostOwner); ok {
 		_ = o.Chown(ctx, made, os.Getuid(), os.Getgid())
+	}
+}
+
+// importStops are the imports starting what they made, by key: closing one
+// gives that starting up.
+var importStops sync.Map
+
+// StopImportStart gives up starting what an import made (it was chosen by
+// mistake, or a container never gets ready): the rest isn't started, and
+// what was started is stopped. What was imported stays.
+func (a *App) StopImportStart(key string) {
+	if v, ok := importStops.LoadAndDelete(key); ok {
+		close(v.(chan struct{}))
 	}
 }
