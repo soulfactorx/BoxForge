@@ -275,8 +275,20 @@ func (a *App) ComposePreview(project string, files []string, file, text string) 
 		return nil, fmt.Errorf("%s is not a .yml or .yaml file", filepath.Base(file))
 	}
 	// The trial copy sits beside the real file, so that paths in it that
-	// are relative to the file mean the same.
-	trial := filepath.Join(filepath.Dir(file), ".boxforge-preview-"+filepath.Base(file))
+	// are relative to the file mean the same. Where that folder can't be
+	// written (one an import put back, the engine's own), it goes to the
+	// temporary folder, and Compose is told where the project is.
+	dir := filepath.Dir(file)
+	trial := filepath.Join(dir, ".boxforge-preview-"+filepath.Base(file))
+	elsewhere := !writable(dir)
+	if elsewhere {
+		tmp, err := os.MkdirTemp("", "boxforge-preview-")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(tmp)
+		trial = filepath.Join(tmp, filepath.Base(file))
+	}
 	if err := os.WriteFile(trial, []byte(text), 0o600); err != nil {
 		return nil, err
 	}
@@ -284,6 +296,9 @@ func (a *App) ComposePreview(project string, files []string, file, text string) 
 	args := []string{"compose", "--dry-run", "--ansi", "never", "--progress", "plain"}
 	if project != "" {
 		args = append(args, "-p", project)
+	}
+	if elsewhere {
+		args = append(args, "--project-directory", a.hostPath(dir))
 	}
 	for _, f := range files {
 		if f == file {

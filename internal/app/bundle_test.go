@@ -119,3 +119,27 @@ func TestFirstMissing(t *testing.T) {
 		t.Fatalf("a folder that is there: %q", got)
 	}
 }
+
+// A Compose folder this user can't write (as one an import made as root)
+// is offered to them. Runs where the tests don't run as root (CI).
+func TestComposeNotMine(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root writes everywhere")
+	}
+	dir := t.TempDir()
+	file := dir + "/compose.yaml"
+	if err := os.WriteFile(file, []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{}
+	if got := a.ComposeNotMine(file); got != "" {
+		t.Fatalf("a folder of mine: %q", got)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if got := a.ComposeNotMine(file); got != dir {
+		t.Fatalf("a folder I can't write: %q", got)
+	}
+}

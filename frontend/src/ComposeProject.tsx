@@ -329,10 +329,14 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
   const [checking, setChecking] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
 
+  // A file put back by an import is the engine's (root's): offered to the
+  // user as soon as it is opened, before anything fails on it.
+  const [notMine, setNotMine] = useState("");
   useEffect(() => {
     if (!file) return;
     setSaved(null);
     setError("");
+    call<string>("ComposeNotMine", file).then(setNotMine, () => setNotMine(""));
     call<string>("ComposeFile", file).then(
       (t) => {
         setSaved(t);
@@ -387,8 +391,6 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
     el.scrollTop = Math.max(0, (line - 3) * parseFloat(getComputedStyle(el).lineHeight));
   };
 
-  // A file put back by an import is the engine's (root's): offered to the user.
-  const [notMine, setNotMine] = useState("");
   const save = async () => {
     const ok = await run(`# ${file} 저장`, () => call("ComposeSave", file, text));
     if (ok) setSaved(text);
@@ -398,7 +400,7 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
   const makeMine = async () => {
     if (await run(`sudo chown -R $(id -u):$(id -g) ${notMine}  # 엔진이 root로 대신함`, () => call("ComposeMakeMine", file))) {
       setNotMine("");
-      await save();
+      if (dirty) await save();
     }
   };
 
@@ -419,11 +421,11 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
     <div className="compose-file">
       {notMine && (
         <div className="note-box" role="alert" data-testid="not-mine">
-          <strong>{`이 폴더(${notMine})는 다른 사용자(root)의 것이라 저장할 수 없습니다.`}</strong>
+          <strong>{`이 폴더(${notMine})는 다른 사용자(root)의 것이라 고친 것을 저장할 수 없습니다.`}</strong>
           <span className="sub">가져오기로 되살린 폴더는 엔진이 root 권한으로 만들어서 그렇습니다. 이 프로젝트 폴더와 그 안의 파일을 지금 사용자의 것으로 바꾸면 고칠 수 있습니다.</span>
           <span>
             <button type="button" className="primary" onClick={makeMine}>
-              내 것으로 바꾸고 저장
+              {dirty ? "내 것으로 바꾸고 저장" : "내 것으로 바꾸기"}
             </button>
           </span>
         </div>
