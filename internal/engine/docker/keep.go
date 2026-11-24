@@ -235,3 +235,7 @@ func (c containers) givesHostName(ctx context.Context) bool {
 	}
 	return false
 }
+
+// GivesHostName tells (engine.HostNameGiver) whether the engine gives
+// every container host.docker.internal by itself.
+func (c containers) GivesHostName(ctx context.Context) bool { return c.givesHostName(ctx) }

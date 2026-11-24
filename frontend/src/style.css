@@ -1273,3 +1273,4 @@ textarea.editor.starter { min-height: 0; height: auto; font-size: 13px; }
 tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .note-box.not-mine { display: grid; gap: 6px; margin-bottom: 12px; }
 .note-box.not-mine button { justify-self: start; }
+.note-box.host-hint { display: grid; gap: 6px; margin-bottom: 12px; }

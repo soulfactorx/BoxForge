@@ -314,6 +314,13 @@ export function serviceLines(text: string) {
   return out;
 }
 
+interface Hint {
+  kind: string;
+  target: string;
+  port: number;
+  from: string[];
+}
+
 interface Draft {
   file: string;
   text: string;
@@ -376,6 +383,31 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
     };
   }, [text, saved, file, members]);
 
+  // On an engine that doesn't take host.docker.internal to the PC by itself
+  // (plain Docker on Linux), a service the others reach that way often
+  // can't be reached: found here and offered as a fix to the text.
+  const [hints, setHints] = useState<Hint[]>([]);
+  useEffect(() => {
+    let stale = false;
+    const timer = setTimeout(() => {
+      call<Hint[]>("ComposeHints", text).then(
+        (h) => !stale && setHints(h ?? []),
+        () => !stale && setHints([]),
+      );
+    }, 700);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [text]);
+  const aliasHost = async (h: Hint) => {
+    let out = "";
+    const ok = await run(`# ${file}: services.${h.target}.networks.default.aliases 에 host.docker.internal 넣기, extra_hosts 의 host.docker.internal 줄 빼기`, async () => {
+      out = await call<string>("ComposeAliasHost", text, h.target);
+    });
+    if (ok && out) setText(out);
+  };
+
   const index = useMemo(() => serviceLines(text), [text]);
   const dirty = saved !== null && text !== saved;
   // Changed text is saved only once compose has read it and found nothing
@@ -433,6 +465,18 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
           </span>
         </div>
       )}
+      {hints.map((h) => (
+        <div key={h.target + h.port} className="note-box host-hint" role="note" data-testid="host-hint">
+          <strong>{`${h.from.join(", ")}이(가) ${h.target}에 host.docker.internal:${h.port}로 연결합니다. 이 엔진에서는 연결이 안 될 수 있습니다.`}</strong>
+          <span className="sub">{`Docker Desktop · Kiri는 host.docker.internal을 PC로 이어 주지만, 리눅스의 Docker는 그렇지 않아 방화벽에 막히기 쉽습니다. ${h.target}에 host.docker.internal이라는 별칭을 주면 PC를 거치지 않고 바로 이어집니다. Windows · Kiri에서도 그대로 됩니다.`}</span>
+          <span>
+            <button type="button" className="primary" onClick={() => aliasHost(h)}>
+              파일에 넣기
+            </button>
+            <span className="sub"> 파일 내용만 고칩니다. 확인한 뒤 저장하세요.</span>
+          </span>
+        </div>
+      ))}
     <div className="compose-file">
       <aside className="svc-index">
         <strong>서비스 {index.length}개</strong>

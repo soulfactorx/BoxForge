@@ -132,6 +132,9 @@ test("a cluster made by an older BoxForge is made again at its start, its data k
 test("deploy with the helper: address, storage, settings, and the picture", async ({ page, request }) => {
   // Some machines can't run containers inside a container at all.
   test.skip(!!process.env.E2E_KUBE_NO_PODS, "pods can't run in a cluster here");
+  // The test before remakes the cluster: on a slow runner it takes most of
+  // the usual time to come up again before this one can begin.
+  test.setTimeout(900_000);
   await kube(page);
   await page.getByRole("button", { name: "앱 배포" }).click();
   const d = page.getByRole("dialog");

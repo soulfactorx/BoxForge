@@ -338,6 +338,13 @@ type VolumeService interface {
 	Restore(ctx context.Context, name string, tar io.Reader) error
 }
 
+// HostNameGiver is what a ContainerService can tell: whether its engine
+// gives every container the name host.docker.internal by itself (Docker
+// Desktop, Kiri and Podman do; a plain Docker engine doesn't).
+type HostNameGiver interface {
+	GivesHostName(ctx context.Context) bool
+}
+
 // ManySaver is what an ImageService can also do: save several images in
 // one archive, each layer they share once.
 type ManySaver interface {

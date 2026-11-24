@@ -140,3 +140,47 @@ test("a stopped dependency is said in the plan, and applying stays possible", as
     sh(`${compose} down`, true);
   }
 });
+
+test("a service reached through host.docker.internal is offered its alias on plain Docker", async ({ page }) => {
+  // As on Windows: the app finds its database through the PC. The engine
+  // here is a plain Docker one, where that name doesn't lead to the PC.
+  const where = mkdtempSync(join(tmpdir(), "bfe2e-hda-"));
+  writeFileSync(
+    join(where, "compose.yaml"),
+    `services:
+  db:
+    image: ${ALPINE}
+    command: sleep 1d
+    ports:
+      - "45921:45921" # the database
+  app:
+    image: ${ALPINE}
+    command: sleep 1d
+    environment:
+      DB_URL: jdbc:oracle:thin:@host.docker.internal:45921/XE
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+`,
+  );
+  const compose = `docker compose -p bfe2e-hda -f ${join(where, "compose.yaml")}`;
+  sh(`${compose} up -d`);
+  sh(`${compose} stop`);
+  try {
+    await open(page);
+    await go(page, "compose");
+    await page.locator(".project", { hasText: "bfe2e-hda" }).getByRole("button", { name: "자세히" }).first().click();
+    await page.getByRole("tab", { name: "Compose 파일" }).click();
+    const hint = page.getByTestId("host-hint");
+    await expect(hint).toContainText("app이(가) db에 host.docker.internal:45921로 연결합니다", { timeout: 30_000 });
+    await hint.getByRole("button", { name: "파일에 넣기" }).click();
+    const box = page.getByLabel("compose 파일 내용");
+    await expect(box).toHaveValue(/networks:\n\s+default:\n\s+aliases:\n\s+- host\.docker\.internal/);
+    await expect(box).toHaveValue(/# the database/);
+    await expect(box).not.toHaveValue(/host-gateway/);
+    await expect(hint).toHaveCount(0);
+    // Only the text: the file stays as it was until saved.
+    expect(readFileSync(join(where, "compose.yaml"), "utf8")).toContain("host-gateway");
+  } finally {
+    sh(`${compose} down`, true);
+  }
+});
