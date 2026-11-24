@@ -387,10 +387,19 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
     el.scrollTop = Math.max(0, (line - 3) * parseFloat(getComputedStyle(el).lineHeight));
   };
 
+  // A file put back by an import is the engine's (root's): offered to the user.
+  const [notMine, setNotMine] = useState("");
   const save = async () => {
     const ok = await run(`# ${file} 저장`, () => call("ComposeSave", file, text));
     if (ok) setSaved(text);
+    else setNotMine(await call<string>("ComposeNotMine", file).catch(() => ""));
     return ok;
+  };
+  const makeMine = async () => {
+    if (await run(`sudo chown -R $(id -u):$(id -g) ${notMine}  # 엔진이 root로 대신함`, () => call("ComposeMakeMine", file))) {
+      setNotMine("");
+      await save();
+    }
   };
 
   const apply = async () => {
@@ -408,6 +417,17 @@ function FileTab({ project, run, busy, act, onApplied, draft }: { project: Proje
     );
   return (
     <div className="compose-file">
+      {notMine && (
+        <div className="note-box" role="alert" data-testid="not-mine">
+          <strong>{`이 폴더(${notMine})는 다른 사용자(root)의 것이라 저장할 수 없습니다.`}</strong>
+          <span className="sub">가져오기로 되살린 폴더는 엔진이 root 권한으로 만들어서 그렇습니다. 이 프로젝트 폴더와 그 안의 파일을 지금 사용자의 것으로 바꾸면 고칠 수 있습니다.</span>
+          <span>
+            <button type="button" className="primary" onClick={makeMine}>
+              내 것으로 바꾸고 저장
+            </button>
+          </span>
+        </div>
+      )}
       <aside className="svc-index">
         <strong>서비스 {index.length}개</strong>
         {index.map((s) => (

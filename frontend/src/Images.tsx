@@ -327,7 +327,14 @@ export default function Images({ images, containers, run, showCli, onRun, onOpen
                 <td>
                   <code className="muted">{shortId(r.im.id)}</code>
                 </td>
-                <td className="num nowrap">{bytes(r.im.size)}</td>
+                <td className="num nowrap">
+                  {bytes(r.im.size)}
+                  {(r.im.shared ?? 0) > 0 && (
+                    <span className="sub" title="다른 이미지와 함께 쓰는 레이어(JDK, 기반 OS 등)는 디스크에 한 번만 저장됩니다. 이 이미지만 차지하는 크기는 나머지입니다.">
+                      {`그중 공유 ${bytes(r.im.shared ?? 0)}`}
+                    </span>
+                  )}
+                </td>
                 <td className="muted nowrap">{ago(r.im.created)}</td>
                 <td className="actions">
                   {r.ref && <IconButton icon="play" label="이 이미지로 컨테이너 실행" tone="go" onClick={() => onRun(r.ref)} />}

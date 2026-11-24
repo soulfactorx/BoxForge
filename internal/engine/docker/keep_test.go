@@ -1,11 +1,14 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
@@ -205,5 +208,41 @@ func TestVolumeOwnersLive(t *testing.T) {
 	}
 	if got := run("run", "--rm", "-v", "bfk-own-b:/v", img, "stat", "-c", "%u:%g %a", "/v/dbs/spfile.ora", "/v/dbs"); got != "54321:54322 640\n54321:54322 755" {
 		t.Fatalf("owners after restore:\n%s", got)
+	}
+}
+
+// TestChownLive gives a folder the engine made (as root) to a user.
+func TestChownLive(t *testing.T) {
+	if os.Getenv("BOXFORGE_DOCKER_IMAGE") == "" {
+		t.Skip("BOXFORGE_DOCKER_IMAGE is not set")
+	}
+	dir := t.TempDir() + "/made"
+	rt, err := Connect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// Made by the engine, as a bundle's folder is.
+	var one bytes.Buffer
+	tw := tar.NewWriter(&one)
+	_ = tw.WriteHeader(&tar.Header{Name: "compose.yaml", Mode: 0o644, Size: 3})
+	_, _ = tw.Write([]byte("x:\n"))
+	_ = tw.Close()
+	if err := rt.Volumes().Put(ctx, dir, "/", &one); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Volumes().(engine.HostOwner).Chown(ctx, dir, 4321, 4322); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sys := st.Sys().(*syscall.Stat_t); sys.Uid != 4321 || sys.Gid != 4322 {
+		t.Fatalf("owner %d:%d", sys.Uid, sys.Gid)
+	}
+	inner, _ := os.Stat(dir + "/compose.yaml")
+	if sys := inner.Sys().(*syscall.Stat_t); sys.Uid != 4321 {
+		t.Fatalf("the file in it: owner %d", sys.Uid)
 	}
 }

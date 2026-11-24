@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/soulfactorx/boxforge/internal/engine"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -373,4 +374,46 @@ func localFiles(files []string) []string {
 		out[i] = localFile(f)
 	}
 	return out
+}
+
+// ComposeNotMine is, for a compose file this user can't write (put back by
+// an import, which the engine did as root), the project folder that could
+// be given to them; "" when there is nothing to do (or it can't be done
+// from here: Windows, or BoxForge running as root).
+func (a *App) ComposeNotMine(file string) string {
+	file = localFile(file)
+	if runtime.GOOS == "windows" || os.Getuid() <= 0 || !isYAML(file) {
+		return ""
+	}
+	dir := filepath.Dir(file)
+	if _, err := os.Stat(file); err != nil {
+		return ""
+	}
+	if writable(dir) && writable(file) {
+		return ""
+	}
+	return dir
+}
+
+// ComposeMakeMine gives a compose file's project folder, and all in it, to
+// the user running BoxForge. It is done by the engine (as root), so only
+// for an engine on this PC: the folder must be the one it sees.
+func (a *App) ComposeMakeMine(file string) error {
+	dir := a.ComposeNotMine(file)
+	if dir == "" {
+		return nil
+	}
+	o, ok := a.eng().Volumes().(engine.HostOwner)
+	if !ok {
+		return fmt.Errorf("이 엔진으로는 바꿀 수 없습니다. 터미널에서: sudo chown -R %d:%d %s", os.Getuid(), os.Getgid(), dir)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	if err := o.Chown(ctx, dir, os.Getuid(), os.Getgid()); err != nil {
+		return err
+	}
+	if !writable(dir) {
+		return fmt.Errorf("엔진이 다른 컴퓨터에 있어 이 PC의 폴더를 바꾸지 못했습니다. 터미널에서: sudo chown -R %d:%d %s", os.Getuid(), os.Getgid(), dir)
+	}
+	return nil
 }

@@ -24,7 +24,7 @@ func init() {
 // startTray puts BoxForge's icon in the taskbar's tray, with a menu to
 // bring the window back and to quit. It reports whether there is a tray
 // to be in: without one, a closed window could not be got back.
-func startTray(show, quit func()) bool {
+func startTray(show, quit func(), up *trayUpdate) bool {
 	if !trayHost() {
 		return false
 	}
@@ -38,6 +38,17 @@ func startTray(show, quit func()) bool {
 		systray.SetTooltip("BoxForge")
 		systray.SetOnTapped(show)
 		open := systray.AddMenuItem("BoxForge 열기", "창을 다시 엽니다")
+		upd := systray.AddMenuItem("업데이트 확인", "새 버전이 있으면 받아서 설치합니다")
+		up.set = func(title string, enabled bool) {
+			upd.SetTitle(title)
+			if enabled {
+				upd.Enable()
+			} else {
+				upd.Disable()
+			}
+		}
+		up.idle()
+		go up.notice()
 		systray.AddSeparator()
 		end := systray.AddMenuItem("종료", "BoxForge를 완전히 끕니다")
 		go func() {
@@ -45,6 +56,8 @@ func startTray(show, quit func()) bool {
 				select {
 				case <-open.ClickedCh:
 					show()
+				case <-upd.ClickedCh:
+					go up.click()
 				case <-end.ClickedCh:
 					quit()
 				}

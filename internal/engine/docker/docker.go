@@ -739,7 +739,7 @@ func (c containers) Stats(ctx context.Context, id string, each func(engine.Stats
 type images struct{ cli *client.Client }
 
 func (i images) List(ctx context.Context) ([]engine.Image, error) {
-	list, err := i.cli.ImageList(ctx, image.ListOptions{})
+	list, err := i.cli.ImageList(ctx, image.ListOptions{SharedSize: true})
 	if err != nil {
 		return nil, err
 	}
@@ -751,7 +751,7 @@ func (i images) List(ctx context.Context) ([]engine.Image, error) {
 				tags = append(tags, t)
 			}
 		}
-		out = append(out, engine.Image{ID: s.ID, Tags: tags, Size: s.Size, Created: s.Created})
+		out = append(out, engine.Image{ID: s.ID, Tags: tags, Size: s.Size, Shared: max(s.SharedSize, 0), Created: s.Created})
 	}
 	return out, nil
 }
@@ -885,6 +885,10 @@ func cleanStep(cmd string) string {
 
 func (i images) Save(ctx context.Context, ref string) (io.ReadCloser, error) {
 	return i.cli.ImageSave(ctx, []string{ref})
+}
+
+func (i images) SaveMany(ctx context.Context, refs []string) (io.ReadCloser, error) {
+	return i.cli.ImageSave(ctx, refs)
 }
 
 func (i images) Load(ctx context.Context, r io.Reader) error {
@@ -1107,6 +1111,30 @@ func (v volumes) Put(ctx context.Context, name, dir string, tar io.Reader) error
 		return v.untar(ctx, id, inVolume(dir), tar)
 	}
 	return v.cli.CopyToContainer(ctx, id, inVolume(dir), tar, container.CopyToContainerOptions{})
+}
+
+// Chown gives a folder of the engine's machine, and all in it, to a user.
+func (v volumes) Chown(ctx context.Context, p string, uid, gid int) error {
+	id, remove, err := v.helperMode(ctx, p, []string{"chown", "-R", fmt.Sprintf("%d:%d", uid, gid), helperMount}, "")
+	if err != nil {
+		return err
+	}
+	defer remove()
+	waited, failed := v.cli.ContainerWait(ctx, id, container.WaitConditionNextExit)
+	if err := v.cli.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
+		return err
+	}
+	select {
+	case w := <-waited:
+		if w.StatusCode != 0 {
+			return fmt.Errorf("chown ended with %d", w.StatusCode)
+		}
+		return nil
+	case err := <-failed:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // canUntar reports whether the running helper has a tar to unpack with.

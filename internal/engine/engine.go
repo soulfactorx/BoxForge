@@ -82,11 +82,14 @@ type Info struct {
 
 // Image is the common view of a local image.
 type Image struct {
-	ID      string   `json:"id"`
-	Tags    []string `json:"tags"` // empty for an untagged ("dangling") image
-	Size    int64    `json:"size"`
-	Created int64    `json:"created"`
-	InUse   int      `json:"inUse"` // containers made from it; filled in by the hub
+	ID   string   `json:"id"`
+	Tags []string `json:"tags"` // empty for an untagged ("dangling") image
+	Size int64    `json:"size"`
+	// Shared is how much of Size is layers other images use too: kept once
+	// on disk, however many images have them (0 when not known).
+	Shared  int64 `json:"shared"`
+	Created int64 `json:"created"`
+	InUse   int   `json:"inUse"` // containers made from it; filled in by the hub
 }
 
 // Layer is one step of an image's making: the command that made it and
@@ -333,6 +336,20 @@ type VolumeService interface {
 	// Restore fills the volume, made if need be, from what Archive(name,
 	// "/") gave on another engine.
 	Restore(ctx context.Context, name string, tar io.Reader) error
+}
+
+// ManySaver is what an ImageService can also do: save several images in
+// one archive, each layer they share once.
+type ManySaver interface {
+	SaveMany(ctx context.Context, refs []string) (io.ReadCloser, error)
+}
+
+// HostOwner is what a VolumeService can also do on the engine's machine:
+// give a folder (and all in it) to a user, as root. The folders a bundle
+// puts back are made by the engine, as root; on the user's own Linux PC
+// they are given back to the user, who could not change them otherwise.
+type HostOwner interface {
+	Chown(ctx context.Context, path string, uid, gid int) error
 }
 
 // FileEntry is one name in a directory listing.

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -164,6 +165,8 @@ func (a *App) ExportBundle(key string, ids []string, file string, o CopyOptions)
 		info.Runtime = ei.Runtime
 	}
 	sent := map[string]string{} // image name → its file in the bundle
+	many, _ := rt.Images().(engine.ManySaver)
+	var together []string
 	folders := &hostPaths{}
 	vols := map[string]bool{}
 	for n, id := range ids {
@@ -205,6 +208,12 @@ func (a *App) ExportBundle(key string, ids []string, file string, o CopyOptions)
 		}
 		if have := sent[entry.Image]; have != "" {
 			entry.Archive = have
+		} else if many != nil {
+			// All in one archive at the end: a layer the images share
+			// (a JDK, a base system) goes in once.
+			entry.Archive = "images/all.tar"
+			sent[entry.Image] = entry.Archive
+			together = append(together, entry.Image)
 		} else {
 			entry.Archive = fmt.Sprintf("images/%d.tar", n)
 			sent[entry.Image] = entry.Archive
@@ -264,6 +273,24 @@ func (a *App) ExportBundle(key string, ids []string, file string, o CopyOptions)
 			}
 		}
 		info.Containers = append(info.Containers, entry)
+	}
+	if len(together) > 0 {
+		say(fmt.Sprintf("이미지 %d개를 담는 중 (같은 레이어는 한 번만)", len(together)))
+		rc, err := many.SaveMany(ctx, together)
+		if err != nil {
+			return err
+		}
+		var last time.Time
+		err = put("images/all.tar", rc, func(done int64) {
+			if time.Since(last) > 500*time.Millisecond {
+				last = time.Now()
+				say(fmt.Sprintf("이미지 %d개를 담는 중 · %.1f MB", len(together), float64(done)/(1<<20)))
+			}
+		})
+		rc.Close()
+		if err != nil {
+			return err
+		}
 	}
 	for i, f := range folders.list() {
 		say(fmt.Sprintf("폴더 %s를 담는 중", f.path))
@@ -412,7 +439,11 @@ func (a *App) ImportBundle(key, file string, start bool) ([]string, error) {
 		if err != nil {
 			return notes, fmt.Errorf("the bundle lacks %s", f.Archive)
 		}
+		fresh := firstMissing(f.Path)
 		err = rt.Volumes().Put(ctx, dir, "/", in)
+		if err == nil {
+			giveToUser(ctx, rt, fresh)
+		}
 		in.Close()
 		if err != nil {
 			return notes, fmt.Errorf("folder %s: %w", f.Path, err)
@@ -805,4 +836,38 @@ func asOriginal(ctx context.Context, rt engine.Runtime, carried, original string
 // container's state for a journey, not the image's own.
 func journeyName(name string) bool {
 	return strings.HasPrefix(name, "boxforge-export/") || strings.HasPrefix(name, "boxforge-copy/")
+}
+
+// firstMissing is the highest folder of a path that this PC doesn't have
+// ("" when the whole path is there): what putting the path back makes.
+func firstMissing(p string) string {
+	missing := ""
+	for q := path.Clean(p); q != "/" && q != "."; q = path.Dir(q) {
+		if _, err := os.Lstat(q); err == nil {
+			break
+		}
+		missing = q
+	}
+	return missing
+}
+
+// giveToUser gives what putting a folder back made to the user running
+// BoxForge, when the engine is on this PC (the folder is now here) and the
+// engine made it as root: otherwise the user couldn't change its files
+// (the project's Compose file, say). Not on Windows, where the engine's
+// machine is WSL's, nor for an engine elsewhere.
+func giveToUser(ctx context.Context, rt engine.Runtime, made string) {
+	if made == "" || runtime.GOOS == "windows" || os.Getuid() <= 0 {
+		return
+	}
+	st, err := os.Stat(made)
+	if err != nil {
+		return // not on this PC: the engine is elsewhere
+	}
+	if uid, ok := fileOwner(st); ok && uid == os.Getuid() {
+		return
+	}
+	if o, ok := rt.Volumes().(engine.HostOwner); ok {
+		_ = o.Chown(ctx, made, os.Getuid(), os.Getgid())
+	}
 }

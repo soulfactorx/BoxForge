@@ -108,3 +108,14 @@ func TestLocalFile(t *testing.T) {
 		t.Fatalf("a file that is nowhere stays as named: %q", got)
 	}
 }
+
+// What putting a folder back makes: its highest folder not there yet.
+func TestFirstMissing(t *testing.T) {
+	root := t.TempDir()
+	if got := firstMissing(root + "/mnt/c/Users/me/proj"); got != root+"/mnt" {
+		t.Fatalf("got %q", got)
+	}
+	if got := firstMissing(root); got != "" {
+		t.Fatalf("a folder that is there: %q", got)
+	}
+}

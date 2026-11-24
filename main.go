@@ -55,7 +55,7 @@ func main() {
 		}
 	}
 	app.SetQuit(quit)
-	tray := startTray(show, quit)
+	tray := startTray(show, quit, &trayUpdate{check: a.CheckUpdate, apply: a.ApplyUpdate, restart: a.Restart})
 	// Started at sign-in: to the tray, with no window, when there is a tray.
 	hidden := false
 	for _, a := range os.Args[1:] {

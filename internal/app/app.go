@@ -1706,8 +1706,10 @@ func copyHostPath(ctx context.Context, src, dst engine.Runtime, p string, say fu
 	}
 	defer rc.Close()
 	say(fmt.Sprintf("폴더 %s를 보내는 중", p))
+	fresh := firstMissing(p)
 	if err := dst.Volumes().Put(ctx, dir, "/", rc); err != nil {
 		return "", err
 	}
+	giveToUser(ctx, dst, fresh)
 	return "folder-made:" + p, nil
 }

@@ -57,6 +57,8 @@ export interface Image {
   id: string;
   tags: string[];
   size: number;
+  /** How much of size is layers other images use too (kept once on disk). */
+  shared?: number;
   created: number;
   inUse: number;
 }
