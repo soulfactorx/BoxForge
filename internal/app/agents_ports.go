@@ -258,14 +258,25 @@ for d in /proc/[0-9]*; do
   case "$c" in *"firefox --profile $p"*setDefaultBrowser*) kill "${d#/proc/}";; esac
 done
 true`
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		// Just made, it sets itself up first (its profile comes with its
+		// first start): waited for, as a person would wait.
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
-		_, errOut, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-browser", []string{"sh", "-c", script, "boxforge", url}, nil)
+		var errOut string
+		var code int
+		for {
+			_, errOut, code, err = a.eng().Containers().Output(ctx, agentProject(name)+"-browser", []string{"sh", "-c", script, "boxforge", url}, nil)
+			if err != nil || code != 3 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return 0, fmt.Errorf("브라우저 상자가 아직 준비되지 않았습니다(1분 넘게 시작하는 중). 잠시 뒤 다시 눌러 주세요")
+			case <-time.After(2 * time.Second):
+			}
+		}
 		if err != nil {
 			return 0, err
-		}
-		if code == 3 {
-			return 0, fmt.Errorf("the browser box is still starting: try again in a few seconds")
 		}
 		if code != 0 {
 			return 0, fmt.Errorf("the browser box couldn't be told the address: %s", strings.TrimSpace(errOut))

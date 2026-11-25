@@ -1735,5 +1735,6 @@
  "위": "Up",
  "오른쪽": "Right",
  "특수 키 숨기기": "Hide special keys",
- "특수 키 보이기 (방향키 · Tab · Ctrl · Alt · F1~F12)": "Show special keys (arrows · Tab · Ctrl · Alt · F1–F12)"
+ "특수 키 보이기 (방향키 · Tab · Ctrl · Alt · F1~F12)": "Show special keys (arrows · Tab · Ctrl · Alt · F1–F12)",
+ "브라우저 상자가 아직 준비되지 않았습니다(1분 넘게 시작하는 중). 잠시 뒤 다시 눌러 주세요": "The browser box isn't ready yet (starting for over a minute). Try again in a moment"
 }
