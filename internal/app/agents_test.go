@@ -26,7 +26,7 @@ func TestAgentFiles(t *testing.T) {
 			t.Fatalf("compose.yaml lacks %q:\n%s", want, c)
 		}
 	}
-	if !strings.Contains(f["Dockerfile"], "@mariozechner/pi-coding-agent") || !strings.Contains(f["Dockerfile"], "openclaw@latest") {
+	if !strings.Contains(f["Dockerfile"], "@earendil-works/pi-coding-agent") || !strings.Contains(f["Dockerfile"], "openclaw@latest") {
 		t.Fatalf("Dockerfile:\n%s", f["Dockerfile"])
 	}
 	if !strings.Contains(f["egress/allow.txt"], "*.example.com\n") || f["egress/proxy.js"] == "" {

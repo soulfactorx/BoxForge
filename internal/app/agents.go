@@ -56,7 +56,7 @@ func join(lists ...[]string) []string {
 
 // agentKinds, in the order offered: the one used most first.
 var agentKinds = []AgentKind{
-	{ID: "pi", Name: "Pi Coding Agent", Command: "pi", Install: "RUN npm install -g @mariozechner/pi-coding-agent",
+	{ID: "pi", Name: "Pi Coding Agent", Command: "pi", Install: "RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
 		Keys:  []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY"},
 		Hosts: join(anthropicHosts, openaiHosts, googleHosts, copilotHosts, []string{"api.x.ai", "openrouter.ai", "api.groq.com", "api.mistral.ai", "api.cerebras.ai"}),
 		Note:  "pi 안에서 /login 으로 구독 계정에 로그인하거나 API 키를 넣습니다."},
