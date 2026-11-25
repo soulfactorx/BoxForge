@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { devices, expect, test, type Page } from "@playwright/test";
 import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,6 +92,29 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await page.getByRole("menuitem", { name: /복사/ }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("pasted-42");
 
+  // The special-key bar (shown on a phone by itself; here asked for): Ctrl
+  // for the next key typed, Tab, and the arrows.
+  await pane.getByRole("button", { name: /특수 키 보이기/ }).click();
+  const keys = pane.getByTestId("term-keys");
+  await pane.locator(".xterm").click();
+  await page.keyboard.type("sleep 555\n");
+  await expect.poll(() => inBox("ps -o args")).toContain("sleep 555");
+  await keys.getByRole("button", { name: "Ctrl" }).click();
+  await expect(keys.getByRole("button", { name: "Ctrl" })).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.type("c");
+  await expect.poll(() => inBox("ps -o args")).not.toContain("sleep 555");
+  await expect(keys.getByRole("button", { name: "Ctrl" })).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.type("echo key");
+  await keys.getByRole("button", { name: "Tab" }).click(); // no file "key…": the shell rings, nothing more
+  await page.keyboard.type("bar-ok\n");
+  await expect(rows).toContainText("keybar-ok");
+  await keys.getByRole("button", { name: "위" }).click();
+  await keys.getByRole("button", { name: "Esc" }).click(); // a lone Esc changes nothing at the prompt here
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => ((await rows.innerText()).match(/^keybar-ok$/gm) ?? []).length).toBe(2);
+  await keys.getByRole("button", { name: "Fn" }).click();
+  await expect(keys.getByRole("button", { name: "F12" })).toBeVisible();
+
   // Another page of the box and back: the same terminal, what runs in it still running.
   await page.keyboard.type("sleep 777\n");
   await expect.poll(() => inBox("ps -o args")).toContain("sleep 777");
@@ -131,6 +154,15 @@ test("an agent box: keys kept out of the container's settings, only listed addre
 
   await page.locator(".agent-term").getByRole("button", { name: "+ 셸" }).click();
   await expect(tabs.getByRole("tab")).toHaveText(["sh", "셸"]);
+
+  // On a phone, the bar is there without asking.
+  const phone = await page.context().browser()!.newContext({ ...devices["Pixel 7"], locale: "ko-KR" });
+  const mobile = await phone.newPage();
+  await mobile.goto(page.url());
+  await go(mobile, "agents");
+  await mobile.getByTestId("agent-bfe2e-box").getByRole("button", { name: "제어판 열기" }).click();
+  await expect(mobile.locator('[data-testid="term-pane"]:not([hidden])').getByTestId("term-keys")).toBeVisible();
+  await phone.close();
 
   await tabs.getByRole("button", { name: "모두 닫기", exact: true }).click();
   await expect(page.locator(".agent-term")).toContainText("열린 터미널이 없습니다");

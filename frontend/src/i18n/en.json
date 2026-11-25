@@ -1727,5 +1727,13 @@
  "내 PC 브라우저로": "In your PC's browser",
  "브라우저 상자로": "In the browser box",
  "# 브라우저 상자에서 http://127.0.0.1:{0}/ 열기": "# open http://127.0.0.1:{0}/ in the browser box",
- "먼저 여기서 openclaw onboard --mode local --no-install-daemon 으로 설정합니다. 그다음 \"웹 · 포트\" 탭에서 \"게이트웨이 늘 켜 두기\"를 누르고, \"내 PC 브라우저로 열기\"나 \"브라우저 상자로 열기\"로 화면을 엽니다(로그인된 링크로 열림).": "First set it up here with openclaw onboard --mode local --no-install-daemon. Then in the \"Web · ports\" tab press \"Keep the gateway running\", and open its page with \"Open in your PC's browser\" or \"Open in the browser box\" (opened signed in)."
+ "먼저 여기서 openclaw onboard --mode local --no-install-daemon 으로 설정합니다. 그다음 \"웹 · 포트\" 탭에서 \"게이트웨이 늘 켜 두기\"를 누르고, \"내 PC 브라우저로 열기\"나 \"브라우저 상자로 열기\"로 화면을 엽니다(로그인된 링크로 열림).": "First set it up here with openclaw onboard --mode local --no-install-daemon. Then in the \"Web · ports\" tab press \"Keep the gateway running\", and open its page with \"Open in your PC's browser\" or \"Open in the browser box\" (opened signed in).",
+ "특수 키": "Special keys",
+ "한 번: 다음 키에만 · 두 번: 계속": "Once: for the next key · twice: held",
+ "왼쪽": "Left",
+ "아래": "Down",
+ "위": "Up",
+ "오른쪽": "Right",
+ "특수 키 숨기기": "Hide special keys",
+ "특수 키 보이기 (방향키 · Tab · Ctrl · Alt · F1~F12)": "Show special keys (arrows · Tab · Ctrl · Alt · F1–F12)"
 }

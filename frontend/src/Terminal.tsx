@@ -4,6 +4,13 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { call, on, type Run, remote } from "./bridge";
 import { copyText } from "./ui";
+import { keySeq, withMods, type Mods } from "./termkeys";
+
+// Ctrl and Alt on the key bar: off, for the next key (one tap), or held (two quick taps).
+type Hold = 0 | 1 | 2;
+
+/** Whether the screen is touched rather than pointed at (a phone, a tablet). */
+const touch = () => typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 
 /** Reads the clipboard: the desktop app's own, else the browser's (which may ask, or refuse on a page that isn't a secure one). */
 async function readClipboard(): Promise<string | null> {
@@ -49,6 +56,43 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
   const [menu, setMenu] = useState<{ x: number; y: number; selected: boolean } | null>(null);
   const [pasting, setPasting] = useState(false);
   const xterm = useRef<XTerm | null>(null);
+  // The bar of keys a phone's keyboard lacks: shown on touch screens, or when asked for.
+  const [keysOn, setKeysOn] = useState(() => {
+    try {
+      const v = localStorage.getItem("bf.termKeys");
+      return v ? v === "on" : touch();
+    } catch {
+      return touch();
+    }
+  });
+  const [fn, setFn] = useState(false);
+  const [hold, setHold] = useState<{ ctrl: Hold; alt: Hold }>({ ctrl: 0, alt: 0 });
+  const holdRef = useRef(hold);
+  holdRef.current = hold;
+  const lastTap = useRef<{ key: string; at: number }>({ key: "", at: 0 });
+  const send = useRef<(data: string) => void>(() => {});
+  const mods = (): Mods => ({ ctrl: holdRef.current.ctrl > 0, alt: holdRef.current.alt > 0, shift: false });
+  // A one-tap Ctrl or Alt lasts for one key.
+  const used = () => setHold((h) => ({ ctrl: h.ctrl === 1 ? 0 : h.ctrl, alt: h.alt === 1 ? 0 : h.alt }));
+  const tapMod = (k: "ctrl" | "alt") => {
+    const now = Date.now();
+    const twice = lastTap.current.key === k && now - lastTap.current.at < 400;
+    lastTap.current = { key: k, at: now };
+    setHold((h) => ({ ...h, [k]: twice ? 2 : h[k] ? 0 : 1 }));
+  };
+  const press = (key: string) => {
+    const t = xterm.current;
+    send.current(keySeq(key, mods(), !!t?.modes.applicationCursorKeysMode));
+    used();
+  };
+  const showKeys = (on: boolean) => {
+    setKeysOn(on);
+    try {
+      localStorage.setItem("bf.termKeys", on ? "on" : "off");
+    } catch {
+      /* for this time only */
+    }
+  };
   const copy = async () => {
     const t = xterm.current;
     if (t?.hasSelection()) await copyText(t.getSelection());
@@ -144,7 +188,17 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       }
       sending = false;
     };
+    send.current = (data) => {
+      pending += data;
+      flush();
+    };
     const typed = term.onData((data) => {
+      // Ctrl or Alt tapped on the key bar applies to the next key typed.
+      const h = holdRef.current;
+      if ((h.ctrl || h.alt) && data.length === 1) {
+        data = withMods(data, { ctrl: h.ctrl > 0, alt: h.alt > 0, shift: false });
+        used();
+      }
       pending += data;
       flush();
     });
@@ -181,6 +235,66 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
           setMenu({ x: e.clientX, y: e.clientY, selected: !!xterm.current?.hasSelection() });
         }}
       />
+      {keysOn ? (
+        <div className="term-keys" role="toolbar" aria-label="특수 키" data-testid="term-keys" onPointerDown={(e) => e.preventDefault()}>
+          {/* Two rows of seven, as on a phone's screen; Fn adds three more. */}
+          <div className="term-keys-row">
+            <button type="button" onClick={() => press("Esc")}>Esc</button>
+            <button type="button" onClick={() => press("|")}>|</button>
+            <button type="button" onClick={() => press("-")}>-</button>
+            <button type="button" onClick={() => press("/")}>/</button>
+            <button type="button" onClick={() => press("~")}>~</button>
+            <button type="button" aria-label="위" onClick={() => press("Up")}>↑</button>
+            <button type="button" className={fn ? "on" : ""} aria-pressed={fn} title="Home · End · PgUp · PgDn · F1~F12" onClick={() => setFn(!fn)}>
+              Fn
+            </button>
+          </div>
+          <div className="term-keys-row">
+            <button type="button" onClick={() => press("Tab")}>Tab</button>
+            <button type="button" className={hold.ctrl ? "on" + (hold.ctrl === 2 ? " held" : "") : ""} aria-pressed={hold.ctrl > 0} title="한 번: 다음 키에만 · 두 번: 계속" onClick={() => tapMod("ctrl")}>
+              Ctrl
+            </button>
+            <button type="button" className={hold.alt ? "on" + (hold.alt === 2 ? " held" : "") : ""} aria-pressed={hold.alt > 0} title="한 번: 다음 키에만 · 두 번: 계속" onClick={() => tapMod("alt")}>
+              Alt
+            </button>
+            <button type="button" aria-label="왼쪽" onClick={() => press("Left")}>←</button>
+            <button type="button" aria-label="아래" onClick={() => press("Down")}>↓</button>
+            <button type="button" aria-label="오른쪽" onClick={() => press("Right")}>→</button>
+            <button type="button" className="term-keys-hide" aria-label="특수 키 숨기기" onClick={() => showKeys(false)}>
+              ×
+            </button>
+          </div>
+          {fn && (
+            <>
+              <div className="term-keys-row six">
+                {["Home", "End", "PgUp", "PgDn", "Ins", "Del"].map((k) => (
+                  <button key={k} type="button" onClick={() => press(k)}>
+                    {k}
+                  </button>
+                ))}
+              </div>
+              <div className="term-keys-row six">
+                {["F1", "F2", "F3", "F4", "F5", "F6"].map((k) => (
+                  <button key={k} type="button" onClick={() => press(k)}>
+                    {k}
+                  </button>
+                ))}
+              </div>
+              <div className="term-keys-row six">
+                {["F7", "F8", "F9", "F10", "F11", "F12"].map((k) => (
+                  <button key={k} type="button" onClick={() => press(k)}>
+                    {k}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <button type="button" className="link term-keys-show" onClick={() => showKeys(true)}>
+          특수 키 보이기 (방향키 · Tab · Ctrl · Alt · F1~F12)
+        </button>
+      )}
       {menu && (
         <div className="menu term-menu" role="menu" style={{ position: "fixed", left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
           <button type="button" role="menuitem" disabled={!menu.selected} onClick={() => (setMenu(null), copy())}>
