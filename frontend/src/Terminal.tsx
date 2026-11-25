@@ -123,11 +123,31 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
         if (closed) return void call("TermClose", s).catch(() => {});
         session = s;
         early.filter((d) => d.session === s).forEach(show);
+        flush(); // what was typed before it opened
         term.focus();
       },
       (e) => setNote(e.message),
     );
-    const typed = term.onData((data) => session && call("TermWrite", session, data).catch(() => {}));
+    // Keys go one send after another, in order: sent each as it came, two
+    // could overtake each other on the way (a busy PC, the web server) and
+    // reach the program swapped. What is typed while one is on its way goes
+    // in the next.
+    let pending = "";
+    let sending = false;
+    const flush = async () => {
+      if (sending) return;
+      sending = true;
+      while (pending && session && !closed) {
+        const data = pending;
+        pending = "";
+        await call("TermWrite", session, data).catch(() => {});
+      }
+      sending = false;
+    };
+    const typed = term.onData((data) => {
+      pending += data;
+      flush();
+    });
     const resized = term.onResize(({ cols, rows }) => session && call("TermResize", session, cols, rows).catch(() => {}));
     const watch = new ResizeObserver(() => fit.fit());
     watch.observe(box.current);
