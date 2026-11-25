@@ -60,38 +60,70 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   expect(sh(`docker exec ${box}-agent sh /opt/boxforge/run printenv BFE2E_KEY`)).toBe("s3cret-value");
   expect(sh(`docker exec ${box}-agent sh /opt/boxforge/run pwd`)).toBe("/workspace");
 
-  // The terminal: the key is there, and an address not on the list is stopped.
+  // The terminals, as an editor's tabs: the first opened with the box.
   await page.getByRole("tab", { name: "터미널" }).click();
-  // Opened again: a key saved after a terminal opened reaches the next one.
-  await page.locator(".agent-term").getByRole("button", { name: "sh", exact: true }).click();
-  const term = page.locator(".xterm");
-  await expect(term).toBeVisible();
+  const tabs = page.getByTestId("term-tabs");
+  await expect(tabs.getByRole("tab")).toHaveText(["sh"]);
+  // A new one beside it: a key saved after a terminal opened reaches the next one.
+  await page.locator(".agent-term").getByRole("button", { name: "+ sh" }).click();
+  await expect(tabs.getByRole("tab")).toHaveText(["sh", "sh 2"]);
+  const pane = page.locator('[data-testid="term-pane"]:not([hidden])');
+  const rows = pane.locator(".xterm-rows");
   // Typed once the shell is there: keys pressed before the session opens are not kept.
-  await expect(page.locator(".xterm-rows")).toContainText("/workspace", { timeout: 30_000 });
-  await term.click();
+  await expect(rows).toContainText("/workspace", { timeout: 30_000 });
+  await pane.locator(".xterm").click();
   await page.keyboard.type("wget -q -T 5 -O- http://blocked.bfe2e.test; echo key-is-$BFE2E_KEY\n");
-  await expect(page.locator(".xterm-rows")).toContainText("key-is-s3cret-value", { timeout: 30_000 });
+  await expect(rows).toContainText("key-is-s3cret-value", { timeout: 30_000 });
 
-  // Another tab and back: the same terminal, what runs in it still running.
+  // Another page of the box and back: the same terminal, what runs in it still running.
   await page.keyboard.type("sleep 777\n");
   await expect.poll(() => inBox("ps -o args")).toContain("sleep 777");
   await page.getByRole("tab", { name: "API 키" }).click();
   await page.getByRole("tab", { name: "터미널" }).click();
-  await expect(page.locator(".xterm-rows")).toContainText("sleep 777");
+  await expect(rows).toContainText("sleep 777");
+  // The list of boxes and back: still open, and counted on the box.
+  await page.locator(".crumbs:visible").getByRole("button", { name: "AI 에이전트" }).click();
+  await expect(page.getByTestId("agent-bfe2e-box")).toContainText("터미널 2개 열림");
+  await page.getByTestId("agent-bfe2e-box").getByRole("button", { name: "제어판 열기" }).click();
+  await expect(rows).toContainText("sleep 777");
   expect(inBox("ps -o args")).toContain("sleep 777");
-  // Closed (another one opened in its place): what it started is stopped,
-  // not left running in the box.
-  await page.locator(".agent-term").getByRole("button", { name: "셸" }).click();
+  // Each tab is a terminal of its own.
+  await tabs.getByRole("tab", { name: "sh", exact: true }).click();
+  await expect(rows).toContainText("/workspace");
+  await expect(rows).not.toContainText("sleep 777");
+
+  // Its size: dragged shorter, and the whole window and back.
+  const before = (await pane.locator(".term-box").boundingBox())!.height;
+  const handle = page.getByRole("separator", { name: "터미널 높이 조절" });
+  await handle.scrollIntoViewIfNeeded();
+  const grip = (await handle.boundingBox())!;
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 - 120, { steps: 5 });
+  await page.mouse.up();
+  expect((await pane.locator(".term-box").boundingBox())!.height).toBeLessThan(before - 100);
+  await page.getByRole("button", { name: "크게 보기" }).click();
+  expect((await pane.locator(".term-box").boundingBox())!.height).toBeGreaterThan(700);
+  await page.getByRole("button", { name: "원래 크기로" }).click();
+  expect((await pane.locator(".term-box").boundingBox())!.height).toBeLessThan(before - 100);
+
+  // All but this one closed: what the other ran is stopped, not left in the box.
+  await tabs.getByRole("button", { name: "이 탭 빼고 모두 닫기" }).click();
+  await expect(tabs.getByRole("tab")).toHaveText(["sh"]);
   await expect.poll(() => inBox("ps -o args"), { timeout: 15_000 }).not.toContain("sleep 777");
+
   // Left by a terminal outside the app: said, and stopped on asking.
   sh(`docker exec -d ${box}-agent sh /opt/boxforge/run sleep 888`);
-  await page.locator(".agent-term").getByRole("button", { name: "sh", exact: true }).click();
+  await page.locator(".agent-term").getByRole("button", { name: "+ 셸" }).click();
   const left = page.getByTestId("agent-leftovers");
   await expect(left).toContainText("sleep 888");
   await left.getByRole("button", { name: "모두 끄기" }).click();
   await expect(left).toHaveCount(0);
   await expect.poll(() => inBox("ps -o args")).not.toContain("sleep 888");
-  await expect(page.locator(".xterm-rows")).toContainText("/workspace");
+  await expect(tabs.getByRole("tab")).toHaveText(["sh", "셸"]);
+
+  await tabs.getByRole("button", { name: "모두 닫기", exact: true }).click();
+  await expect(page.locator(".agent-term")).toContainText("열린 터미널이 없습니다");
 
   await page.getByRole("tab", { name: "연결 기록" }).click();
   const conns = page.getByTestId("agent-connections");

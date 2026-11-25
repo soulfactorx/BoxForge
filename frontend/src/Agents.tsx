@@ -96,6 +96,12 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
   const [opened, setOpened] = useState("");
   const [busy, setBusy] = useState("");
   const [output, setOutput] = useState<{ title: string; lines: string[] } | null>(null);
+  const [visited, setVisited] = useState<string[]>([]);
+  const [termCount, setTermCount] = useState<Record<string, number>>({});
+  const openBox = (name: string) => {
+    setOpened(name);
+    setVisited((v) => (v.includes(name) ? v : [...v, name]));
+  };
   const serial = useRef(0);
 
   const load = () => call<Box[]>("AgentBoxes").then((b) => setBoxes(b ?? []), () => {});
@@ -158,7 +164,7 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
     if (!ok || !box) return false;
     setMaking(null);
     await load();
-    setOpened(spec.name);
+    openBox(spec.name);
     await compose(box, "upbuild", `${spec.name} · ${editing ? "바뀐 설정으로 다시 만들기" : "만들고 시작"}`);
     load();
     return true;
@@ -168,32 +174,42 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
 
   return (
     <section>
-      {box ? (
-        <Control
-          box={box}
-          kinds={kinds}
-          agent={part(box, "agent")}
-          egress={part(box, "egress")}
-          service={part(box, "service")}
-          busy={!!busy}
-          run={run}
-          showCli={showCli}
-          onBack={() => setOpened("")}
-          onOpen={onOpen}
-          compose={(action, title) => compose(box, action, title)}
-          onEdit={() => {
-            setEditing(true);
-            setMaking({ ...box.spec });
-          }}
-          onGone={async () => {
-            setOpened("");
-            await load();
-          }}
-          reload={load}
-          output={output}
-          onCloseOutput={() => setOutput(null)}
-        />
-      ) : (
+      {/* Every box opened stays: its terminals go on while the list or another box is shown. */}
+      {visited.map((name) => {
+        const b = boxes.find((x) => x.spec.name === name);
+        if (!b) return null;
+        return (
+          <div key={name} hidden={name !== opened}>
+            <Control
+              box={b}
+              kinds={kinds}
+              agent={part(b, "agent")}
+              egress={part(b, "egress")}
+              service={part(b, "service")}
+              busy={!!busy}
+              run={run}
+              showCli={showCli}
+              onBack={() => setOpened("")}
+              onOpen={onOpen}
+              compose={(action, title) => compose(b, action, title)}
+              onEdit={() => {
+                setEditing(true);
+                setMaking({ ...b.spec });
+              }}
+              onGone={async () => {
+                setOpened("");
+                setVisited((v) => v.filter((x) => x !== name));
+                await load();
+              }}
+              reload={load}
+              output={name === opened ? output : null}
+              onCloseOutput={() => setOutput(null)}
+              onTerms={(n) => setTermCount((c) => ({ ...c, [name]: n }))}
+            />
+          </div>
+        );
+      })}
+      {!box && (
         <>
           <header className="page-head">
             <h1>AI 에이전트</h1>
@@ -227,7 +243,7 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
                   <article key={b.spec.name} className="agent-card" data-testid={`agent-${b.spec.name}`}>
                     <header>
                       <h2>
-                        <button type="button" className="link name" onClick={() => setOpened(b.spec.name)}>
+                        <button type="button" className="link name" onClick={() => openBox(b.spec.name)}>
                           {b.spec.name}
                         </button>
                       </h2>
@@ -264,7 +280,8 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
                       </div>
                     </dl>
                     <div className="actions">
-                      <button type="button" className="primary" onClick={() => setOpened(b.spec.name)}>
+                      {(termCount[b.spec.name] ?? 0) > 0 && up && <span className="muted">{`터미널 ${termCount[b.spec.name]}개 열림`}</span>}
+                      <button type="button" className="primary" onClick={() => openBox(b.spec.name)}>
                         제어판 열기
                       </button>
                     </div>
@@ -597,6 +614,7 @@ function Control(props: {
   reload: () => void;
   output: { title: string; lines: string[] } | null;
   onCloseOutput: () => void;
+  onTerms: (n: number) => void;
 }) {
   const { box, kinds, agent, egress, service, busy, run, showCli } = props;
   const s = box.spec;
@@ -703,7 +721,7 @@ function Control(props: {
         <>
           {/* Kept open while another tab is looked at: what runs in it goes on, and is there on coming back. */}
           <div hidden={tab !== "terminal"}>
-            <TermTab box={box} mine={mine} run={run} showCli={showCli} />
+            <TermTab box={box} mine={mine} run={run} showCli={showCli} onCount={props.onTerms} />
           </div>
           {tab === "changes" && <ChangesTab box={box} run={run} showCli={showCli} />}
           {tab === "network" && <NetworkTab box={box} run={run} showCli={showCli} reload={props.reload} />}
@@ -744,45 +762,127 @@ function Control(props: {
   );
 }
 
-function TermTab({ box, mine, run, showCli }: { box: Box; mine: Kind[]; run: Run; showCli: (cmd: string) => void }) {
-  const [which, setWhich] = useState(box.spec.image ? "main" : (mine[0]?.id ?? "shell"));
-  const [n, setN] = useState(0);
-  const kind = mine.find((k) => k.id === which);
-  const command = which === "shell" ? "bash" : which === "main" ? (box.spec.command ?? "") : (kind?.command ?? "");
-  const cli = `docker exec -it ${box.project}-agent ${command}`;
-  // Programs from terminals closed earlier (a window shut, an older BoxForge):
-  // the same agent opened again beside one may fail.
+interface Term {
+  key: number;
+  which: string; // "main", an agent kind, or "shell"
+  label: string;
+  ended: boolean;
+}
+
+/** A box's terminals, as an editor's tabs: each one open until it is closed. */
+function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[]; run: Run; showCli: (cmd: string) => void; onCount: (n: number) => void }) {
+  const first = box.spec.image ? "main" : (mine[0]?.id ?? "shell");
+  const serial = useRef(0);
+  const nameOf = (which: string) => (which === "shell" ? "셸" : which === "main" ? (box.spec.command ?? "") : (mine.find((k) => k.id === which)?.name ?? which));
+  const make = (which: string, list: Term[]): Term => {
+    const same = list.filter((t) => t.which === which).length;
+    return { key: ++serial.current, which, label: same ? `${nameOf(which)} ${same + 1}` : nameOf(which), ended: false };
+  };
+  const [terms, setTerms] = useState<Term[]>(() => [make(first, [])]);
+  const [active, setActive] = useState(terms[0]?.key ?? 0);
+  useEffect(() => onCount(terms.length), [terms.length]);
+
+  const add = (which: string) => {
+    const t = make(which, terms);
+    setTerms([...terms, t]);
+    setActive(t.key);
+  };
+  const close = (keys: number[]) => {
+    const rest = terms.filter((t) => !keys.includes(t.key));
+    setTerms(rest);
+    if (!rest.some((t) => t.key === active)) {
+      // As an editor does: the tab beside the one closed.
+      const at = terms.findIndex((t) => t.key === active);
+      setActive((rest[Math.min(at, rest.length - 1)] ?? rest[0])?.key ?? 0);
+    }
+  };
+  const cur = terms.find((t) => t.key === active);
+  const kind = mine.find((k) => k.id === cur?.which);
+
+  // Its size: dragged by the bar under it (remembered), or the whole window.
+  const [height, setHeight] = useState(() => {
+    try {
+      return Math.max(200, +(localStorage.getItem("bf.agentTermHeight") ?? "") || 440);
+    } catch {
+      return 440;
+    }
+  });
+  const [big, setBig] = useState(false);
+  useEffect(() => {
+    if (!big) return;
+    const key = (e: KeyboardEvent) => e.key === "Escape" && e.shiftKey && setBig(false);
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [big]);
+  const drag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const y0 = e.clientY;
+    const h0 = height;
+    let last = h0;
+    const move = (m: PointerEvent) => {
+      last = Math.min(window.innerHeight - 120, Math.max(200, h0 + m.clientY - y0));
+      setHeight(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      try {
+        localStorage.setItem("bf.agentTermHeight", String(Math.round(last)));
+      } catch {
+        /* kept for this time only */
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const sizeBy = (d: number) => {
+    const h = Math.min(window.innerHeight - 120, Math.max(200, height + d));
+    setHeight(h);
+    try {
+      localStorage.setItem("bf.agentTermHeight", String(h));
+    } catch {
+      /* kept for this time only */
+    }
+  };
+  const cliOf = (which: string) => `docker exec -it ${box.project}-agent sh /opt/boxforge/run ${which === "shell" ? "shell" : which === "main" ? (box.spec.command ?? "") : (mine.find((k) => k.id === which)?.command ?? "")}`;
+
+  // Programs from terminals closed outside the app (a window shut, an older
+  // BoxForge): the same agent opened again beside one may fail.
   const [left, setLeft] = useState<string[]>([]);
   const look = () => call<string[]>("AgentLeftovers", box.spec.name).then((l) => setLeft(l ?? []), () => setLeft([]));
   const stopLeft = async () => {
     if (await run(`docker exec ${box.project}-agent kill <이전 터미널의 프로그램>`, () => call("AgentStopLeftovers", box.spec.name))) look();
   };
+
+  const opener = (which: string) => (
+    <>
+      {box.spec.image && which === "main" && box.spec.command}
+      {which !== "main" && nameOf(which)}
+    </>
+  );
   return (
-    <div className="agent-term">
+    <div className={"agent-term" + (big ? " big" : "")} style={{ ["--term-h" as string]: `${height}px` }}>
       <div className="graph-bar">
-        {box.spec.image && (
-          <button type="button" className={which === "main" ? "chip on" : "chip"} onClick={() => (setWhich("main"), setN(n + 1))}>
-            {box.spec.command}
-          </button>
-        )}
-        {mine.map((k) => (
-          <button key={k.id} type="button" className={which === k.id ? "chip on" : "chip"} onClick={() => (setWhich(k.id), setN(n + 1))}>
-            {k.name}
+        <span className="muted">새 터미널:</span>
+        {(box.spec.image ? ["main"] : mine.map((k) => k.id)).concat("shell").map((w) => (
+          <button key={w} type="button" className="chip" title={`${nameOf(w)}를 새 탭에서 엽니다`} onClick={() => add(w)}>
+            + {opener(w)}
           </button>
         ))}
-        <button type="button" className={which === "shell" ? "chip on" : "chip"} onClick={() => (setWhich("shell"), setN(n + 1))}>
-          셸
-        </button>
         <span className="spacer" />
-        <button type="button" onClick={() => run(cli, () => call("AgentOpenTerminal", box.spec.name, which))}>
-          외부 터미널로 열기
+        <button type="button" aria-pressed={big} title={big ? "원래 크기로 (Shift+Esc)" : "창 전체로 크게"} onClick={() => setBig(!big)}>
+          {big ? "원래 크기로" : "크게 보기"}
         </button>
+        {cur && (
+          <button type="button" onClick={() => run(cliOf(cur.which), () => call("AgentOpenTerminal", box.spec.name, cur.which))}>
+            외부 터미널로 열기
+          </button>
+        )}
       </div>
-      {kind && <p className="help">{kind.note}</p>}
       {left.length > 0 && (
         <div className="note-box" role="alert" data-testid="agent-leftovers">
           <strong>{`닫은 터미널에서 시작한 프로그램이 아직 상자 안에서 돌고 있습니다 (${left.length}개).`}</strong>
-          <span className="sub">같은 에이전트를 하나 더 열면 실패할 수 있습니다(OpenClaw의 "The CLI command failed" 등). 쓰지 않는 것이면 끄세요. 지금 열린 이 터미널은 그대로 둡니다.</span>
+          <span className="sub">같은 에이전트를 하나 더 열면 실패할 수 있습니다(OpenClaw의 "The CLI command failed" 등). 쓰지 않는 것이면 끄세요. 여기 탭에 열린 터미널은 그대로 둡니다.</span>
           <code className="leftover-list">{left.join("\n")}</code>
           <span>
             <button type="button" className="primary" onClick={stopLeft}>
@@ -791,19 +891,78 @@ function TermTab({ box, mine, run, showCli }: { box: Box; mine: Kind[]; run: Run
           </span>
         </div>
       )}
-      <Terminal
-        key={`${which}-${n}`}
-        id={box.project + "-agent"}
-        name={box.project + "-agent"}
-        showCli={showCli}
-        run={run}
-        command={cli}
-        open={async (cols, rows) => {
-          const session = await call<string>("AgentTermOpen", box.spec.name, which, cols, rows);
-          look();
-          return session;
-        }}
-      />
+      {terms.length > 0 && (
+        <div className="term-tabs" data-testid="term-tabs">
+          <div className="term-tab-list" role="tablist" aria-label="열린 터미널">
+            {terms.map((t) => (
+              <span key={t.key} className={"term-tab" + (t.key === active ? " on" : "") + (t.ended ? " ended" : "")}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={t.key === active}
+                  title={t.ended ? "끝난 터미널입니다. 닫거나 새로 여세요." : cliOf(t.which)}
+                  onClick={() => setActive(t.key)}
+                  onAuxClick={(e) => e.button === 1 && close([t.key])}
+                >
+                  {t.label}
+                  {t.ended && <span className="muted"> (끝남)</span>}
+                </button>
+                <button type="button" className="term-tab-close" aria-label={`${t.label} 닫기`} title="닫기 (그 안에서 돌던 것도 끕니다)" onClick={() => close([t.key])}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+          <span className="spacer" />
+          <button type="button" className="link" disabled={terms.length < 2} onClick={() => close(terms.filter((t) => t.key !== active).map((t) => t.key))}>
+            이 탭 빼고 모두 닫기
+          </button>
+          {terms.some((t) => t.ended) && (
+            <button type="button" className="link" onClick={() => close(terms.filter((t) => t.ended).map((t) => t.key))}>
+              끝난 것 닫기
+            </button>
+          )}
+          <button type="button" className="link" onClick={() => close(terms.map((t) => t.key))}>
+            모두 닫기
+          </button>
+        </div>
+      )}
+      {kind && <p className="help">{kind.note}</p>}
+      {terms.length === 0 && <p className="empty">열린 터미널이 없습니다. 위의 "새 터미널"에서 여세요.</p>}
+      {terms.map((t) => (
+        <div key={t.key} hidden={t.key !== active} className="term-pane" data-testid="term-pane">
+          <Terminal
+            id={box.project + "-agent"}
+            name={box.project + "-agent"}
+            showCli={showCli}
+            run={run}
+            command={cliOf(t.which)}
+            onEnd={() => setTerms((all) => all.map((x) => (x.key === t.key ? { ...x, ended: true } : x)))}
+            open={async (cols, rows) => {
+              const session = await call<string>("AgentTermOpen", box.spec.name, t.which, cols, rows);
+              look();
+              return session;
+            }}
+          />
+        </div>
+      ))}
+      {terms.length > 0 && !big && (
+        <div
+          className="term-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="터미널 높이 조절"
+          aria-valuenow={Math.round(height)}
+          tabIndex={0}
+          title="끌어서 터미널 높이를 바꿉니다"
+          onPointerDown={drag}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowUp") (e.preventDefault(), sizeBy(-40));
+            if (e.key === "ArrowDown") (e.preventDefault(), sizeBy(40));
+          }}
+          onDoubleClick={() => sizeBy(440 - height)}
+        />
+      )}
     </div>
   );
 }

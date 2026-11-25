@@ -20,9 +20,13 @@ interface Props {
   open?: (cols: number, rows: number) => Promise<string>;
   /** The command that does the same in a terminal. */
   command?: string;
+  /** Told when what runs in it has ended. */
+  onEnd?: () => void;
 }
 
-export default function Terminal({ id, name, showCli, run, open, command }: Props) {
+export default function Terminal({ id, name, showCli, run, open, command, onEnd }: Props) {
+  const ended = useRef(onEnd);
+  ended.current = onEnd;
   const box = useRef<HTMLDivElement>(null);
   const [note, setNote] = useState("");
 
@@ -47,7 +51,10 @@ export default function Terminal({ id, name, showCli, run, open, command }: Prop
     const early: TermData[] = [];
     const show = (d: TermData) => {
       if (d.data) term.write(Uint8Array.from(atob(d.data), (ch) => ch.charCodeAt(0)));
-      if (d.end) setNote("셸이 끝났습니다. 탭을 다시 열면 새로 시작합니다.");
+      if (d.end) {
+        setNote("셸이 끝났습니다. 탭을 다시 열면 새로 시작합니다.");
+        ended.current?.();
+      }
     };
     const off = on("term", (d: TermData) => {
       if (!session) early.push(d);
