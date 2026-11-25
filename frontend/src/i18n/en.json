@@ -1664,5 +1664,9 @@
  "작업 폴더({0})의 지금 내용이 모두 지워지고, {1}{2}에 저장한 내용으로 바뀝니다. 그 뒤에 바뀐 것은 되돌릴 수 없습니다. 지금 상태도 남기고 싶으면 먼저 \"지금 상태 저장\"을 하세요.": "Everything now in the work folder ({0}) will be deleted and replaced with what was saved at {1}{2}. What changed after that can't be brought back. To keep the present state too, \"Save the present state\" first.",
  "작업 폴더({0})의 파일은 그대로 남습니다.": "The files in the work folder ({0}) stay as they are.",
  "이 상자는 이전 버전의 BoxForge가 만들어서 아직 외부 터미널로 열 수 없습니다. 위의 ▶(설정대로 다시 올리기)를 한 번 누른 뒤 다시 해 주세요": "This box was made by an older BoxForge and can't be opened in an outside terminal yet. Press ▶ (bring up again as set) above once, then try again",
- "# {0}: compose.yaml · run.sh 다시 쓰기": "# {0}: write compose.yaml · run.sh again"
+ "# {0}: compose.yaml · run.sh 다시 쓰기": "# {0}: write compose.yaml · run.sh again",
+ "docker exec {0}-agent kill <이전 터미널의 프로그램>": "docker exec {0}-agent kill <programs of earlier terminals>",
+ "닫은 터미널에서 시작한 프로그램이 아직 상자 안에서 돌고 있습니다 ({0}개).": "Programs started in terminals that were closed are still running in the box ({0}).",
+ "같은 에이전트를 하나 더 열면 실패할 수 있습니다(OpenClaw의 \"The CLI command failed\" 등). 쓰지 않는 것이면 끄세요. 지금 열린 이 터미널은 그대로 둡니다.": "Opening the same agent again beside one may fail (OpenClaw's \"The CLI command failed\" and so on). Stop them if they aren't in use. The terminal open here is left as it is.",
+ "모두 끄기": "Stop all"
 }

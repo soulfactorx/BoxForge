@@ -285,15 +285,109 @@ func (a *App) AgentTermOpen(name, which string, cols, rows int) (string, error) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 	defer cancel()
-	cmd, err := agentCommand(s, which, a.hasRun(ctx, agentProject(name)+"-agent"))
+	box := agentProject(name) + "-agent"
+	run := a.hasRun(ctx, box)
+	cmd, err := agentCommand(s, which, run)
 	if err != nil {
 		return "", err
 	}
-	sess, err := a.eng().Containers().Exec(ctx, agentProject(name)+"-agent", cmd, uint(max(cols, 1)), uint(max(rows, 1)))
+	id := ""
+	if run {
+		id = fmt.Sprintf("term-%d", time.Now().UnixNano())
+		cmd = append(cmd[:2:2], append([]string{"--term", id}, cmd[2:]...)...)
+	}
+	sess, err := a.eng().Containers().Exec(ctx, box, cmd, uint(max(cols, 1)), uint(max(rows, 1)))
 	if err != nil {
 		return "", err
 	}
-	return a.attach(sess), nil
+	session := a.attach(sess)
+	if id != "" {
+		a.mu.Lock()
+		if a.boxTerms == nil {
+			a.boxTerms = map[string]boxTerm{}
+		}
+		a.boxTerms[session] = boxTerm{box: box, id: id}
+		a.mu.Unlock()
+	}
+	return session, nil
+}
+
+// boxTerm is a terminal open in a box: the box, and the name run.sh wrote
+// the started program's process (its session's leader) under.
+type boxTerm struct{ box, id string }
+
+// endBoxTerm stops what a closed terminal started: asked to end as a closed
+// terminal asks (HUP), then told (TERM), then made to (KILL).
+func (a *App) endBoxTerm(t boxTerm) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	script := `f=/tmp/.boxforge/$1; [ -r "$f" ] || exit 0; p=$(cat "$f"); rm -f "$f"; [ -n "$p" ] || exit 0
+kill -HUP -"$p" 2>/dev/null || kill -HUP "$p" 2>/dev/null
+( sleep 2; kill -TERM -"$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null; sleep 3; kill -KILL -"$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null ) >/dev/null 2>&1 &`
+	_, _, _, _ = a.eng().Containers().Output(ctx, t.box, []string{"sh", "-c", script, "boxforge", t.id}, nil)
+}
+
+// leftovers lists (or, with stop, stops) what runs in a box apart from the
+// box itself and the terminals open in the app: what terminals closed
+// outside the app (a terminal window shut) or before 0.37.2 left behind.
+// Each line: process ID, then its command.
+const leftovers = `keep=" 1 "
+self=$(sed 's/.*) //' /proc/$$/stat | cut -d' ' -f4); keep="$keep$self "
+for f in "$@"; do [ -r "/tmp/.boxforge/$f" ] && keep="$keep$(cat "/tmp/.boxforge/$f") "; done
+found=""
+for d in /proc/[0-9]*; do
+  n=${d#/proc/}; s=$(sed 's/.*) //' "$d/stat" 2>/dev/null | cut -d' ' -f4)
+  [ -n "$s" ] || continue
+  case "$keep" in *" $s "*) continue;; esac
+  c=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null | cut -c1-160)
+  [ -n "$c" ] || continue
+  if [ "$BOXFORGE_STOP" = 1 ]; then kill -TERM "$n" 2>/dev/null; found="$found $n"; else echo "$n $c"; fi
+done
+if [ -n "$found" ]; then sleep 2; for n in $found; do kill -KILL "$n" 2>/dev/null; done; fi
+true`
+
+func (a *App) boxLeftovers(name string, stop bool) ([]string, error) {
+	box := agentProject(name) + "-agent"
+	var live []string
+	a.mu.Lock()
+	for _, t := range a.boxTerms {
+		if t.box == box {
+			live = append(live, t.id)
+		}
+	}
+	a.mu.Unlock()
+	script := leftovers
+	if stop {
+		script = "BOXFORGE_STOP=1\n" + script
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, errOut, code, err := a.eng().Containers().Output(ctx, box, append([]string{"sh", "-c", script, "boxforge"}, live...), nil)
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("%s", strings.TrimSpace(errOut))
+	}
+	list := []string{}
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if _, c, ok := strings.Cut(l, " "); ok && strings.TrimSpace(c) != "" {
+			list = append(list, strings.TrimSpace(c))
+		}
+	}
+	return list, nil
+}
+
+// AgentLeftovers lists the programs still running in a box from terminals
+// that were closed: the same agent opened again beside one of them may
+// fail (OpenClaw: "The CLI command failed").
+func (a *App) AgentLeftovers(name string) ([]string, error) { return a.boxLeftovers(name, false) }
+
+// AgentStopLeftovers stops them. The box, and the terminals open in the
+// app, go on.
+func (a *App) AgentStopLeftovers(name string) error {
+	_, err := a.boxLeftovers(name, true)
+	return err
 }
 
 // AgentOpenTerminal does the same in the desktop's own terminal window.

@@ -1318,3 +1318,5 @@ tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 @media (max-width: 640px) {
   .agent-form .row2, .agent-form .row3 { grid-template-columns: 1fr; }
 }
+.agent-term .note-box { display: grid; gap: 6px; margin-bottom: 10px; }
+.agent-term .leftover-list { white-space: pre-wrap; font-size: 12px; max-height: 120px; overflow: auto; }

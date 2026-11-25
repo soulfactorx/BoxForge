@@ -701,7 +701,10 @@ function Control(props: {
         <p className="empty">상자가 실행 중이 아닙니다. 시작을 누르세요.</p>
       ) : (
         <>
-          {tab === "terminal" && <TermTab box={box} mine={mine} run={run} showCli={showCli} />}
+          {/* Kept open while another tab is looked at: what runs in it goes on, and is there on coming back. */}
+          <div hidden={tab !== "terminal"}>
+            <TermTab box={box} mine={mine} run={run} showCli={showCli} />
+          </div>
           {tab === "changes" && <ChangesTab box={box} run={run} showCli={showCli} />}
           {tab === "network" && <NetworkTab box={box} run={run} showCli={showCli} reload={props.reload} />}
           {tab === "snapshots" && <SnapshotsTab box={box} run={run} showCli={showCli} />}
@@ -747,6 +750,13 @@ function TermTab({ box, mine, run, showCli }: { box: Box; mine: Kind[]; run: Run
   const kind = mine.find((k) => k.id === which);
   const command = which === "shell" ? "bash" : which === "main" ? (box.spec.command ?? "") : (kind?.command ?? "");
   const cli = `docker exec -it ${box.project}-agent ${command}`;
+  // Programs from terminals closed earlier (a window shut, an older BoxForge):
+  // the same agent opened again beside one may fail.
+  const [left, setLeft] = useState<string[]>([]);
+  const look = () => call<string[]>("AgentLeftovers", box.spec.name).then((l) => setLeft(l ?? []), () => setLeft([]));
+  const stopLeft = async () => {
+    if (await run(`docker exec ${box.project}-agent kill <이전 터미널의 프로그램>`, () => call("AgentStopLeftovers", box.spec.name))) look();
+  };
   return (
     <div className="agent-term">
       <div className="graph-bar">
@@ -769,6 +779,18 @@ function TermTab({ box, mine, run, showCli }: { box: Box; mine: Kind[]; run: Run
         </button>
       </div>
       {kind && <p className="help">{kind.note}</p>}
+      {left.length > 0 && (
+        <div className="note-box" role="alert" data-testid="agent-leftovers">
+          <strong>{`닫은 터미널에서 시작한 프로그램이 아직 상자 안에서 돌고 있습니다 (${left.length}개).`}</strong>
+          <span className="sub">같은 에이전트를 하나 더 열면 실패할 수 있습니다(OpenClaw의 "The CLI command failed" 등). 쓰지 않는 것이면 끄세요. 지금 열린 이 터미널은 그대로 둡니다.</span>
+          <code className="leftover-list">{left.join("\n")}</code>
+          <span>
+            <button type="button" className="primary" onClick={stopLeft}>
+              모두 끄기
+            </button>
+          </span>
+        </div>
+      )}
       <Terminal
         key={`${which}-${n}`}
         id={box.project + "-agent"}
@@ -776,7 +798,11 @@ function TermTab({ box, mine, run, showCli }: { box: Box; mine: Kind[]; run: Run
         showCli={showCli}
         run={run}
         command={cli}
-        open={(cols, rows) => call<string>("AgentTermOpen", box.spec.name, which, cols, rows)}
+        open={async (cols, rows) => {
+          const session = await call<string>("AgentTermOpen", box.spec.name, which, cols, rows);
+          look();
+          return session;
+        }}
       />
     </div>
   );

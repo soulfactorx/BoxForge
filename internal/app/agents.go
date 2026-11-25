@@ -276,6 +276,9 @@ const agentRun = `#!/bin/sh
 # BoxForge: starts what is asked in the box, with the box's keys.
 if (: < /run/secrets/agent_env) 2>/dev/null; then set -a; . /run/secrets/agent_env; set +a; fi
 cd /workspace 2>/dev/null
+# A terminal BoxForge opens names itself: what it starts can be found again
+# (its session) and stopped when the terminal is closed.
+if [ "$1" = --term ]; then mkdir -p /tmp/.boxforge 2>/dev/null; echo $$ > "/tmp/.boxforge/$2" 2>/dev/null; shift 2; fi
 if [ "$1" = shell ]; then command -v bash >/dev/null && exec bash; exec sh; fi
 exec "$@"
 `

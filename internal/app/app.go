@@ -52,12 +52,15 @@ type App struct {
 	hub    *hub.Hub
 	cancel context.CancelFunc
 
-	mu     sync.Mutex
-	logs   map[string]context.CancelFunc // open log streams, by container ID
-	stats  map[string]context.CancelFunc // open stats streams, by container ID
-	terms  map[string]engine.Session     // open terminals, by session ID
-	builds map[string]context.CancelFunc // running builds, by the page's key
-	seq    int
+	mu    sync.Mutex
+	logs  map[string]context.CancelFunc // open log streams, by container ID
+	stats map[string]context.CancelFunc // open stats streams, by container ID
+	terms map[string]engine.Session     // open terminals, by session ID
+	// boxTerms are the terminals open in AI agent boxes, by session ID:
+	// what one started is stopped when it is closed.
+	boxTerms map[string]boxTerm
+	builds   map[string]context.CancelFunc // running builds, by the page's key
+	seq      int
 
 	setup provision.Installer
 }
@@ -781,6 +784,7 @@ func (a *App) attach(s engine.Session) string {
 		a.mu.Lock()
 		_, open := a.terms[session]
 		delete(a.terms, session)
+		delete(a.boxTerms, session) // ended by itself: nothing left to stop
 		a.mu.Unlock()
 		_ = s.Close()
 		if open { // not closed by the page: tell it the shell is gone
@@ -826,9 +830,17 @@ func (a *App) TermClose(session string) {
 	a.mu.Lock()
 	s := a.terms[session]
 	delete(a.terms, session)
+	bt, inBox := a.boxTerms[session]
+	delete(a.boxTerms, session)
 	a.mu.Unlock()
 	if s != nil {
 		_ = s.Close()
+	}
+	if inBox {
+		// Closing the connection leaves what it started running in the
+		// container (docker exec does): an agent left so stays, and the
+		// next one opened beside it may fail.
+		go a.endBoxTerm(bt)
 	}
 }
 

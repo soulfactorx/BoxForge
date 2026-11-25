@@ -62,6 +62,8 @@ test("an agent box: keys kept out of the container's settings, only listed addre
 
   // The terminal: the key is there, and an address not on the list is stopped.
   await page.getByRole("tab", { name: "터미널" }).click();
+  // Opened again: a key saved after a terminal opened reaches the next one.
+  await page.locator(".agent-term").getByRole("button", { name: "sh", exact: true }).click();
   const term = page.locator(".xterm");
   await expect(term).toBeVisible();
   // Typed once the shell is there: keys pressed before the session opens are not kept.
@@ -69,6 +71,27 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await term.click();
   await page.keyboard.type("wget -q -T 5 -O- http://blocked.bfe2e.test; echo key-is-$BFE2E_KEY\n");
   await expect(page.locator(".xterm-rows")).toContainText("key-is-s3cret-value", { timeout: 30_000 });
+
+  // Another tab and back: the same terminal, what runs in it still running.
+  await page.keyboard.type("sleep 777\n");
+  await expect.poll(() => inBox("ps -o args")).toContain("sleep 777");
+  await page.getByRole("tab", { name: "API 키" }).click();
+  await page.getByRole("tab", { name: "터미널" }).click();
+  await expect(page.locator(".xterm-rows")).toContainText("sleep 777");
+  expect(inBox("ps -o args")).toContain("sleep 777");
+  // Closed (another one opened in its place): what it started is stopped,
+  // not left running in the box.
+  await page.locator(".agent-term").getByRole("button", { name: "셸" }).click();
+  await expect.poll(() => inBox("ps -o args"), { timeout: 15_000 }).not.toContain("sleep 777");
+  // Left by a terminal outside the app: said, and stopped on asking.
+  sh(`docker exec -d ${box}-agent sh /opt/boxforge/run sleep 888`);
+  await page.locator(".agent-term").getByRole("button", { name: "sh", exact: true }).click();
+  const left = page.getByTestId("agent-leftovers");
+  await expect(left).toContainText("sleep 888");
+  await left.getByRole("button", { name: "모두 끄기" }).click();
+  await expect(left).toHaveCount(0);
+  await expect.poll(() => inBox("ps -o args")).not.toContain("sleep 888");
+  await expect(page.locator(".xterm-rows")).toContainText("/workspace");
 
   await page.getByRole("tab", { name: "연결 기록" }).click();
   const conns = page.getByTestId("agent-connections");
