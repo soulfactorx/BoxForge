@@ -10,7 +10,7 @@ func TestAgentFiles(t *testing.T) {
 	ws := t.TempDir()
 	s := AgentSpec{Name: "pi-work", Agents: []string{"pi", "openclaw", "pi"}, Workspace: ws, Network: "ai",
 		Allow: []string{"API.anthropic.com", "# note", "*.example.com", "host.docker.internal:11434"}, Ports: []int{18789},
-		Memory: 4, CPUs: 2, Pids: 512, Service: "openclaw gateway --port 18789 --bind lan"}
+		Memory: 4, CPUs: 2, Pids: 512, Service: "openclaw gateway --port 18789 --bind loopback", Browser: true}
 	if err := s.check(); err != nil {
 		t.Fatal(err)
 	}
@@ -21,10 +21,14 @@ func TestAgentFiles(t *testing.T) {
 	c := f["compose.yaml"]
 	for _, want := range []string{"name: bfa-pi-work", "container_name: bfa-pi-work-agent", "container_name: bfa-pi-work-service", "container_name: bfa-pi-work-egress",
 		"cap_drop: [ALL]", "no-new-privileges:true", "pids_limit: 512", "mem_limit: 4096m", "cpus: 2", "internal: true", "HTTPS_PROXY: http://egress:8888",
-		`FORWARD: "18789:service:18789"`, `"127.0.0.1:18789:18789"`, "file: ./secrets.env", `"` + ws + `:/workspace"`, "home:/home/agent"} {
+		"file: ./secrets.env", "container_name: bfa-pi-work-browser", `network_mode: "service:service"`, "cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, KILL, NET_BIND_SERVICE]", "browser: {}", `"` + ws + `:/workspace"`, "home:/home/agent"} {
 		if !strings.Contains(c, want) {
 			t.Fatalf("compose.yaml lacks %q:\n%s", want, c)
 		}
+	}
+	// Ports are opened by BoxForge, never published by the engine.
+	if strings.Contains(c, "ports:") || strings.Contains(c, "FORWARD") {
+		t.Fatalf("compose.yaml publishes ports:\n%s", c)
 	}
 	if !strings.Contains(f["Dockerfile"], "@earendil-works/pi-coding-agent") || !strings.Contains(f["Dockerfile"], "openclaw@latest") {
 		t.Fatalf("Dockerfile:\n%s", f["Dockerfile"])
@@ -37,7 +41,6 @@ func TestAgentFiles(t *testing.T) {
 		{Name: "x", Workspace: ws, Network: "ai"},
 		{Name: "x", Agents: []string{"nope"}, Workspace: ws, Network: "ai"},
 		{Name: "x", Agents: []string{"pi"}, Workspace: "relative", Network: "ai"},
-		{Name: "x", Agents: []string{"pi"}, Workspace: ws, Network: "none", Ports: []int{80}},
 		{Name: "x", Agents: []string{"pi"}, Workspace: ws, Network: "ai", Allow: []string{"http://x.com/a"}},
 		{Name: "x", Image: "alpine", Workspace: ws, Network: "full"},
 	} {

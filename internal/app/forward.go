@@ -205,8 +205,13 @@ dd bs=65536 <&7; kill 0' 2>/dev/null || exec nc -w 10 "$1" "$2"`
 // the browser is done sending, the far side is told so and its answer still
 // comes back.
 func carry(ctx context.Context, rt engine.Runtime, conn net.Conn, cmd []string) {
+	carryIn(ctx, rt, forwardHelper, conn, cmd)
+}
+
+// carryIn is carry through a command in the named container.
+func carryIn(ctx context.Context, rt engine.Runtime, container string, conn net.Conn, cmd []string) {
 	defer conn.Close()
-	p, err := rt.Containers().Pipe(ctx, forwardHelper, cmd)
+	p, err := rt.Containers().Pipe(ctx, container, cmd)
 	if err != nil {
 		return
 	}

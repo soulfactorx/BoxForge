@@ -82,8 +82,8 @@ var agentKinds = []AgentKind{
 	{ID: "openclaw", Name: "OpenClaw", Command: "openclaw", Install: "RUN npm install -g openclaw@latest --allow-scripts=openclaw",
 		Keys:    []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "OPENCLAW_GATEWAY_TOKEN", "TELEGRAM_BOT_TOKEN"},
 		Hosts:   join(anthropicHosts, openaiHosts, googleHosts, []string{"openrouter.ai", "api.x.ai"}),
-		Note:    "먼저 openclaw onboard --mode local --no-install-daemon 으로 설정합니다. 그다음 \"늘 켜 두기\"로 게이트웨이를 켜고 openclaw dashboard --no-open 이 알려 주는 주소로 엽니다.",
-		Service: "openclaw gateway --port 18789 --bind lan", Port: 18789},
+		Note:    "먼저 여기서 openclaw onboard --mode local --no-install-daemon 으로 설정합니다. 그다음 \"웹 · 포트\" 탭에서 \"게이트웨이 늘 켜 두기\"를 누르고, \"내 PC 브라우저로 열기\"나 \"브라우저 상자로 열기\"로 화면을 엽니다(로그인된 링크로 열림).",
+		Service: "openclaw gateway --port 18789 --bind loopback", Port: 18789},
 	{ID: "hermes", Name: "Hermes Agent", Command: "hermes",
 		Install: "RUN python3 -m venv /opt/hermes && /opt/hermes/bin/pip install --no-cache-dir hermes-agent \\\n && ln -sf /opt/hermes/bin/hermes /usr/local/bin/hermes",
 		Keys:    []string{"OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN"},
@@ -140,6 +140,8 @@ type AgentSpec struct {
 	// Service keeps an agent running as a service (a chat gateway) beside
 	// the box's own shell: its command, "" for none.
 	Service string `json:"service,omitempty"`
+	// Browser puts a browser box beside it, to see its web page in.
+	Browser bool `json:"browser,omitempty"`
 
 	Mark int64 `json:"mark"` // when the files were last saved (or the box made): "changed" is since then
 }
@@ -162,6 +164,15 @@ func agentsDir() string {
 		return ""
 	}
 	return filepath.Join(dir, "BoxForge", "agents")
+}
+
+// agentBrowser is the image of a box's browser: Firefox, seen through its
+// own web page.
+func agentBrowser() string {
+	if b := os.Getenv("BOXFORGE_BROWSER_IMAGE"); b != "" {
+		return b
+	}
+	return "jlesage/firefox:latest"
 }
 
 // agentBase is the image agents are built on, and the proxy runs on.
@@ -240,9 +251,6 @@ func (s *AgentSpec) check() error {
 		if p < 1 || p > 65535 {
 			return fmt.Errorf("%d is not a port", p)
 		}
-	}
-	if s.Network == "none" && len(s.Ports) > 0 {
-		return fmt.Errorf("a box with no network can't open ports")
 	}
 	if s.Memory < 0 || s.CPUs < 0 || s.Pids < 0 {
 		return fmt.Errorf("limits can't be below 0")
@@ -368,14 +376,9 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 			w("    network_mode: none\n")
 		case "ai":
 			w("    networks: [inside]\n")
-		case "full":
-			if service == portHolder(s) && len(s.Ports) > 0 {
-				w("    ports:\n")
-				for _, p := range s.Ports {
-					w("      - \"127.0.0.1:%d:%d\"\n", p, p)
-				}
-			}
 		}
+		// No published ports: they are opened on this PC by BoxForge
+		// (agents_ports.go), at once and on any network.
 	}
 	main := "exec tail -f /dev/null"
 	agent("agent", main)
@@ -388,24 +391,39 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 		w("    restart: unless-stopped\n")
 		w("    labels:\n      io.boxforge.agent: %s\n      io.boxforge.agent.part: egress\n", y(s.Name))
 		w("    volumes:\n      - ./egress:/egress:ro\n")
-		if len(s.Ports) > 0 {
-			// The box's network has no way out, so not in either: the proxy,
-			// which is on both, passes the ports on to it.
-			var to []string
-			w("    ports:\n")
-			for _, p := range s.Ports {
-				w("      - \"127.0.0.1:%d:%d\"\n", p, p)
-				to = append(to, fmt.Sprintf("%d:%s:%d", p, portHolder(s), p))
-			}
-			w("    environment:\n      FORWARD: %s\n", y(strings.Join(to, ",")))
-		}
 		w("    extra_hosts: [\"host.docker.internal:host-gateway\"]\n")
 		w("    cap_drop: [ALL]\n    security_opt: [\"no-new-privileges:true\"]\n    read_only: true\n    mem_limit: 256m\n    pids_limit: 256\n")
 		w("    networks: [inside, outside]\n")
+	}
+	if s.Browser {
+		// A browser of its own, beside the box: it shares the network of the
+		// part that shows the web page, so that page is its localhost (a
+		// page that asks for a secure address, as OpenClaw's does, takes
+		// localhost as one) and it reaches nothing else the box can't. On
+		// this PC only its picture is seen (its own page, port 5800).
+		holder := portHolder(s)
+		uid, gid := agentIDs()
+		w("  browser:\n    image: %s\n    container_name: %s-browser\n", y(agentBrowser()), project)
+		w("    network_mode: \"service:%s\"\n    depends_on: [%s]\n    restart: unless-stopped\n", holder, holder)
+		w("    labels:\n      io.boxforge.agent: %s\n      io.boxforge.agent.part: browser\n", y(s.Name))
+		w("    environment:\n      USER_ID: \"%d\"\n      GROUP_ID: \"%d\"\n      KEEP_APP_RUNNING: \"1\"\n", uid, gid)
+		w("    volumes:\n      - browser:/config\n")
+		w("    shm_size: 1g\n    mem_limit: 2g\n")
+		// What its start-up needs (it begins as root and drops to the user), nothing more.
+		w("    cap_drop: [ALL]\n    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, KILL, NET_BIND_SERVICE]\n")
+		w("    security_opt: [\"no-new-privileges:true\"]\n")
+	}
+	if s.Network == "ai" {
 		w("\nnetworks:\n  inside:\n    internal: true\n  outside: {}\n")
 	}
-	if image == "" {
-		w("\nvolumes:\n  home: {}\n")
+	if image == "" || s.Browser {
+		w("\nvolumes:\n")
+		if image == "" {
+			w("  home: {}\n")
+		}
+		if s.Browser {
+			w("  browser: {}\n")
+		}
 	}
 	w("\nsecrets:\n  agent_env:\n    file: ./secrets.env\n")
 	files["compose.yaml"] = b.String()
@@ -529,15 +547,4 @@ server.on("connect", (req, sock, head) => {
   sock.on("error", () => up.destroy());
 });
 server.listen(8888);
-// Ports of the box opened on this PC: the box's own network has no way
-// out, so they come in here and are passed on.
-for (const f of (process.env.FORWARD || "").split(",").filter(Boolean)) {
-  const [listen, host, port] = f.split(":");
-  net.createServer((c) => {
-    const up = net.connect(+port, host);
-    c.pipe(up).pipe(c);
-    up.on("error", () => c.destroy());
-    c.on("error", () => up.destroy());
-  }).listen(+listen);
-}
 `

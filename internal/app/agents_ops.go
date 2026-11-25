@@ -178,6 +178,7 @@ func (a *App) AgentForget(name string) error {
 			return err
 		}
 	}
+	closeBoxPorts(name)
 	return os.RemoveAll(dir)
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { call, on, type Container, type Run } from "./bridge";
+import { call, on, openURL, remote, type Container, type Run } from "./bridge";
 import { pick } from "./PathPicker";
 import Terminal from "./Terminal";
 import { Dialog, IconButton } from "./ui";
@@ -30,6 +30,7 @@ interface Spec {
   pids: number;
   readOnlyRoot: boolean;
   service?: string;
+  browser?: boolean;
   mark?: number;
 }
 
@@ -115,7 +116,7 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
   }, []);
 
   const byName = useMemo(() => new Map(containers.map((c) => [c.name, c])), [containers]);
-  const part = (b: Box, p: "agent" | "egress" | "service") => byName.get(`${b.project}-${p}`);
+  const part = (b: Box, p: "agent" | "egress" | "service" | "browser") => byName.get(`${b.project}-${p}`);
 
   /** Runs one compose command on a box, its output shown as it comes. */
   const compose = async (b: Box, action: "upbuild" | "stop" | "build" | "purge", title: string) => {
@@ -186,6 +187,7 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
               agent={part(b, "agent")}
               egress={part(b, "egress")}
               service={part(b, "service")}
+              browser={part(b, "browser")}
               busy={!!busy}
               run={run}
               showCli={showCli}
@@ -369,7 +371,15 @@ function MakeDialog(props: {
   }, [defaults, chosen, extra, presets]);
 
   const services = kinds.filter((k) => k.service && spec.agents.includes(k.id));
-  const toggleAgent = (id: string, on: boolean) => set({ agents: on ? [...spec.agents.filter((a) => a !== id), id] : spec.agents.filter((a) => a !== id) });
+  const toggleAgent = (id: string, on: boolean) => {
+    set({ agents: on ? [...spec.agents.filter((a) => a !== id), id] : spec.agents.filter((a) => a !== id) });
+    // An agent with a web page of its own (OpenClaw): its port, and a browser box to see it in.
+    const k = kinds.find((x) => x.id === id);
+    if (on && k?.port) {
+      if (!portList.includes(k.port)) setPorts((p) => (p.trim() ? `${p}, ${k.port}` : String(k.port)));
+      set({ browser: true });
+    }
+  };
   const portList = ports
     .split(/[,\s]+/)
     .filter(Boolean)
@@ -382,7 +392,7 @@ function MakeDialog(props: {
     image: own ? spec.image : "",
     command: own ? spec.command : "",
     allow: spec.network === "ai" ? allow : [],
-    ports: spec.network === "none" ? [] : portList,
+    ports: portList,
     readOnly: readOnly.split("\n").map((l) => l.trim()).filter(Boolean),
   };
 
@@ -510,13 +520,17 @@ function MakeDialog(props: {
               </label>
             </>
           )}
-          {spec.network !== "none" && (
-            <label>
-              내 PC에 열 포트 <span className="muted">(선택, 쉼표로)</span>
-              <input value={ports} placeholder="예: 18789, 3000" onChange={(e) => setPorts(e.target.value)} />
-              <span className="help">상자 안 프로그램의 화면(OpenClaw의 18789, 만든 웹앱 등)을 내 PC의 브라우저에서 엽니다. 이 PC에서만(127.0.0.1) 열리고 다른 기기에서는 닿지 않습니다.</span>
-            </label>
-          )}
+          <label>
+            내 PC에 열 포트 <span className="muted">(선택, 쉼표로)</span>
+            <input value={ports} placeholder="예: 18789, 3000" onChange={(e) => setPorts(e.target.value)} />
+            <span className="help">상자 안 프로그램의 화면(OpenClaw의 18789, 만든 웹앱 등)을 내 PC의 브라우저에서 엽니다. 이 PC에서만(127.0.0.1) 열립니다. 나중에 제어판의 "웹 · 포트"에서 상자를 다시 만들지 않고 바로 더하거나 뺄 수 있습니다.</span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={!!spec.browser} onChange={(e) => set({ browser: e.target.checked })} />
+            <span>
+              브라우저 상자 함께 만들기 <span className="muted">(에이전트의 웹 화면을 내 PC 브라우저 대신 격리된 Firefox로 봄. Firefox 이미지 약 1GB)</span>
+            </span>
+          </label>
         </fieldset>
 
         {services.length > 0 && (
@@ -594,7 +608,7 @@ function MakeDialog(props: {
   );
 }
 
-type Tab = "terminal" | "changes" | "network" | "snapshots" | "keys";
+type Tab = "terminal" | "web" | "changes" | "network" | "snapshots" | "keys";
 
 /** One box: its terminal, what it changed, where it connected, saved copies and keys. */
 function Control(props: {
@@ -603,6 +617,7 @@ function Control(props: {
   agent?: Container;
   egress?: Container;
   service?: Container;
+  browser?: Container;
   busy: boolean;
   run: Run;
   showCli: (cmd: string) => void;
@@ -621,9 +636,14 @@ function Control(props: {
   const up = agent?.state === "running";
   const [tab, setTab] = useState<Tab>("terminal");
   const [removing, setRemoving] = useState(false);
+  // Its ports, opened on this PC while the box runs (again after BoxForge started anew).
+  useEffect(() => {
+    if (up) call("AgentPortsEnsure", s.name).catch(() => {});
+  }, [up, s.name, (s.ports ?? []).join()]);
   const mine = s.image ? [] : kinds.filter((k) => s.agents.includes(k.id));
   const tabs: [Tab, string][] = [
     ["terminal", "터미널"],
+    ["web", "웹 · 포트"],
     ["changes", "바뀐 파일"],
     ...(s.network === "ai" ? ([["network", "연결 기록"]] as [Tab, string][]) : []),
     ["snapshots", "저장 · 되돌리기"],
@@ -723,6 +743,7 @@ function Control(props: {
           <div hidden={tab !== "terminal"}>
             <TermTab box={box} mine={mine} run={run} showCli={showCli} onCount={props.onTerms} />
           </div>
+          {tab === "web" && <WebTab box={box} mine={mine} service={service} browser={props.browser} run={run} showCli={showCli} compose={props.compose} reload={props.reload} />}
           {tab === "changes" && <ChangesTab box={box} run={run} showCli={showCli} />}
           {tab === "network" && <NetworkTab box={box} run={run} showCli={showCli} reload={props.reload} />}
           {tab === "snapshots" && <SnapshotsTab box={box} run={run} showCli={showCli} />}
@@ -736,6 +757,7 @@ function Control(props: {
             <li>컨테이너 {[box.project + "-agent", s.service ? box.project + "-service" : "", s.network === "ai" ? box.project + "-egress" : ""].filter(Boolean).join(", ")}</li>
             {!s.image && <li>{`에이전트 이미지 boxforge-agent/${s.name}`}</li>}
             {!s.image && <li>상자의 홈 볼륨 (에이전트의 로그인 정보 · 설정 · 대화 기록)</li>}
+            {s.browser && <li>브라우저 상자와 그 볼륨 (브라우저에 남은 로그인 · 기록)</li>}
             <li>저장해 둔 작업 폴더 복사본</li>
             <li>{`API 키와 상자 설정 (${box.dir})`}</li>
           </ul>
@@ -939,6 +961,205 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
           onDoubleClick={() => sizeBy(440 - height)}
         />
       )}
+    </div>
+  );
+}
+
+/** Its web pages and ports: opened on this PC by BoxForge, at once, the box running on. */
+function WebTab(props: {
+  box: Box;
+  mine: Kind[];
+  service?: Container;
+  browser?: Container;
+  run: Run;
+  showCli: (cmd: string) => void;
+  compose: (action: "upbuild" | "stop" | "build" | "purge", title: string) => Promise<boolean>;
+  reload: () => void;
+}) {
+  const { box, mine, run, showCli } = props;
+  const s = box.spec;
+  const [ports, setPorts] = useState<{ port: number; local: number }[]>([]);
+  const [adding, setAdding] = useState("");
+  const [note, setNote] = useState("");
+  const page = mine.find((k) => k.port); // an agent with a web page of its own (OpenClaw)
+  const holder = `${box.project}-${s.service ? "service" : "agent"}`;
+  const load = () => call<{ port: number; local: number }[]>("AgentPortsEnsure", s.name).then((p) => setPorts(p ?? []), (e) => setNote(e.message));
+  useEffect(() => {
+    showCli(`# BoxForge가 이 PC의 127.0.0.1:포트 로 받은 연결을 docker exec ${holder} 로 상자 안의 localhost:포트 에 이어 줍니다`);
+    load();
+  }, [s.name, s.ports?.join()]);
+
+  const saveSpec = async (next: Spec, title: string) => {
+    if (!(await run(`# ${box.dir}: compose.yaml 다시 쓰기`, () => call("AgentSave", next, false)))) return false;
+    props.reload();
+    return props.compose("upbuild", title);
+  };
+  const add = async () => {
+    const p = +adding;
+    if (!Number.isInteger(p) || p < 1 || p > 65535) return setNote("포트는 1부터 65535 사이의 숫자입니다.");
+    setNote("");
+    if (await run(`# 127.0.0.1:${p} → ${holder} 안의 localhost:${p} (다시 만들지 않음)`, () => call("AgentPortAdd", s.name, p))) {
+      setAdding("");
+      props.reload();
+      load();
+    }
+  };
+  const openPC = (local: number, path = "") => openURL(`http://127.0.0.1:${local}${path}`);
+
+  // The agent's own page (OpenClaw), signed in by its one-time link.
+  const openPage = async (where: "pc" | "browser") => {
+    let link = "";
+    if (!(await run(`docker exec ${holder} sh /opt/boxforge/run openclaw dashboard --json`, async () => (link = await call<string>("AgentWebLink", s.name))))) return;
+    if (where === "pc") {
+      let local = 0;
+      if (!(await run(`# 127.0.0.1:${page!.port} → ${holder} 안의 localhost:${page!.port}`, async () => (local = await call<number>("AgentPortOpen", s.name, page!.port))))) return;
+      const u = new URL(link);
+      u.hostname = "127.0.0.1";
+      u.port = String(local);
+      // The link also names the gateway's own address (gatewayUrl=ws://127.0.0.1:18789): moved too when the port on this PC differs.
+      if (local !== page!.port) u.hash = u.hash.split(`%3A${page!.port}`).join(`%3A${local}`).split(`:${page!.port}`).join(`:${local}`);
+      openURL(u.toString());
+      load();
+    } else {
+      let local = 0;
+      if (!(await run(`# 브라우저 상자에서 ${link.split("#")[0]} 열기`, async () => (local = await call<number>("AgentBrowserOpen", s.name, link))))) return;
+      // The browser starts again with the page: a moment before its picture shows it.
+      setTimeout(() => openPC(local), 2500);
+    }
+  };
+  const openBrowser = async () => {
+    let local = 0;
+    if (await run(`# 127.0.0.1:5800 → ${box.project}-browser 의 화면`, async () => (local = await call<number>("AgentBrowserOpen", s.name, "")))) openPC(local);
+  };
+  const browserUp = props.browser?.state === "running";
+
+  return (
+    <div className="agent-web">
+      {remote() && <p className="warn">웹 서버로 접속한 경우: 아래 포트는 BoxForge가 도는 서버 PC에서 열립니다. 이 브라우저의 PC가 아니라서 바로 열리지 않을 수 있습니다.</p>}
+      {page && (
+        <section className="web-card" data-testid="agent-page">
+          <h3>{`${page.name} 화면`}</h3>
+          <p className="muted">
+            {`${page.name}의 웹 화면을 로그인된 상태로 엽니다. 브라우저 상자는 격리된 Firefox라서, 그 화면의 코드가 내 PC의 브라우저에서 돌지 않습니다(내 PC에는 그림만 보입니다).`}
+          </p>
+          {!s.service && (
+            <p className="note-box">
+              {`게이트웨이가 켜져 있어야 화면이 열립니다. 상자의 터미널에서 설정(openclaw onboard)을 마쳤다면 "늘 켜 두기"로 게이트웨이를 켜세요.`}
+              <span>
+                <button type="button" onClick={() => saveSpec({ ...s, service: page.service ?? "", ports: [...new Set([...(s.ports ?? []), page.port!])] }, `${s.name} · 게이트웨이 늘 켜 두기`)}>
+                  게이트웨이 늘 켜 두기
+                </button>
+              </span>
+            </p>
+          )}
+          {s.service && props.service?.state !== "running" && <p className="warn">{`게이트웨이(${box.project}-service)가 돌고 있지 않습니다: ${props.service?.status ?? "아직 만들어지지 않음"}. "그래프 · 로그"에서 이유를 볼 수 있습니다.`}</p>}
+          <div className="actions">
+            <button type="button" className="primary" onClick={() => openPage("pc")}>
+              내 PC 브라우저로 열기
+            </button>
+            {s.browser ? (
+              <button type="button" disabled={!browserUp} title={browserUp ? "" : "브라우저 상자가 아직 켜지지 않았습니다"} onClick={() => openPage("browser")}>
+                브라우저 상자로 열기
+              </button>
+            ) : null}
+          </div>
+        </section>
+      )}
+
+      <section className="web-card" data-testid="agent-browser">
+        <h3>브라우저 상자</h3>
+        {s.browser ? (
+          <>
+            <p className="muted">
+              {`상자 옆에서 도는 격리된 Firefox입니다. 에이전트와 같은 네트워크 안에 있어서 상자 안의 화면을 localhost로 열고, 그 밖의 곳에는 닿지 않습니다. 내 PC에서는 그 화면을 그림으로만 봅니다. 상태: ${props.browser ? (stateLabel[props.browser.state] ?? props.browser.state) : "아직 만들어지지 않음"}`}
+            </p>
+            <div className="actions">
+              <button type="button" disabled={!browserUp} onClick={openBrowser}>
+                브라우저 상자 화면 열기
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="muted">에이전트의 웹 화면을 내 PC 브라우저 대신 격리된 Firefox에서 봅니다. 처음 만들 때 Firefox 이미지(약 1GB)를 받습니다.</p>
+            <div className="actions">
+              <button type="button" onClick={() => saveSpec({ ...s, browser: true }, `${s.name} · 브라우저 상자 만들기`)}>
+                브라우저 상자 만들기
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="web-card" data-testid="agent-ports">
+        <h3>포트</h3>
+        <p className="muted">상자 안 프로그램의 포트를 내 PC의 같은 번호(쓰이고 있으면 다음 빈 번호)로 엽니다. 이 PC에서만(127.0.0.1) 열리고, 상자를 다시 만들지 않고 바로 열리고 닫힙니다. BoxForge가 켜져 있는 동안 열려 있습니다.</p>
+        {ports.length > 0 && (
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>상자 안</th>
+                <th>내 PC</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {ports.map((p) => (
+                <tr key={p.port}>
+                  <td className="mono">localhost:{p.port}</td>
+                  <td className="mono">{p.local ? `127.0.0.1:${p.local}` : "닫힘"}</td>
+                  <td className="row-actions">
+                    {p.local > 0 && (
+                      <button type="button" className="link" onClick={() => openPC(p.local)}>
+                        내 PC 브라우저로
+                      </button>
+                    )}
+                    {s.browser && (
+                      <button
+                        type="button"
+                        className="link"
+                        disabled={!browserUp}
+                        onClick={async () => {
+                          let local = 0;
+                          if (await run(`# 브라우저 상자에서 http://127.0.0.1:${p.port}/ 열기`, async () => (local = await call<number>("AgentBrowserOpen", s.name, `http://127.0.0.1:${p.port}/`))))
+                            setTimeout(() => openPC(local), 2500);
+                        }}
+                      >
+                        브라우저 상자로
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={async () => {
+                        if (await run(`# 127.0.0.1:${p.local || p.port} 닫기`, () => call("AgentPortRemove", s.name, p.port))) {
+                          props.reload();
+                          load();
+                        }
+                      }}
+                    >
+                      빼기
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <form
+          className="graph-bar"
+          onSubmit={(e) => {
+            e.preventDefault();
+            add();
+          }}
+        >
+          <input aria-label="열 포트" inputMode="numeric" value={adding} placeholder="예: 3000" onChange={(e) => setAdding(e.target.value.trim())} />
+          <button type="submit" disabled={!adding}>
+            포트 열기
+          </button>
+        </form>
+        {note && <p className="warn">{note}</p>}
+      </section>
     </div>
   );
 }

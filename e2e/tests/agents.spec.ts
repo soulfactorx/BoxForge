@@ -17,6 +17,7 @@ const inBox = (cmd: string) => sh(`docker exec ${box}-agent sh -c '${cmd}'`);
 test.afterAll(() => {
   sh(`docker compose -p ${box} down --volumes --remove-orphans`, true);
   sh(`docker compose -p bfa-bfe2e-pi down --volumes --rmi local --remove-orphans`, true);
+  sh(`docker compose -p bfa-bfe2e-web down --volumes --remove-orphans`, true);
   sweep();
 });
 
@@ -175,6 +176,46 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   expect(sh(`docker ps -aq --filter name=${box}`)).toBe("");
   expect(sh(`docker volume ls -q --filter name=${box}`)).toBe("");
   expect(readFileSync(join(work, "notes.txt"), "utf8")).toBe("first\n");
+});
+
+test("a box's port opens at once, the box running on; its browser box shows the box's own page", async ({ page, request }) => {
+  await make(page, "bfe2e-web", async (d) => {
+    await d.getByLabel("내가 가진 이미지로 (에이전트를 넣지 않음)").check();
+    await d.getByLabel("이미지", { exact: true }).fill(ALPINE);
+    await d.getByLabel("에이전트를 시작하는 명령").fill("sh");
+    await d.getByLabel("브라우저 상자 함께 만들기").check();
+  });
+  const web = "bfa-bfe2e-web";
+  await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 300_000 });
+  await expect.poll(() => sh(`docker inspect -f '{{.State.Running}}' ${web}-browser`, true), { timeout: 120_000 }).toBe("true");
+  // A page served in the box on its localhost only: each request written down.
+  sh(`docker exec -d ${web}-agent sh -c 'while true; do printf "HTTP/1.0 200 OK\\r\\nContent-Length: 10\\r\\n\\r\\nhello-port" | nc -l -s 127.0.0.1 -p 18080 >> /tmp/req; done'`);
+  const id = sh(`docker inspect -f '{{.Id}}' ${web}-agent`);
+
+  await page.getByRole("tab", { name: "웹 · 포트" }).click();
+  const ports = page.getByTestId("agent-ports");
+  await ports.getByLabel("열 포트").fill("18080");
+  await ports.getByRole("button", { name: "포트 열기" }).click();
+  const row = ports.getByRole("row", { name: /localhost:18080/ });
+  await expect(row).toContainText("127.0.0.1:");
+  const local = +(/127\.0\.0\.1:(\d+)/.exec(await row.innerText())![1]);
+  await expect.poll(async () => (await request.get(`http://127.0.0.1:${local}/`).catch(() => null))?.text() ?? "").toBe("hello-port");
+  // Opened at once: the box wasn't made again.
+  expect(sh(`docker inspect -f '{{.Id}}' ${web}-agent`)).toBe(id);
+
+  // The browser box opens the box's page as its own localhost; on this PC only its picture's page opens.
+  const shown = page.context().waitForEvent("page");
+  await row.getByRole("button", { name: "브라우저 상자로" }).click();
+  const view = await shown;
+  await view.waitForLoadState();
+  expect(view.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
+  await expect.poll(() => sh(`docker exec ${web}-agent cat /tmp/req`, true), { timeout: 90_000 }).toContain("GET / HTTP");
+  await view.close();
+
+  await row.getByRole("button", { name: "빼기" }).click();
+  await expect(ports.getByRole("row", { name: /localhost:18080/ })).toHaveCount(0);
+  await expect.poll(async () => (await request.get(`http://127.0.0.1:${local}/`, { timeout: 3000 }).catch(() => null)) === null).toBe(true);
+  sh(`docker compose -p ${web} down --volumes --remove-orphans`, true);
 });
 
 test("a Pi box is built with the agent in it", async ({ page }) => {

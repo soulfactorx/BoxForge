@@ -1,0 +1,332 @@
+package app
+
+// A box's ports, open on this PC while BoxForge runs. Docker fixes a
+// container's published ports when it is made, so adding one would mean
+// making the box again; and on "AI services only" the box's network can't
+// publish any. Instead BoxForge listens on this PC and carries each
+// connection into the box through the engine (as Kubernetes ports are),
+// to the port on the box's own localhost: a port is opened or closed at
+// once, on any of the box's networks, and a program that listens only on
+// localhost (OpenClaw's gateway does) is reached all the same.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// AgentPort is one of a box's ports and where it is open on this PC
+// (0 while it isn't).
+type AgentPort struct {
+	Port  int `json:"port"`
+	Local int `json:"local"`
+}
+
+type boxPort struct {
+	local int
+	ln    net.Listener
+	stop  context.CancelFunc
+}
+
+var boxPorts = struct {
+	sync.Mutex
+	all map[string]*boxPort // by box name and port: "name:port"
+}{all: map[string]*boxPort{}}
+
+// boxRelay carries one connection to a port on the box's localhost: with
+// node where the box has it (every box BoxForge builds), else with nc as
+// the Kubernetes relay does.
+const boxRelay = `if command -v node >/dev/null 2>&1; then
+exec node -e 'const s=require("net").connect(+process.argv[1],"127.0.0.1");process.stdin.pipe(s);s.pipe(process.stdout);s.on("error",()=>process.exit(1));s.on("close",()=>process.exit(0))' "$1"
+fi
+set -- 127.0.0.1 "$1"
+` + forwardRelay
+
+// portHolderName is the container a box's ports are in: the service's
+// when it has one (a gateway's page), else the box's own. The browser box
+// shares that container's network, so its port is there too.
+func portHolderName(s AgentSpec) string { return agentProject(s.Name) + "-" + portHolder(s) }
+
+// browserPort is the browser box's own page, in the holder's network.
+const browserPort = 5800
+
+// AgentPortOpen opens one of a box's ports on this PC: the same number
+// when it is free, else the next free one. It returns where.
+func (a *App) AgentPortOpen(name string, port int) (int, error) {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return 0, err
+	}
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("%d is not a port", port)
+	}
+	key := fmt.Sprintf("%s:%d", name, port)
+	boxPorts.Lock()
+	if p := boxPorts.all[key]; p != nil {
+		boxPorts.Unlock()
+		return p.local, nil
+	}
+	boxPorts.Unlock()
+	var ln net.Listener
+	for try := port; try < port+20 && try <= 65535; try++ {
+		if ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(try))); err == nil {
+			break
+		}
+	}
+	if ln == nil {
+		return 0, fmt.Errorf("ports %d to %d on this PC are all in use by other programs", port, min(port+19, 65535))
+	}
+	run, stop := context.WithCancel(context.Background())
+	p := &boxPort{local: ln.Addr().(*net.TCPAddr).Port, ln: ln, stop: stop}
+	boxPorts.Lock()
+	if old := boxPorts.all[key]; old != nil { // opened meanwhile
+		boxPorts.Unlock()
+		stop()
+		ln.Close()
+		return old.local, nil
+	}
+	boxPorts.all[key] = p
+	boxPorts.Unlock()
+	rt := a.eng()
+	holder := portHolderName(s)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go carryIn(run, rt, holder, conn, []string{"sh", "-c", boxRelay, "sh", strconv.Itoa(port)})
+		}
+	}()
+	return p.local, nil
+}
+
+// AgentPortClose closes one of a box's ports on this PC.
+func (a *App) AgentPortClose(name string, port int) {
+	key := fmt.Sprintf("%s:%d", name, port)
+	boxPorts.Lock()
+	p := boxPorts.all[key]
+	delete(boxPorts.all, key)
+	boxPorts.Unlock()
+	if p != nil {
+		p.stop()
+		p.ln.Close()
+	}
+}
+
+// closeBoxPorts closes all of a box's ports (it is being taken away).
+func closeBoxPorts(name string) {
+	boxPorts.Lock()
+	var gone []*boxPort
+	for k, p := range boxPorts.all {
+		if strings.HasPrefix(k, name+":") {
+			gone = append(gone, p)
+			delete(boxPorts.all, k)
+		}
+	}
+	boxPorts.Unlock()
+	for _, p := range gone {
+		p.stop()
+		p.ln.Close()
+	}
+}
+
+// AgentPorts lists a box's ports (those its settings name, and any opened
+// besides) and where each is open now.
+func (a *App) AgentPorts(name string) ([]AgentPort, error) {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[int]bool{}
+	out := []AgentPort{}
+	boxPorts.Lock()
+	for _, port := range s.Ports {
+		if !seen[port] {
+			seen[port] = true
+			ap := AgentPort{Port: port}
+			if p := boxPorts.all[fmt.Sprintf("%s:%d", name, port)]; p != nil {
+				ap.Local = p.local
+			}
+			out = append(out, ap)
+		}
+	}
+	boxPorts.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Port < out[j].Port })
+	return out, nil
+}
+
+// AgentPortsEnsure opens every port a box's settings name: done when its
+// control panel is opened and the box runs (after BoxForge started again).
+func (a *App) AgentPortsEnsure(name string) ([]AgentPort, error) {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return nil, err
+	}
+	for _, port := range s.Ports {
+		if _, err := a.AgentPortOpen(name, port); err != nil {
+			return nil, err
+		}
+	}
+	return a.AgentPorts(name)
+}
+
+// AgentPortAdd adds a port to a box's settings and opens it, the box
+// running on as it is: nothing is made again.
+func (a *App) AgentPortAdd(name string, port int) (int, error) {
+	s, dir, err := readAgent(name)
+	if err != nil {
+		return 0, err
+	}
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("%d is not a port", port)
+	}
+	have := false
+	for _, p := range s.Ports {
+		have = have || p == port
+	}
+	if !have {
+		s.Ports = append(s.Ports, port)
+		if err := writeAgentSpec(dir, s); err != nil {
+			return 0, err
+		}
+	}
+	return a.AgentPortOpen(name, port)
+}
+
+// AgentPortRemove takes a port out of a box's settings and closes it.
+func (a *App) AgentPortRemove(name string, port int) error {
+	s, dir, err := readAgent(name)
+	if err != nil {
+		return err
+	}
+	var kept []int
+	for _, p := range s.Ports {
+		if p != port {
+			kept = append(kept, p)
+		}
+	}
+	s.Ports = kept
+	a.AgentPortClose(name, port)
+	return writeAgentSpec(dir, s)
+}
+
+var webURL = regexp.MustCompile(`^https?://[^\s"'\\<>]+$`)
+
+// AgentBrowserOpen shows an address in the box's browser: written as the
+// start page in its profile, and the browser started again (the image
+// starts it again by itself when it ends). Its page then opens on this PC.
+// It returns where that page is open.
+func (a *App) AgentBrowserOpen(name, url string) (int, error) {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return 0, err
+	}
+	if !s.Browser {
+		return 0, fmt.Errorf("the box has no browser box: turn it on in the box's settings")
+	}
+	if url != "" {
+		if !webURL.MatchString(url) {
+			return 0, fmt.Errorf("%q is not a web address", url)
+		}
+		script := `p=/config/profile
+[ -d "$p" ] || exit 3
+cat > "$p/user.js" <<EOF
+user_pref("browser.startup.page", 1);
+user_pref("browser.startup.homepage", "$1");
+user_pref("browser.sessionstore.resume_from_crash", false);
+EOF
+for d in /proc/[0-9]*; do
+  c=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+  case "$c" in *"firefox --profile $p"*setDefaultBrowser*) kill "${d#/proc/}";; esac
+done
+true`
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_, errOut, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-browser", []string{"sh", "-c", script, "boxforge", url}, nil)
+		if err != nil {
+			return 0, err
+		}
+		if code == 3 {
+			return 0, fmt.Errorf("the browser box is still starting: try again in a few seconds")
+		}
+		if code != 0 {
+			return 0, fmt.Errorf("the browser box couldn't be told the address: %s", strings.TrimSpace(errOut))
+		}
+	}
+	return a.AgentPortOpen(name, browserPort)
+}
+
+// AgentWebLink asks an agent with a web page of its own for the address to
+// open it at, signed in: OpenClaw's one-time link (openclaw dashboard
+// --json). The address is as the box sees it (its localhost).
+func (a *App) AgentWebLink(name string) (string, error) {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return "", err
+	}
+	has := false
+	for _, id := range s.Agents {
+		has = has || id == "openclaw"
+	}
+	if !has {
+		return "", fmt.Errorf("the box has no agent with a sign-in link")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := []string{"sh", agentRunPath, "openclaw", "dashboard", "--json"}
+	if !a.hasRun(ctx, portHolderName(s)) {
+		cmd = []string{"sh", "-c", agentWrap, "boxforge", "openclaw", "dashboard", "--json"}
+	}
+	out, errOut, _, err := a.eng().Containers().Output(ctx, portHolderName(s), cmd, nil)
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		OK         *bool  `json:"ok"`
+		BrowserURL string `json:"browserUrl"`
+		URL        string `json:"url"`
+		Reason     string `json:"reason"`
+		Error      struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	text := strings.TrimSpace(out)
+	if i := strings.Index(text, "{"); i >= 0 {
+		text = text[i:]
+	}
+	if json.Unmarshal([]byte(text), &r) != nil {
+		return "", fmt.Errorf("OpenClaw didn't give an address: %s", strings.TrimSpace(firstLine(errOut+"\n"+out)))
+	}
+	if r.OK != nil && !*r.OK {
+		why := r.Error.Message
+		if why == "" {
+			why = r.Reason
+		}
+		return "", fmt.Errorf("OpenClaw's gateway isn't ready (%s): turn on \"keep running\" for its gateway, or run openclaw gateway in a terminal", why)
+	}
+	link := r.BrowserURL
+	if link == "" {
+		link = r.URL
+	}
+	if link == "" {
+		return "", fmt.Errorf("OpenClaw didn't give an address")
+	}
+	return link, nil
+}
+
+func firstLine(s string) string {
+	for _, l := range strings.Split(strings.TrimSpace(s), "\n") {
+		if strings.TrimSpace(l) != "" {
+			return l
+		}
+	}
+	return ""
+}
