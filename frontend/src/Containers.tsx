@@ -287,10 +287,18 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
   const act = (c: Container, action: string) =>
     during([c.id], action, () => run(`docker ${action} ${c.name}`, () => call("ContainerAction", c.id, action)));
 
+  // A Compose project's containers, by Compose itself: in the order its
+  // depends_on gives (one started once those before it are ready, as the
+  // file asks; stopped the other way round), as the Compose screen does.
   const actAll = (g: Item, action: "start" | "stop") => {
     const todo = g.members.filter((c) => (action === "start" ? !isUp(c) : isUp(c)));
+    const labels = g.members[0]?.labels ?? {};
+    const files = (labels["com.docker.compose.project.config_files"] ?? "").split(",").filter(Boolean);
+    const workDir = labels["com.docker.compose.project.working_dir"] ?? "";
     return during(todo.map((c) => c.id), action, () =>
-      run(`docker compose -p ${g.project} ${action}`, () => Promise.all(todo.map((c) => call("ContainerAction", c.id, action)))),
+      run(`docker compose -p ${g.project} ${action}`, () =>
+        call("ComposeAction", { key: `containers-${g.project}`, project: g.project, workDir, files, action }),
+      ),
     );
   };
 
@@ -493,6 +501,11 @@ export default function Containers({ containers, sizes, images, run, onOpen, onN
       </header>
 
       <BulkBar count={pick.size} onClear={pick.clear}>
+        {picked.some((c) => c.project) && (
+          <span className="muted bulk-note" data-testid="bulk-compose-note">
+            Compose 프로젝트의 컨테이너도 순서 없이 한꺼번에 시작 · 중지합니다. 먼저 켤 서비스(depends_on)를 지키려면 프로젝트 줄의 "모두 시작"이나 Compose 화면을 쓰세요.
+          </span>
+        )}
         <button type="button" disabled={!picked.some((c) => !isUp(c))} onClick={() => bulk("start")}>
           시작
         </button>

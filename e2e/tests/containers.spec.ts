@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ALPINE, closeDetail, go, open, sh, sweep } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
@@ -151,4 +154,44 @@ test("several containers and volumes are picked and handled at once", async ({ p
   await page.getByTestId("bulk-bar").getByRole("button", { name: "삭제" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "2개 삭제" }).click();
   await expect.poll(() => sh(`docker volume ls -q --filter name=bfe2e-many`)).toBe("");
+});
+
+test("a Compose project's start-all on the containers screen keeps its order, as Compose does", async ({ page }) => {
+  // db is ready only after a few seconds; app waits for it (depends_on: service_healthy).
+  const where = mkdtempSync(join(tmpdir(), "bfe2e-order-"));
+  writeFileSync(
+    join(where, "compose.yaml"),
+    `services:
+  app:
+    image: ${ALPINE}
+    command: sleep 1d
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: ${ALPINE}
+    command: sh -c "rm -f /ok; sleep 4; touch /ok; sleep 1d"
+    healthcheck: { test: ["CMD", "test", "-f", "/ok"], interval: 1s, retries: 30 }
+`,
+  );
+  const compose = `docker compose -p bfe2e-order -f ${join(where, "compose.yaml")}`;
+  sh(`${compose} up -d`);
+  sh(`${compose} stop`);
+  try {
+    await open(page);
+    await go(page, "containers");
+    const group = page.getByTestId("group-bfe2e-order");
+    await group.getByRole("button", { name: "모두 시작" }).click();
+    await expect(page.getByTestId("cli")).toContainText("docker compose -p bfe2e-order start");
+    await expect(group).toContainText("2개 중 2개 실행", { timeout: 60_000 });
+    const started = (n: string) => Date.parse(sh(`docker inspect -f '{{.State.StartedAt}}' bfe2e-order-${n}-1`));
+    // app started once db was ready, not beside it.
+    expect(started("app") - started("db")).toBeGreaterThan(3500);
+
+    // Picked one by one, they go at once: said where they are picked.
+    await group.getByRole("checkbox", { name: "bfe2e-order 프로젝트 모두 고르기" }).check();
+    await expect(page.getByTestId("bulk-compose-note")).toContainText("순서 없이 한꺼번에");
+  } finally {
+    sh(`${compose} down`, true);
+  }
 });

@@ -1686,5 +1686,6 @@
  "크게 보기": "Bigger",
  "터미널 높이 조절": "Terminal height",
  "끌어서 터미널 높이를 바꿉니다": "Drag to change the terminal's height",
- "같은 에이전트를 하나 더 열면 실패할 수 있습니다(OpenClaw의 \"The CLI command failed\" 등). 쓰지 않는 것이면 끄세요. 여기 탭에 열린 터미널은 그대로 둡니다.": "Opening the same agent again beside one may fail (OpenClaw's \"The CLI command failed\" and so on). Stop them if they aren't in use. The terminals open in the tabs here are left as they are."
+ "같은 에이전트를 하나 더 열면 실패할 수 있습니다(OpenClaw의 \"The CLI command failed\" 등). 쓰지 않는 것이면 끄세요. 여기 탭에 열린 터미널은 그대로 둡니다.": "Opening the same agent again beside one may fail (OpenClaw's \"The CLI command failed\" and so on). Stop them if they aren't in use. The terminals open in the tabs here are left as they are.",
+ "Compose 프로젝트의 컨테이너도 순서 없이 한꺼번에 시작 · 중지합니다. 먼저 켤 서비스(depends_on)를 지키려면 프로젝트 줄의 \"모두 시작\"이나 Compose 화면을 쓰세요.": "Containers of a Compose project are also started and stopped all at once, in no order. To keep the order of its services (depends_on), use \"Start all\" on the project's row or the Compose screen."
 }
