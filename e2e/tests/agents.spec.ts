@@ -75,6 +75,22 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await page.keyboard.type("wget -q -T 5 -O- http://blocked.bfe2e.test; echo key-is-$BFE2E_KEY\n");
   await expect(rows).toContainText("key-is-s3cret-value", { timeout: 30_000 });
 
+  // The right-click menu: paste what is on the clipboard, select all, copy.
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.evaluate(() => navigator.clipboard.writeText("echo pasted-$((40+2))"));
+  await pane.locator(".term-box").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: /복사/ })).toBeDisabled();
+  await page.getByRole("menuitem", { name: /붙여넣기/ }).click();
+  await expect(rows).toContainText("echo pasted-$((40+2))");
+  await pane.locator(".xterm").click();
+  await page.keyboard.press("Enter");
+  await expect(rows).toContainText("pasted-42");
+  await pane.locator(".term-box").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "모두 선택" }).click();
+  await pane.locator(".term-box").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /복사/ }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("pasted-42");
+
   // Another page of the box and back: the same terminal, what runs in it still running.
   await page.keyboard.type("sleep 777\n");
   await expect.poll(() => inBox("ps -o args")).toContain("sleep 777");

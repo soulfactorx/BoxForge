@@ -37,7 +37,22 @@ export function levelOf(line: string): Level {
   return "";
 }
 
+/**
+ * Shows a part's command in the status bar once for a container: not again
+ * when the part reloads because the container started or stopped, which
+ * would put it over the start or stop command the user just gave.
+ */
+function useCliOnce(id: string, command: string, showCli: (cmd: string) => void) {
+  const shown = useRef("");
+  return () => {
+    if (shown.current === id) return;
+    shown.current = id;
+    showCli(command);
+  };
+}
+
 function Logs({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) {
+  const cli = useCliOnce(c.id, `docker logs -f --tail 1000 ${c.name}`, showCli);
   const [lines, setLines] = useState<string[]>([]);
   const [ended, setEnded] = useState("");
   const [query, setQuery] = useState("");
@@ -60,7 +75,7 @@ function Logs({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) 
       if (chunk.end) setEnded(chunk.error || "로그가 끝났습니다. 컨테이너가 멈췄습니다.");
     });
     call("StartLogs", c.id).catch((e) => setEnded(e.message));
-    showCli(`docker logs -f --tail 1000 ${c.name}`);
+    cli();
     return () => {
       off();
       call("StopLogs", c.id).catch(() => {});
@@ -343,10 +358,11 @@ interface Props {
 
 /** What runs inside the container, read again every few seconds. */
 function Processes({ c, showCli }: { c: Container; showCli: (cmd: string) => void }) {
+  const cli = useCliOnce(c.id, `docker top ${c.name} -eo pid,user,pcpu,pmem,etime,args`, showCli);
   const [top, setTop] = useState<{ titles: string[]; processes: string[][] } | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    showCli(`docker top ${c.name} -eo pid,user,pcpu,pmem,etime,args`);
+    cli();
     if (c.state !== "running") return;
     const read = () => call<{ titles: string[]; processes: string[][] }>("ContainerTop", c.id).then((t) => (setTop(t), setError("")), (e) => setError(e.message));
     read();

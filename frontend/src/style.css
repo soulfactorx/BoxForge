@@ -1336,3 +1336,8 @@ tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 }
 .agent-term .note-box { display: grid; gap: 6px; margin-bottom: 10px; }
 .bulk-bar .bulk-note { flex-basis: 100%; order: 99; font-size: 12px; }
+.term-menu { z-index: 60; display: flex; flex-direction: column; }
+.term-menu button { display: flex; justify-content: space-between; gap: 16px; }
+.term-menu button:disabled { opacity: 0.45; }
+.term-paste { display: grid; gap: 6px; margin-top: 8px; }
+.term-paste textarea { width: 100%; font-family: ui-monospace, Consolas, Menlo, monospace; }

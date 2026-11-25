@@ -188,6 +188,20 @@ test("a Compose project's start-all on the containers screen keeps its order, as
     // app started once db was ready, not beside it.
     expect(started("app") - started("db")).toBeGreaterThan(3500);
 
+    // The project's own screen: the command given stays in the status bar
+    // once the containers have stopped (nothing reloading takes its place).
+    await go(page, "compose");
+    await page.locator(".project", { hasText: "bfe2e-order" }).getByRole("button", { name: "자세히" }).first().click();
+    await page.getByRole("button", { name: "모두 중지 (컨테이너는 남김)" }).click();
+    await expect(page.getByText("2개 중 0개 실행").first()).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(2000);
+    await expect(page.getByTestId("cli")).toContainText("docker compose -p bfe2e-order stop");
+    await page.getByRole("button", { name: /^올리기/ }).click();
+    await expect(page.getByText("2개 중 2개 실행").first()).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(2000);
+    await expect(page.getByTestId("cli")).toContainText("docker compose -p bfe2e-order up");
+    await go(page, "containers");
+
     // Picked one by one, they go at once: said where they are picked.
     await group.getByRole("checkbox", { name: "bfe2e-order 프로젝트 모두 고르기" }).check();
     await expect(page.getByTestId("bulk-compose-note")).toContainText("순서 없이 한꺼번에");
