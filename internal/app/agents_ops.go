@@ -143,6 +143,18 @@ func (a *App) AgentSave(s AgentSpec, fresh bool) (AgentBox, error) {
 	return AgentBox{Spec: s, Project: agentProject(s.Name), File: filepath.Join(dir, "compose.yaml"), Dir: dir, Keys: keyNames(dir)}, nil
 }
 
+// AgentRefresh writes a box's files again from its saved settings, as
+// this version of BoxForge writes them: done before it is brought up, so
+// a box made by an older one gets what is new.
+func (a *App) AgentRefresh(name string) error {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return err
+	}
+	_, err = a.AgentSave(s, false)
+	return err
+}
+
 // giveKeys lets the box's user read the keys file: when BoxForge runs as
 // root on Linux, the box runs as 1000, not as the file's owner.
 func giveKeys(file string) {
@@ -218,17 +230,19 @@ func (a *App) AgentSetKey(name, key, value string) error {
 	return nil
 }
 
-// agentCommand is what runs in the box for one of its agents, or its shell.
-func agentCommand(s AgentSpec, which string) ([]string, error) {
-	inner := ""
+// agentCommand is what runs in the box for one of its agents, or its shell:
+// plain words through agentRun where the box has it (made by 0.37.1 or
+// later), else agentWrap on the command line.
+func agentCommand(s AgentSpec, which string, run bool) ([]string, error) {
+	var words []string
 	switch which {
 	case "shell":
-		inner = "command -v bash >/dev/null && exec bash || exec sh"
+		words = []string{"shell"}
 	case "main":
-		inner = s.Command
+		words = strings.Fields(s.Command)
 		if s.Image == "" && len(s.Agents) > 0 {
 			k, _ := agentKind(s.Agents[0])
-			inner = k.Command
+			words = strings.Fields(k.Command)
 		}
 	default:
 		ok := false
@@ -241,9 +255,25 @@ func agentCommand(s AgentSpec, which string) ([]string, error) {
 		if !ok || !known {
 			return nil, fmt.Errorf("the box has no agent %q", which)
 		}
-		inner = k.Command
+		words = strings.Fields(k.Command)
+	}
+	if len(words) == 0 {
+		return nil, fmt.Errorf("the box has no command to start")
+	}
+	if run {
+		return append([]string{"sh", agentRunPath}, words...), nil
+	}
+	inner := strings.Join(words, " ")
+	if which == "shell" {
+		inner = "command -v bash >/dev/null && exec bash || exec sh"
 	}
 	return []string{"sh", "-c", agentWrap, "boxforge", "sh", "-c", inner}, nil
+}
+
+// hasRun reports whether a box has agentRun in it.
+func (a *App) hasRun(ctx context.Context, box string) bool {
+	_, _, code, err := a.eng().Containers().Output(ctx, box, []string{"test", "-r", agentRunPath}, nil)
+	return err == nil && code == 0
 }
 
 // AgentTermOpen opens, in the screen's terminal, one of a box's agents
@@ -253,12 +283,12 @@ func (a *App) AgentTermOpen(name, which string, cols, rows int) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	cmd, err := agentCommand(s, which)
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	cmd, err := agentCommand(s, which, a.hasRun(ctx, agentProject(name)+"-agent"))
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
-	defer cancel()
 	sess, err := a.eng().Containers().Exec(ctx, agentProject(name)+"-agent", cmd, uint(max(cols, 1)), uint(max(rows, 1)))
 	if err != nil {
 		return "", err
@@ -272,7 +302,12 @@ func (a *App) AgentOpenTerminal(name, which string) error {
 	if err != nil {
 		return err
 	}
-	cmd, err := agentCommand(s, which)
+	ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+	defer cancel()
+	if !a.hasRun(ctx, agentProject(name)+"-agent") {
+		return fmt.Errorf("이 상자는 이전 버전의 BoxForge가 만들어서 아직 외부 터미널로 열 수 없습니다. 위의 ▶(설정대로 다시 올리기)를 한 번 누른 뒤 다시 해 주세요")
+	}
+	cmd, err := agentCommand(s, which, true)
 	if err != nil {
 		return err
 	}

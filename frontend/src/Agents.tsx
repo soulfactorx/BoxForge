@@ -120,6 +120,8 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
       build: "build --pull --no-cache",
       purge: "down --volumes --rmi local --remove-orphans",
     };
+    // Brought up as this BoxForge writes a box: one made by an older one gets what is new.
+    if (action === "upbuild" && !(await run(`# ${b.dir}: compose.yaml · run.sh 다시 쓰기`, () => call("AgentRefresh", b.spec.name)))) return false;
     setBusy(b.spec.name);
     setOutput({ title, lines: [] });
     const off = on("compose", (l: { key: string; line: string }) => {

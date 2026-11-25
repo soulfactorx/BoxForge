@@ -1,6 +1,7 @@
 package app
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -54,5 +55,39 @@ noise
 	c := parseConnections(log)
 	if len(c) != 2 || c[0].Host != "evil.example" || c[0].OK || c[1].Count != 2 || c[1].Last != 3 {
 		t.Fatalf("%+v", c)
+	}
+}
+
+// A terminal outside the app gets its command line read again by cmd.exe
+// and by WSL's shell: only plain words survive both.
+func TestAgentCommandPlainWords(t *testing.T) {
+	plain := regexp.MustCompile(`^[A-Za-z0-9_./:=-]+$`)
+	for _, k := range agentKinds {
+		s := AgentSpec{Name: "x", Agents: []string{k.ID}}
+		for _, which := range []string{k.ID, "main", "shell"} {
+			cmd, err := agentCommand(s, which, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd[0] != "sh" || cmd[1] != agentRunPath {
+				t.Fatalf("%s/%s: %q", k.ID, which, cmd)
+			}
+			for _, w := range cmd {
+				if !plain.MatchString(w) {
+					t.Fatalf("%s/%s: %q is not a plain word", k.ID, which, w)
+				}
+			}
+		}
+	}
+	own := AgentSpec{Name: "x", Image: "me/agent", Command: "my-agent --fast"}
+	if cmd, _ := agentCommand(own, "main", true); strings.Join(cmd, " ") != "sh "+agentRunPath+" my-agent --fast" {
+		t.Fatalf("%q", cmd)
+	}
+	if _, err := agentCommand(AgentSpec{Agents: []string{"pi"}}, "claude", true); err == nil {
+		t.Fatal("an agent the box doesn't have")
+	}
+	f := agentFiles(AgentSpec{Name: "x", Agents: []string{"pi"}, Workspace: "/w", Network: "none"}, func(p string) string { return p })
+	if !strings.Contains(f["compose.yaml"], "./run.sh:/opt/boxforge/run:ro") || !strings.Contains(f["run.sh"], `exec "$@"`) {
+		t.Fatal("run.sh isn't put in the box")
 	}
 }

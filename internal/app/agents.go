@@ -266,8 +266,25 @@ func agentIDs() (int, int) {
 
 func y(s string) string { b, _ := json.Marshal(s); return string(b) }
 
-// The command that runs in the box before what is asked: the keys are read
-// from their file, and the work folder is where it starts.
+// agentRun is put in the box as /opt/boxforge/run: what is asked of the
+// box starts through it, its keys read from their file and the work folder
+// where it starts. A terminal outside the app is asked for with plain words
+// only ("sh /opt/boxforge/run pi"): on Windows its command line is read
+// again by cmd.exe and by the WSL distribution's shell, which a script
+// given on the command line would not survive.
+const agentRun = `#!/bin/sh
+# BoxForge: starts what is asked in the box, with the box's keys.
+if (: < /run/secrets/agent_env) 2>/dev/null; then set -a; . /run/secrets/agent_env; set +a; fi
+cd /workspace 2>/dev/null
+if [ "$1" = shell ]; then command -v bash >/dev/null && exec bash; exec sh; fi
+exec "$@"
+`
+
+// agentRunPath is where agentRun is in the box.
+const agentRunPath = "/opt/boxforge/run"
+
+// agentWrap does what agentRun does, given on the command line: for the
+// box's own command (in compose.yaml), and boxes made before agentRun.
 const agentWrap = `if (: < /run/secrets/agent_env) 2>/dev/null; then set -a; . /run/secrets/agent_env; set +a; fi; cd /workspace 2>/dev/null; exec "$@"`
 
 // agentFiles writes out a box: its files by name, relative to its folder.
@@ -312,6 +329,7 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 		}
 		w("    labels:\n      io.boxforge.agent: %s\n      io.boxforge.agent.part: %s\n", y(s.Name), service)
 		w("    volumes:\n      - %s\n", y(host(s.Workspace)+":/workspace"))
+		w("      - ./run.sh:%s:ro\n", agentRunPath)
 		if image == "" {
 			w("      - home:/home/agent\n")
 		}
@@ -388,6 +406,7 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 	}
 	w("\nsecrets:\n  agent_env:\n    file: ./secrets.env\n")
 	files["compose.yaml"] = b.String()
+	files["run.sh"] = agentRun
 
 	if image == "" {
 		var d strings.Builder

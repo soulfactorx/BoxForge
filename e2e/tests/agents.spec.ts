@@ -56,11 +56,16 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await expect(page.getByTestId("agent-keys")).toContainText("BFE2E_KEY");
   await expect(page.getByTestId("agent-keys")).not.toContainText("s3cret-value");
   expect(sh(`docker inspect ${box}-agent`)).not.toContain("s3cret-value");
+  // What a terminal outside the app runs: plain words, the keys read in the box.
+  expect(sh(`docker exec ${box}-agent sh /opt/boxforge/run printenv BFE2E_KEY`)).toBe("s3cret-value");
+  expect(sh(`docker exec ${box}-agent sh /opt/boxforge/run pwd`)).toBe("/workspace");
 
   // The terminal: the key is there, and an address not on the list is stopped.
   await page.getByRole("tab", { name: "터미널" }).click();
   const term = page.locator(".xterm");
   await expect(term).toBeVisible();
+  // Typed once the shell is there: keys pressed before the session opens are not kept.
+  await expect(page.locator(".xterm-rows")).toContainText("/workspace", { timeout: 30_000 });
   await term.click();
   await page.keyboard.type("wget -q -T 5 -O- http://blocked.bfe2e.test; echo key-is-$BFE2E_KEY\n");
   await expect(page.locator(".xterm-rows")).toContainText("key-is-s3cret-value", { timeout: 30_000 });
