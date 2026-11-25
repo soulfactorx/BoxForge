@@ -846,14 +846,6 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
   };
   const cliOf = (which: string) => `docker exec -it ${box.project}-agent sh /opt/boxforge/run ${which === "shell" ? "shell" : which === "main" ? (box.spec.command ?? "") : (mine.find((k) => k.id === which)?.command ?? "")}`;
 
-  // Programs from terminals closed outside the app (a window shut, an older
-  // BoxForge): the same agent opened again beside one may fail.
-  const [left, setLeft] = useState<string[]>([]);
-  const look = () => call<string[]>("AgentLeftovers", box.spec.name).then((l) => setLeft(l ?? []), () => setLeft([]));
-  const stopLeft = async () => {
-    if (await run(`docker exec ${box.project}-agent kill <이전 터미널의 프로그램>`, () => call("AgentStopLeftovers", box.spec.name))) look();
-  };
-
   const opener = (which: string) => (
     <>
       {box.spec.image && which === "main" && box.spec.command}
@@ -879,18 +871,6 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
           </button>
         )}
       </div>
-      {left.length > 0 && (
-        <div className="note-box" role="alert" data-testid="agent-leftovers">
-          <strong>{`닫은 터미널에서 시작한 프로그램이 아직 상자 안에서 돌고 있습니다 (${left.length}개).`}</strong>
-          <span className="sub">같은 에이전트를 하나 더 열면 실패할 수 있습니다(OpenClaw의 "The CLI command failed" 등). 쓰지 않는 것이면 끄세요. 여기 탭에 열린 터미널은 그대로 둡니다.</span>
-          <code className="leftover-list">{left.join("\n")}</code>
-          <span>
-            <button type="button" className="primary" onClick={stopLeft}>
-              모두 끄기
-            </button>
-          </span>
-        </div>
-      )}
       {terms.length > 0 && (
         <div className="term-tabs" data-testid="term-tabs">
           <div className="term-tab-list" role="tablist" aria-label="열린 터미널">
@@ -938,11 +918,7 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
             run={run}
             command={cliOf(t.which)}
             onEnd={() => setTerms((all) => all.map((x) => (x.key === t.key ? { ...x, ended: true } : x)))}
-            open={async (cols, rows) => {
-              const session = await call<string>("AgentTermOpen", box.spec.name, t.which, cols, rows);
-              look();
-              return session;
-            }}
+            open={(cols, rows) => call<string>("AgentTermOpen", box.spec.name, t.which, cols, rows)}
           />
         </div>
       ))}

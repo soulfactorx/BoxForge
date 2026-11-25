@@ -112,14 +112,7 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await expect(tabs.getByRole("tab")).toHaveText(["sh"]);
   await expect.poll(() => inBox("ps -o args"), { timeout: 15_000 }).not.toContain("sleep 777");
 
-  // Left by a terminal outside the app: said, and stopped on asking.
-  sh(`docker exec -d ${box}-agent sh /opt/boxforge/run sleep 888`);
   await page.locator(".agent-term").getByRole("button", { name: "+ 셸" }).click();
-  const left = page.getByTestId("agent-leftovers");
-  await expect(left).toContainText("sleep 888");
-  await left.getByRole("button", { name: "모두 끄기" }).click();
-  await expect(left).toHaveCount(0);
-  await expect.poll(() => inBox("ps -o args")).not.toContain("sleep 888");
   await expect(tabs.getByRole("tab")).toHaveText(["sh", "셸"]);
 
   await tabs.getByRole("button", { name: "모두 닫기", exact: true }).click();
