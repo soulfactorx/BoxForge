@@ -202,6 +202,65 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       pending += data;
       flush();
     });
+    // A finger drawn up or down the terminal scrolls what it has shown, as a
+    // page does (xterm's own scrolling is made for a mouse wheel), going on a
+    // little after a flick. A full-screen program (less, vim) has nothing
+    // above to scroll back to: it gets the arrow keys instead.
+    const screen = box.current;
+    let lastY = 0;
+    let carry = 0;
+    let speed = 0; // px per ms, last move
+    let lastT = 0;
+    let glide = 0;
+    const lineHeight = () => (screen.querySelector(".xterm-rows")?.clientHeight ?? 0) / term.rows || 17;
+    const scrollBy = (px: number) => {
+      carry += px;
+      const lines = Math.trunc(carry / lineHeight());
+      if (!lines) return;
+      carry -= lines * lineHeight();
+      if (term.buffer.active.type === "alternate") {
+        const seq = keySeq(lines > 0 ? "Down" : "Up", { ctrl: false, alt: false, shift: false }, !!term.modes.applicationCursorKeysMode);
+        send.current(seq.repeat(Math.min(Math.abs(lines), 5)));
+      } else term.scrollLines(lines);
+    };
+    const touchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      cancelAnimationFrame(glide);
+      lastY = e.touches[0].clientY;
+      lastT = e.timeStamp;
+      carry = 0;
+      speed = 0;
+    };
+    const touchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const y = e.touches[0].clientY;
+      const dy = lastY - y; // finger up: later lines
+      const dt = Math.max(1, e.timeStamp - lastT);
+      lastY = y;
+      lastT = e.timeStamp;
+      const buf = term.buffer.active;
+      // At the very top of what can be scrolled, a pull downward is the page's.
+      const canScroll = buf.type === "alternate" || buf.baseY > 0;
+      if (!canScroll || (dy < 0 && buf.type !== "alternate" && buf.viewportY === 0)) return;
+      e.preventDefault();
+      speed = dy / dt;
+      scrollBy(dy);
+    };
+    const touchEnd = () => {
+      if (Math.abs(speed) < 0.3 || term.buffer.active.type === "alternate") return;
+      let v = speed * 16; // px per frame
+      const step = () => {
+        v *= 0.92;
+        if (Math.abs(v) < 0.5) return;
+        scrollBy(v);
+        glide = requestAnimationFrame(step);
+      };
+      glide = requestAnimationFrame(step);
+    };
+    screen.addEventListener("touchstart", touchStart, { passive: true });
+    screen.addEventListener("touchmove", touchMove, { passive: false });
+    screen.addEventListener("touchend", touchEnd, { passive: true });
+
     const resized = term.onResize(({ cols, rows }) => session && call("TermResize", session, cols, rows).catch(() => {}));
     const watch = new ResizeObserver(() => fit.fit());
     watch.observe(box.current);
@@ -212,6 +271,10 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       typed.dispose();
       resized.dispose();
       watch.disconnect();
+      cancelAnimationFrame(glide);
+      screen.removeEventListener("touchstart", touchStart);
+      screen.removeEventListener("touchmove", touchMove);
+      screen.removeEventListener("touchend", touchEnd);
       if (session) call("TermClose", session).catch(() => {});
       term.dispose();
     };

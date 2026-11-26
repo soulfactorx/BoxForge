@@ -161,7 +161,31 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await mobile.goto(page.url());
   await go(mobile, "agents");
   await mobile.getByTestId("agent-bfe2e-box").getByRole("button", { name: "제어판 열기" }).click();
-  await expect(mobile.locator('[data-testid="term-pane"]:not([hidden])').getByTestId("term-keys")).toBeVisible();
+  const mpane = mobile.locator('[data-testid="term-pane"]:not([hidden])');
+  await expect(mpane.getByTestId("term-keys")).toBeVisible();
+  // A finger drawn down the terminal scrolls back through what it showed;
+  // its scrollbar can be dragged with a finger too.
+  const mrows = mpane.locator(".xterm-rows");
+  await expect(mrows).toContainText("/workspace", { timeout: 30_000 });
+  await mpane.locator(".xterm").tap();
+  await mobile.keyboard.type("seq 1 300\n");
+  await expect(mrows).toContainText("300");
+  const last = () => mrows.innerText().then((t) => Math.max(0, ...(t.match(/^\d+$/gm) ?? ["0"]).map(Number)));
+  expect(await last()).toBe(300);
+  const cdp = await phone.newCDPSession(mobile);
+  const touch = async (x: number, from: number, to: number) => {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: from }] });
+    for (let i = 1; i <= 10; i++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: from + ((to - from) * i) / 10 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  };
+  const area = (await mpane.locator(".xterm-screen").boundingBox())!;
+  await touch(area.x + area.width / 2, area.y + 40, area.y + area.height - 40);
+  await expect.poll(last).toBeLessThan(290);
+  const swiped = await last();
+  const slider = mpane.locator(".xterm-scrollable-element > .scrollbar.vertical > .slider");
+  const knob = (await slider.boundingBox())!;
+  await touch(knob.x + knob.width / 2, knob.y + knob.height / 2, area.y + 5);
+  await expect.poll(last).toBeLessThan(swiped - 50);
   await phone.close();
 
   await tabs.getByRole("button", { name: "모두 닫기", exact: true }).click();
