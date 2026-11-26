@@ -363,7 +363,10 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
   const standin = process.env.E2E_OPENCLAW_IMAGE;
   test.skip(!!process.env.E2E_NO_AGENT_BUILD && !standin, "builds can't reach the internet here");
   const oc = "bfa-bfe2e-oc";
-  const procs = () => sh(`docker exec ${oc}-agent sh -c 'for p in /proc/[0-9]*; do tr "\\0" " " < $p/cmdline 2>/dev/null; echo; done'`, true);
+  const procs = () => sh(`docker exec ${oc}-agent sh -c 'for p in /proc/[0-9]*; do tr "\\0" " " < $p/cmdline 2>/dev/null; echo; done'`, true)
+      .split("\n")
+      .filter((l) => !l.includes("BoxForge:")) // the gateway's wait names the setup too
+      .join("\n");
   const panel = async () => {
     await go(page, "agents");
     await page.getByTestId("agent-bfe2e-oc").getByRole("button", { name: "제어판 열기" }).click();
