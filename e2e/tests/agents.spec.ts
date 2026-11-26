@@ -191,13 +191,14 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await mpane.getByTestId("term-keys").getByRole("button", { name: "복사", exact: true }).click();
   const view = mobile.getByTestId("term-text");
   const text = view.getByLabel("터미널에 나온 글");
-  await expect(text).toHaveValue(/^1\n2\n3\n/m);
-  await text.evaluate((a: HTMLTextAreaElement) => {
-    const from = a.value.indexOf("\n150\n") + 1;
-    a.setSelectionRange(from, a.value.indexOf("\n153\n"));
-  });
+  await expect(text).toContainText("150");
+  // A line tapped to start, another to end; the range shown, and copied.
+  await text.locator('[data-line]', { hasText: /^150$/ }).tap();
+  await text.locator('[data-line]', { hasText: /^152$/ }).tap();
+  await expect(view).toContainText("3줄을 골랐습니다");
+  await expect(text.locator(".term-line.picked")).toHaveText(["150", "151", "152"]);
   await view.getByRole("button", { name: "고른 것 복사" }).click();
-  await expect(view).toContainText("고른 것을 복사했습니다");
+  await expect(view).toContainText("3줄을 복사했습니다");
   expect(await mobile.evaluate(() => navigator.clipboard.readText())).toBe("150\n151\n152");
   await view.getByRole("button", { name: "모두 복사" }).click();
   const all = await mobile.evaluate(() => navigator.clipboard.readText());

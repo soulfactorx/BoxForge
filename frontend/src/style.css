@@ -1371,4 +1371,7 @@ tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .term-text-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .term-text-bar .spacer { flex: 1; }
 .term-text p { margin: 0; }
-.term-text textarea { flex: 1; min-height: 0; width: 100%; resize: none; font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: 13px; line-height: 1.4; background: #0f1218; color: #e6e9ef; border-radius: 8px; padding: 8px; -webkit-user-select: text; user-select: text; }
+.term-text-lines { flex: 1; min-height: 0; overflow: auto; font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: 13px; line-height: 1.5; background: #0f1218; color: #e6e9ef; border-radius: 8px; padding: 6px 0; -webkit-user-select: text; user-select: text; }
+.term-line { padding: 0 10px; white-space: pre; cursor: pointer; }
+.term-line.picked { background: rgba(80, 140, 255, 0.35); }
+.term-line.edge { box-shadow: inset 3px 0 0 #6ea2ff; }

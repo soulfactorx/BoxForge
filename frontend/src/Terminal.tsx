@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -433,39 +433,85 @@ function PasteBox({ onPaste }: { onPaste: (text: string) => void }) {
   );
 }
 
-/** The terminal's text, to select from as any text is selected, and copy. */
+/**
+ * The terminal's text, past the screen too, to pick from and copy: a line
+ * tapped marks the start, another the end (on a phone, easier than dragging
+ * a selection); a selection made by hand (a long press) is taken first.
+ */
 function TextView({ text, at, onClose }: { text: string; at: number; onClose: () => void }) {
-  const area = useRef<HTMLTextAreaElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const lines = useMemo(() => text.split("\n"), [text]);
+  const [from, setFrom] = useState<number | null>(null);
+  const [to, setTo] = useState<number | null>(null);
   const [said, setSaid] = useState("");
   useEffect(() => {
     // Opened where the terminal was looking.
-    const a = area.current;
-    if (a) a.scrollTop = at * a.scrollHeight;
+    const l = list.current;
+    if (l) l.scrollTop = at * l.scrollHeight;
   }, []);
+  const lo = from === null ? null : to === null ? from : Math.min(from, to);
+  const hi = from === null ? null : to === null ? from : Math.max(from, to);
+  const tap = (n: number) => {
+    if (from === null || to !== null) {
+      setFrom(n);
+      setTo(null);
+      setSaid("여기서 시작합니다. 끝낼 줄을 누르세요.");
+    } else {
+      setTo(n);
+      setSaid(`${Math.abs(n - from) + 1}줄을 골랐습니다.`);
+    }
+  };
   const put = async (what: string, how: string) => {
     setSaid((await copyText(what)) ? how : "복사하지 못했습니다. 길게 눌러 나오는 메뉴의 복사를 쓰세요.");
   };
-  const picked = () => {
-    const a = area.current;
-    return a ? a.value.slice(a.selectionStart, a.selectionEnd) : "";
+  const copyPicked = () => {
+    const sel = window.getSelection();
+    const byHand = sel && list.current && list.current.contains(sel.anchorNode) ? sel.toString() : "";
+    if (byHand) return put(byHand, "고른 글을 복사했습니다.");
+    if (lo === null || hi === null) return setSaid("고른 줄이 없습니다. 시작할 줄과 끝낼 줄을 차례로 누르세요.");
+    put(lines.slice(lo, hi + 1).join("\n"), `${hi - lo + 1}줄을 복사했습니다.`);
   };
   return (
     <div className="term-text" role="dialog" aria-label="터미널 글" data-testid="term-text">
       <div className="term-text-bar">
-        <span className="muted">길게 누르거나 끌어서 고르세요. 화면 밖의 지난 출력도 스크롤해서 고를 수 있습니다.</span>
+        <span className="muted">줄을 눌러 시작, 다른 줄을 눌러 끝을 정합니다(길게 눌러 글자 단위로 골라도 됩니다). 화면 밖의 지난 출력도 스크롤해 고를 수 있습니다.</span>
         <span className="spacer" />
-        <button type="button" className="primary" onPointerDown={(e) => e.preventDefault()} onClick={() => {
-          const p = picked();
-          if (p) put(p, "고른 것을 복사했습니다.");
-          else setSaid("고른 글이 없습니다.");
-        }}>
+        <button type="button" className="primary" onClick={copyPicked}>
           고른 것 복사
         </button>
-        <button type="button" onClick={() => put(text, "모두 복사했습니다.")}>모두 복사</button>
-        <button type="button" onClick={onClose}>닫기</button>
+        <button type="button" onClick={() => put(text, "모두 복사했습니다.")}>
+          모두 복사
+        </button>
+        {from !== null && (
+          <button type="button" onClick={() => (setFrom(null), setTo(null), setSaid(""))}>
+            고르기 지우기
+          </button>
+        )}
+        <button type="button" onClick={onClose}>
+          닫기
+        </button>
       </div>
-      {said && <p className="muted" role="status">{said}</p>}
-      <textarea ref={area} readOnly aria-label="터미널에 나온 글" value={text} spellCheck={false} wrap="off" />
+      {said && (
+        <p className="muted" role="status">
+          {said}
+        </p>
+      )}
+      <div ref={list} className="term-text-lines" aria-label="터미널에 나온 글" role="list">
+        {lines.map((l, n) => (
+          <div
+            key={n}
+            role="listitem"
+            className={"term-line" + (lo !== null && hi !== null && n >= lo && n <= hi ? " picked" : "") + (n === from ? " edge" : "")}
+            data-line={n + 1}
+            onClick={() => {
+              // A tap, not the end of a selection made by hand.
+              if (!window.getSelection()?.toString()) tap(n);
+            }}
+          >
+            {l || "\u00a0"}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
