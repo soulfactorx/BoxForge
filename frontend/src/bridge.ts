@@ -117,6 +117,13 @@ type Listener = (data: any) => void;
 const w = window as any;
 const bound = () => w.go?.app?.App;
 
+/** Calls a method as the page goes away (closed, reloaded): sent even so, its answer not waited for. */
+export function callOnLeave(method: string, ...args: unknown[]) {
+  const b = bound();
+  if (b) return void Promise.resolve(b[method](...args)).catch(() => {});
+  fetch(`/api/call/${method}`, { method: "POST", body: JSON.stringify(args), keepalive: true }).catch(() => {});
+}
+
 /** Calls a method of the Go App. Rejects with an Error carrying the engine's message. */
 export async function call<T>(method: string, ...args: unknown[]): Promise<T> {
   const b = bound();

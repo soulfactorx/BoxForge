@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { call, on, type Run, remote } from "./bridge";
+import { call, callOnLeave, on, type Run, remote } from "./bridge";
 import { copyText } from "./ui";
 import { keySeq, withMods, type Mods } from "./termkeys";
 
@@ -188,10 +188,14 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       if (!session) early.push(d);
       else if (d.session === session) show(d);
     });
+    // The page closed or reloaded: what ran in it ends, as a closed tab's does
+    // (else a setup left half-way holds its lock for the next one).
+    const leave = () => session && callOnLeave("TermClose", session);
     (open ? open(term.cols, term.rows) : call<string>("TermOpen", id, term.cols, term.rows)).then(
       (s) => {
         if (closed) return void call("TermClose", s).catch(() => {});
         session = s;
+        window.addEventListener("pagehide", leave);
         early.filter((d) => d.session === s).forEach(show);
         flush(); // what was typed before it opened
         term.focus();
@@ -301,6 +305,7 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       screen.removeEventListener("touchstart", touchStart);
       screen.removeEventListener("touchmove", touchMove);
       screen.removeEventListener("touchend", touchEnd);
+      window.removeEventListener("pagehide", leave);
       if (session) call("TermClose", session).catch(() => {});
       term.dispose();
     };

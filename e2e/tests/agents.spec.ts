@@ -18,6 +18,8 @@ test.afterAll(() => {
   sh(`docker compose -p ${box} down --volumes --remove-orphans`, true);
   sh(`docker compose -p bfa-bfe2e-pi down --volumes --rmi local --remove-orphans`, true);
   sh(`docker compose -p bfa-bfe2e-web down --volumes --remove-orphans`, true);
+  sh(`docker compose -p bfa-bfe2e-oc down --volumes --remove-orphans`, true);
+  sh(`docker rmi boxforge-agent/bfe2e-oc:latest`, true);
   sweep();
 });
 
@@ -353,4 +355,58 @@ test("a Pi box is built with the agent in it", async ({ page }) => {
   });
   await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 540_000 });
   expect(sh(`docker exec bfa-bfe2e-pi-agent sh -c 'id -u; command -v pi'`)).toMatch(/^\d+\n.*\/pi$/);
+});
+
+test("an OpenClaw box opens with its setup; its gateway waits for that, then starts by itself", async ({ page, request }) => {
+  // OpenClaw is installed from the internet. Where builds can't reach it,
+  // E2E_OPENCLAW_IMAGE names an image with OpenClaw in it, used as the box's.
+  const standin = process.env.E2E_OPENCLAW_IMAGE;
+  test.skip(!!process.env.E2E_NO_AGENT_BUILD && !standin, "builds can't reach the internet here");
+  const oc = "bfa-bfe2e-oc";
+  const procs = () => sh(`docker exec ${oc}-agent sh -c 'for p in /proc/[0-9]*; do tr "\\0" " " < $p/cmdline 2>/dev/null; echo; done'`, true);
+  const panel = async () => {
+    await go(page, "agents");
+    await page.getByTestId("agent-bfe2e-oc").getByRole("button", { name: "제어판 열기" }).click();
+  };
+  if (standin) {
+    await open(page);
+    const made = await (
+      await request.post("/api/call/AgentSave", {
+        data: [{ name: "bfe2e-oc", agents: ["openclaw"], workspace: work, network: "full", ports: [18789], service: "openclaw gateway --port 18789 --bind loopback", memory: 4, cpus: 2, pids: 512 }, true],
+      })
+    ).json();
+    sh(`docker tag ${standin} boxforge-agent/bfe2e-oc:latest`);
+    sh(`docker compose -f '${made.result.file}' up -d --no-build`);
+    await panel();
+  } else {
+    await make(page, "bfe2e-oc", async (d) => {
+      await d.getByLabel(/Pi Coding Agent/).uncheck();
+      await d.getByLabel(/OpenClaw/).check();
+      await d.getByLabel(/브라우저 상자 함께 만들기/).uncheck();
+    });
+  }
+  await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 540_000 });
+
+  // Not set up: the terminal opens with its setup, and the gateway waits
+  // for it (not ending, to be started again and again).
+  await expect(page.getByRole("tab", { name: "OpenClaw 설정" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("setup-needed")).toContainText("OpenClaw 설정이 아직 안 됐습니다");
+  await expect(page.getByTestId("cli")).toContainText(`docker exec -it ${oc}-agent sh /opt/boxforge/run openclaw onboard`);
+  await expect.poll(() => sh(`docker logs ${oc}-service 2>&1`, true), { timeout: 60_000 }).toContain("설정을 기다리는 중");
+  await page.getByRole("tab", { name: "웹 · 포트" }).click();
+  await expect(page.getByTestId("page-setup-needed")).toBeVisible();
+
+  // The page left half-way: its setup ends with it (else the next one
+  // finds the last one still holding its lock).
+  await expect.poll(procs, { timeout: 60_000 }).toContain("onboard");
+  await page.reload();
+  await expect.poll(procs, { timeout: 30_000 }).not.toContain("onboard --mode");
+
+  // Set up (as its wizard would): the gateway starts by itself, once.
+  sh(`docker exec ${oc}-agent sh /opt/boxforge/run openclaw onboard --non-interactive --accept-risk --mode local --no-install-daemon --skip-health --auth-choice skip`);
+  await expect.poll(() => sh(`docker logs ${oc}-service 2>&1`, true), { timeout: 180_000 }).toContain("[gateway] ready");
+  expect(sh(`docker inspect -f '{{.RestartCount}}' ${oc}-service`)).toBe("0");
+  await panel();
+  await expect(page.getByRole("tab", { name: "셸" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("setup-needed")).toHaveCount(0);
 });

@@ -246,17 +246,22 @@ func agentCommand(s AgentSpec, which string, run bool) ([]string, error) {
 			words = strings.Fields(k.Command)
 		}
 	default:
+		// "setup:openclaw": the agent's own setup.
+		id, setup := strings.CutPrefix(which, "setup:")
 		ok := false
-		for _, id := range s.Agents {
-			if id == which {
+		for _, a := range s.Agents {
+			if a == id {
 				ok = true
 			}
 		}
-		k, known := agentKind(which)
-		if !ok || !known {
+		k, known := agentKind(id)
+		if !ok || !known || (setup && k.Setup == "") {
 			return nil, fmt.Errorf("the box has no agent %q", which)
 		}
 		words = strings.Fields(k.Command)
+		if setup {
+			words = strings.Fields(k.Setup)
+		}
 	}
 	if len(words) == 0 {
 		return nil, fmt.Errorf("the box has no command to start")
@@ -683,4 +688,31 @@ func (a *App) AgentSnapshotRemove(name, id string) error {
 		return err
 	}
 	return writeSnapshots(dir, kept)
+}
+
+// AgentSetupNeeded lists the box's agents that have to be set up first and
+// aren't yet (OpenClaw before "openclaw onboard"): the screen offers their
+// setup at once.
+func (a *App) AgentSetupNeeded(name string) ([]string, error) {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for _, id := range s.Agents {
+		k, _ := agentKind(id)
+		if k.Ready == "" {
+			continue
+		}
+		_, _, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-agent", []string{"sh", agentRunPath, "sh", "-c", k.Ready}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if code != 0 {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }

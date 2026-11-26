@@ -13,6 +13,7 @@ interface Kind {
   note: string;
   service?: string;
   port?: number;
+  setup?: string;
 }
 
 interface Spec {
@@ -851,13 +852,41 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
   // agent of the box, is.
   const first = box.spec.image ? "main" : (mine.find((k) => !k.service)?.id ?? "shell");
   const serial = useRef(0);
-  const nameOf = (which: string) => (which === "shell" ? "셸" : which === "main" ? (box.spec.command ?? "") : (mine.find((k) => k.id === which)?.name ?? which));
+  const setupOf = (which: string) => (which.startsWith("setup:") ? mine.find((k) => k.id === which.slice(6)) : undefined);
+  const nameOf = (which: string) => {
+    const set = setupOf(which);
+    if (set) return `${set.name} 설정`;
+    return which === "shell" ? "셸" : which === "main" ? (box.spec.command ?? "") : (mine.find((k) => k.id === which)?.name ?? which);
+  };
   const make = (which: string, list: Term[]): Term => {
     const same = list.filter((t) => t.which === which).length;
     return { key: ++serial.current, which, label: same ? `${nameOf(which)} ${same + 1}` : nameOf(which), ended: false };
   };
-  const [terms, setTerms] = useState<Term[]>(() => [make(first, [])]);
+  // An agent not set up yet (OpenClaw before "openclaw onboard"): its setup
+  // opens first, and its gateway waits for it.
+  const withSetup = mine.some((k) => k.setup);
+  const [terms, setTerms] = useState<Term[]>(() => (withSetup ? [] : [make(first, [])]));
   const [active, setActive] = useState(terms[0]?.key ?? 0);
+  const [unset, setUnset] = useState<string[]>([]);
+  const [checked, setChecked] = useState(!withSetup);
+  const check = async () => {
+    try {
+      const need = await call<string[]>("AgentSetupNeeded", box.spec.name);
+      setUnset(need ?? []);
+      return need ?? [];
+    } catch {
+      return [];
+    }
+  };
+  useEffect(() => {
+    if (!withSetup) return;
+    check().then((need) => {
+      const t = make(need.length ? `setup:${need[0]}` : first, []);
+      setTerms([t]);
+      setActive(t.key);
+      setChecked(true);
+    });
+  }, []);
   useEffect(() => onCount(terms.length), [terms.length]);
 
   const add = (which: string) => {
@@ -922,7 +951,8 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
       /* kept for this time only */
     }
   };
-  const cliOf = (which: string) => `docker exec -it ${box.project}-agent sh /opt/boxforge/run ${which === "shell" ? "shell" : which === "main" ? (box.spec.command ?? "") : (mine.find((k) => k.id === which)?.command ?? "")}`;
+  const cliOf = (which: string) =>
+    `docker exec -it ${box.project}-agent sh /opt/boxforge/run ${which === "shell" ? "shell" : which === "main" ? (box.spec.command ?? "") : (setupOf(which)?.setup ?? mine.find((k) => k.id === which)?.command ?? "")}`;
 
   const opener = (which: string) => (
     <>
@@ -934,7 +964,7 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
     <div className={"agent-term" + (big ? " big" : "")} style={{ ["--term-h" as string]: `${height}px` }}>
       <div className="graph-bar">
         <span className="muted">새 터미널:</span>
-        {(box.spec.image ? ["main"] : mine.map((k) => k.id)).concat("shell").map((w) => (
+        {(box.spec.image ? ["main"] : mine.flatMap((k) => (k.setup ? [k.id, `setup:${k.id}`] : [k.id]))).concat("shell").map((w) => (
           <button key={w} type="button" className="chip" title={`${nameOf(w)}를 새 탭에서 엽니다`} onClick={() => add(w)}>
             + {opener(w)}
           </button>
@@ -986,7 +1016,25 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
         </div>
       )}
       {kind && <p className="help">{kind.note}</p>}
-      {terms.length === 0 && <p className="empty">열린 터미널이 없습니다. 위의 "새 터미널"에서 여세요.</p>}
+      {unset.map((id) => {
+        const k = mine.find((x) => x.id === id);
+        if (!k) return null;
+        const on = cur?.which === `setup:${id}` && !cur.ended;
+        return (
+          <p key={id} className="note-box" data-testid="setup-needed">
+            {`${k.name} 설정이 아직 안 됐습니다. 설정(${k.setup})을 마치면 게이트웨이가 저절로 켜집니다.`}
+            {!on && (
+              <span>
+                <button type="button" className="primary" onClick={() => add(`setup:${id}`)}>
+                  설정 시작
+                </button>
+              </span>
+            )}
+          </p>
+        );
+      })}
+      {!checked && <p className="muted">상자를 살펴보는 중…</p>}
+      {checked && terms.length === 0 && <p className="empty">열린 터미널이 없습니다. 위의 "새 터미널"에서 여세요.</p>}
       {terms.map((t) => (
         <div key={t.key} hidden={t.key !== active} className="term-pane" data-testid="term-pane">
           <Terminal
@@ -995,7 +1043,10 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
             showCli={showCli}
             run={run}
             command={cliOf(t.which)}
-            onEnd={() => setTerms((all) => all.map((x) => (x.key === t.key ? { ...x, ended: true } : x)))}
+            onEnd={() => {
+              setTerms((all) => all.map((x) => (x.key === t.key ? { ...x, ended: true } : x)));
+              if (t.which.startsWith("setup:")) check();
+            }}
             open={(cols, rows) => call<string>("AgentTermOpen", box.spec.name, t.which, cols, rows)}
           />
         </div>
@@ -1041,6 +1092,14 @@ function WebTab(props: {
   const [adding, setAdding] = useState("");
   const [note, setNote] = useState("");
   const page = mine.find((k) => k.port); // an agent with a web page of its own (OpenClaw)
+  // Its setup not done yet: the gateway waits for it, and the page can't open.
+  const [unset, setUnset] = useState(false);
+  useEffect(() => {
+    if (!page?.setup) return;
+    call<string[]>("AgentSetupNeeded", s.name)
+      .then((need) => setUnset((need ?? []).includes(page.id)))
+      .catch(() => setUnset(false));
+  }, [page?.id, props.service?.state]);
   const holder = `${box.project}-agent`; // the service shares its network and processes
   const load = () => call<{ port: number; local: number; shared: number }[]>("AgentPortsEnsure", s.name).then((p) => setPorts(p ?? []), (e) => setNote(e.message));
   useEffect(() => {
@@ -1130,6 +1189,11 @@ function WebTab(props: {
           <p className="muted">
             {`${page.name}의 웹 화면을 로그인된 상태로 엽니다. 브라우저 상자는 격리된 Firefox라서, 그 화면의 코드가 내 PC의 브라우저에서 돌지 않습니다(내 PC에는 그림만 보입니다).`}
           </p>
+          {unset && (
+            <p className="note-box" data-testid="page-setup-needed">
+              {`${page.name} 설정이 아직 안 됐습니다. "터미널" 탭의 "설정 시작"(${page.setup})으로 설정을 마치면 게이트웨이가 저절로 켜지고, 그 뒤에 화면이 열립니다.`}
+            </p>
+          )}
           {!s.service && (
             <p className="note-box">
               {`게이트웨이가 켜져 있어야 화면이 열립니다. 상자의 터미널에서 설정(openclaw onboard)을 마쳤다면 "늘 켜 두기"로 게이트웨이를 켜세요.`}

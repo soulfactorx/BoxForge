@@ -39,6 +39,10 @@ type AgentKind struct {
 	// answers in chat apps), and the port its own page is on.
 	Service string `json:"service,omitempty"`
 	Port    int    `json:"port,omitempty"`
+	// Setup is the command that sets it up first (a gateway needs it before
+	// it can run), and Ready a shell test that is true once that is done.
+	Setup string `json:"setup,omitempty"`
+	Ready string `json:"ready,omitempty"`
 }
 
 var anthropicHosts = []string{"api.anthropic.com", "console.anthropic.com", "claude.ai", "platform.claude.com", "statsig.anthropic.com"}
@@ -83,13 +87,14 @@ var agentKinds = []AgentKind{
 		Keys:    []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "OPENCLAW_GATEWAY_TOKEN", "TELEGRAM_BOT_TOKEN"},
 		Hosts:   join(anthropicHosts, openaiHosts, googleHosts, []string{"openrouter.ai", "api.x.ai"}),
 		Note:    "먼저 여기서 openclaw onboard --mode local --no-install-daemon 으로 설정합니다. 그다음 \"웹 · 포트\" 탭에서 \"게이트웨이 늘 켜 두기\"를 누르고, \"내 PC 브라우저로 열기\"나 \"브라우저 상자로 열기\"로 화면을 엽니다(로그인된 링크로 열림).",
-		Service: "openclaw gateway --port 18789 --bind loopback", Port: 18789},
+		Service: "openclaw gateway --port 18789 --bind loopback", Port: 18789,
+		Setup: "openclaw onboard --mode local --no-install-daemon", Ready: "openclaw config get gateway.mode >/dev/null 2>&1"},
 	{ID: "hermes", Name: "Hermes Agent", Command: "hermes",
 		Install: "RUN python3 -m venv /opt/hermes && /opt/hermes/bin/pip install --no-cache-dir hermes-agent \\\n && ln -sf /opt/hermes/bin/hermes /usr/local/bin/hermes",
 		Keys:    []string{"OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN"},
 		Hosts:   join([]string{"openrouter.ai", "*.nousresearch.com"}, anthropicHosts, openaiHosts),
 		Note:    "hermes setup 으로 모델을 정합니다. 메신저로 쓰려면 hermes gateway setup 후 \"늘 켜 두기\"를 켭니다.",
-		Service: "hermes gateway"},
+		Service: "hermes gateway", Setup: "hermes setup"},
 }
 
 // AgentPresets are more addresses a box with "AI services only" can be
@@ -389,7 +394,7 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 	main := "exec tail -f /dev/null"
 	agent("agent", main)
 	if s.Service != "" {
-		agent("service", s.Service)
+		agent("service", serviceCommand(s))
 	}
 	if s.Network == "ai" {
 		w("  egress:\n    image: %s\n    container_name: %s-egress\n    init: true\n", y(agentBase()), project)
@@ -552,3 +557,19 @@ server.on("connect", (req, sock, head) => {
 });
 server.listen(8888);
 `
+
+// serviceCommand is what the kept-running service runs: an agent's gateway
+// that has to be set up first waits for that (quietly, saying so once)
+// instead of failing at once again and again, and starts as soon as the
+// setup in the box's terminal is done.
+func serviceCommand(s AgentSpec) string {
+	for _, id := range s.Agents {
+		k, _ := agentKind(id)
+		if k.Ready == "" || k.Service == "" || !strings.HasPrefix(s.Service, strings.Fields(k.Service)[0]+" ") {
+			continue
+		}
+		// No "$" in it: Compose would take that for its own variable.
+		return fmt.Sprintf("if ! %s; then echo 'BoxForge: %s 설정을 기다리는 중입니다. 터미널 탭의 \"%s 설정\"(셸에서 %s)으로 설정을 마치면 바로 켜집니다.'; until %s; do sleep 10; done; fi; exec %s", k.Ready, k.Name, k.Name, k.Setup, k.Ready, s.Service)
+	}
+	return s.Service
+}

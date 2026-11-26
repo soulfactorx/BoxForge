@@ -14,6 +14,7 @@
 //   E2E_K3S=mirror.gcr.io/rancher/k3s:v1.33.5-k3s1 E2E_KUBE_NGINX=mirror.gcr.io/library/nginx:alpine
 //   E2E_NODE=mirror.gcr.io/library/node:24-bookworm-slim (AI agent boxes' base)
 //   E2E_BROWSER=mirror.gcr.io/jlesage/firefox:latest (their browser box)
+//   E2E_OPENCLAW_IMAGE=<an image with OpenClaw in it> (the OpenClaw box, where builds can't install it)
 // Where builds can't reach the internet, E2E_NO_AGENT_BUILD=1 skips building a real agent.
 import { defineConfig } from "@playwright/test";
 import { mkdtempSync } from "node:fs";

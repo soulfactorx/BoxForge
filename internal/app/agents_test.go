@@ -26,6 +26,16 @@ func TestAgentFiles(t *testing.T) {
 			t.Fatalf("compose.yaml lacks %q:\n%s", want, c)
 		}
 	}
+	// The gateway waits for its setup, then starts.
+	if !strings.Contains(c, "until openclaw config get gateway.mode") || !strings.Contains(c, "exec openclaw gateway --port 18789 --bind loopback") {
+		t.Fatalf("service command:\n%s", c)
+	}
+	if cmd, err := agentCommand(s, "setup:openclaw", true); err != nil || strings.Join(cmd, " ") != "sh "+agentRunPath+" openclaw onboard --mode local --no-install-daemon" {
+		t.Fatalf("setup = %v, %v", cmd, err)
+	}
+	if _, err := agentCommand(s, "setup:pi", true); err == nil {
+		t.Fatal("pi has no setup")
+	}
 	// Ports are opened by BoxForge, never published by the engine.
 	if strings.Contains(c, "ports:") || strings.Contains(c, "FORWARD") {
 		t.Fatalf("compose.yaml publishes ports:\n%s", c)
