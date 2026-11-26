@@ -422,7 +422,7 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
   await page.getByRole("button", { name: "웹 화면 열러 가기" }).click();
   // Its state says how far it is: ready once it answers on its port.
   await expect(page.getByTestId("gateway-stage")).toContainText("게이트웨이: 준비됨", { timeout: 180_000 });
-  expect(sh(`docker logs ${oc}-service 2>&1`, true)).toContain("[gateway] ready");
+  await expect.poll(() => sh(`docker logs ${oc}-service 2>&1`, true), { timeout: 60_000 }).toContain("[gateway] ready");
   expect(sh(`docker inspect -f '{{.RestartCount}}' ${oc}-service`)).toBe("0");
   await page.reload();
   await panel();
