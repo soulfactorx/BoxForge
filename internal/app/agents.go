@@ -43,6 +43,9 @@ type AgentKind struct {
 	// it can run), and Ready a shell test that is true once that is done.
 	Setup string `json:"setup,omitempty"`
 	Ready string `json:"ready,omitempty"`
+	// Memory is the least memory limit (GB) it runs well in: OpenClaw's
+	// gateway takes about 2 GB by itself and more as it works.
+	Memory float64 `json:"memory,omitempty"`
 }
 
 var anthropicHosts = []string{"api.anthropic.com", "console.anthropic.com", "claude.ai", "platform.claude.com", "statsig.anthropic.com"}
@@ -88,7 +91,7 @@ var agentKinds = []AgentKind{
 		Hosts:   join(anthropicHosts, openaiHosts, googleHosts, []string{"openrouter.ai", "api.x.ai"}),
 		Note:    "먼저 여기서 openclaw onboard --mode local --no-install-daemon 으로 설정합니다. 그다음 \"웹 · 포트\" 탭에서 \"게이트웨이 늘 켜 두기\"를 누르고, \"내 PC 브라우저로 열기\"나 \"브라우저 상자로 열기\"로 화면을 엽니다(로그인된 링크로 열림).",
 		Service: "openclaw gateway --port 18789 --bind loopback", Port: 18789,
-		Setup: "openclaw onboard --mode local --no-install-daemon", Ready: "openclaw config get gateway.mode >/dev/null 2>&1"},
+		Setup: "openclaw onboard --mode local --no-install-daemon", Ready: openclawReady, Memory: 8},
 	{ID: "hermes", Name: "Hermes Agent", Command: "hermes",
 		Install: "RUN python3 -m venv /opt/hermes && /opt/hermes/bin/pip install --no-cache-dir hermes-agent \\\n && ln -sf /opt/hermes/bin/hermes /usr/local/bin/hermes",
 		Keys:    []string{"OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN"},
@@ -569,6 +572,15 @@ func serviceCommand(s AgentSpec) string {
 	}
 	return s.Service
 }
+
+// openclawReady is true (0) once OpenClaw is set up: its config names the
+// gateway's mode. Read by a few lines of node (tens of milliseconds, tens of
+// MB), not by the openclaw command (seconds, hundreds of MB, dozens of
+// threads): it is asked every few seconds while the screen waits, and in the
+// gateway's wait. A config node can't read as JSON is asked of openclaw.
+// 1 is "not set up"; any other code is "can't tell". No "$" in it: it goes
+// into compose.yaml.
+const openclawReady = `node -e 'const f=(process.env.OPENCLAW_CONFIG_PATH||process.env.HOME+"/.openclaw/openclaw.json");let c;try{c=JSON.parse(require("fs").readFileSync(f,"utf8"))}catch(e){if(e.code==="ENOENT")process.exit(1);const r=require("child_process").spawnSync("openclaw",["config","get","gateway.mode"],{stdio:"ignore"});process.exit(r.status===0?0:r.status===1?1:3)}process.exit(c&&c.gateway&&c.gateway.mode?0:1)'`
 
 // serviceKind is the agent whose gateway the box's service runs (OpenClaw's
 // "openclaw gateway …"), if it is one.

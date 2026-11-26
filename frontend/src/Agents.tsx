@@ -15,6 +15,7 @@ interface Kind {
   port?: number;
   setup?: string;
   ready?: string;
+  memory?: number;
 }
 
 interface Spec {
@@ -97,6 +98,32 @@ const stateLabel: Record<string, string> = {
 };
 
 const fmtTime = (t: number) => new Date(t).toLocaleString();
+
+/**
+ * Calls fn every ms while on: the next only once the last has answered, and
+ * not while the page or this part of it (where) is out of sight (a box's
+ * panel is kept, hidden, when another is open). Each call may run something
+ * in the box: they must never stack up there.
+ */
+function usePoll(fn: () => Promise<unknown>, ms: number, on: boolean, deps: unknown[], where?: React.RefObject<HTMLElement | null>) {
+  const latest = useRef(fn);
+  latest.current = fn;
+  useEffect(() => {
+    if (!on) return;
+    let stop = false;
+    let t = 0;
+    const tick = async () => {
+      const seen = !document.hidden && (!where?.current || where.current.offsetParent !== null);
+      if (seen) await latest.current().catch(() => {});
+      if (!stop) t = window.setTimeout(tick, ms);
+    };
+    t = window.setTimeout(tick, ms);
+    return () => {
+      stop = true;
+      clearTimeout(t);
+    };
+  }, [on, ms, ...deps]);
+}
 
 interface Props {
   containers: Container[];
@@ -434,6 +461,8 @@ function MakeDialog(props: {
       if (!portList.includes(k.port)) setPorts((p) => (p.trim() ? `${p}, ${k.port}` : String(k.port)));
       set({ browser: true });
     }
+    // A limit it runs well in (the gateway and the agent each have it).
+    if (on && k?.memory) setSpec((x) => (x.memory && x.memory < k.memory! ? { ...x, memory: k.memory! } : x));
     // Its gateway kept running: it waits for the setup, and starts once that is done.
     if (k?.service && k.ready) {
       if (on && !spec.service) set({ service: k.service });
@@ -914,11 +943,8 @@ function TermTab({
   };
   // The setup's wizard may go on into the agent itself (OpenClaw's chat)
   // instead of ending: its end is seen in the box, every few seconds.
-  useEffect(() => {
-    if (!unset.length) return;
-    const t = window.setInterval(check, 5000);
-    return () => clearInterval(t);
-  }, [unset.length]);
+  const termRef = useRef<HTMLDivElement>(null);
+  usePoll(check, 5000, unset.length > 0, [], termRef);
   useEffect(() => {
     if (!withSetup) return;
     check().then((need) => {
@@ -1002,7 +1028,7 @@ function TermTab({
     </>
   );
   return (
-    <div className={"agent-term" + (big ? " big" : "")} style={{ ["--term-h" as string]: `${height}px` }}>
+    <div ref={termRef} className={"agent-term" + (big ? " big" : "")} style={{ ["--term-h" as string]: `${height}px` }}>
       <div className="graph-bar">
         <span className="muted">새 터미널:</span>
         {(box.spec.image ? ["main"] : mine.flatMap((k) => (k.setup ? [k.id, `setup:${k.id}`] : [k.id]))).concat("shell").map((w) => (
@@ -1154,17 +1180,16 @@ function WebTab(props: {
   const page = mine.find((k) => k.port); // an agent with a web page of its own (OpenClaw)
   // Its setup not done yet: the gateway waits for it, and the page can't open.
   const [unset, setUnset] = useState(false);
-  useEffect(() => {
-    if (!page?.setup) return;
-    const look = () =>
-      call<string[]>("AgentSetupNeeded", s.name)
-        .then((need) => setUnset((need ?? []).includes(page.id)))
-        .catch(() => setUnset(false));
-    look();
-    // Set up in the terminal meanwhile: seen here too.
-    const t = window.setInterval(look, 5000);
-    return () => clearInterval(t);
-  }, [page?.id, props.service?.state]);
+  const webRef = useRef<HTMLDivElement>(null);
+  const look = () =>
+    page?.setup
+      ? call<string[]>("AgentSetupNeeded", s.name)
+          .then((need) => setUnset((need ?? []).includes(page.id)))
+          .catch(() => setUnset(false))
+      : Promise.resolve();
+  useEffect(() => void look(), [page?.id, props.service?.state]);
+  // Set up in the terminal meanwhile: seen here too (asked only until then).
+  usePoll(look, 5000, unset, [], webRef);
   const holder = `${box.project}-agent`; // the service shares its network and processes
   const load = () => call<{ port: number; local: number; shared: number }[]>("AgentPortsEnsure", s.name).then((p) => setPorts(p ?? []), (e) => setNote(e.message));
   useEffect(() => {
@@ -1207,7 +1232,18 @@ function WebTab(props: {
   };
 
   // The agent's own page (OpenClaw), signed in by its one-time link.
+  // Getting its link takes a few seconds: once at a time, and said so.
+  const [opening, setOpening] = useState<"" | "pc" | "browser">("");
   const openPage = async (where: "pc" | "browser") => {
+    if (opening) return;
+    setOpening(where);
+    try {
+      await openPageNow(where);
+    } finally {
+      setOpening("");
+    }
+  };
+  const openPageNow = async (where: "pc" | "browser") => {
     let link = "";
     if (!(await run(`docker exec ${holder} sh /opt/boxforge/run openclaw dashboard --json`, async () => (link = await call<string>("AgentWebLink", s.name))))) return;
     if (where === "pc") {
@@ -1236,7 +1272,7 @@ function WebTab(props: {
   const browserUp = props.browser?.state === "running";
 
   return (
-    <div className="agent-web">
+    <div ref={webRef} className="agent-web">
       {remote() && (
         <p className="note-box">
           웹 서버로 접속 중입니다: 상자의 화면과 포트는 BoxForge 서버의 같은 번호 포트(HTTPS)로 열리고, 이 BoxForge에 로그인한 브라우저에서만 열립니다. 서버에 방화벽이나 포트 포워딩이 있으면 그 번호(예: 18789)를 열어 두세요.
@@ -1271,12 +1307,12 @@ function WebTab(props: {
           )}
 
           <div className="actions">
-            <button type="button" className="primary" onClick={() => openPage("pc")}>
-              {remote() ? "이 기기 브라우저로 열기" : "내 PC 브라우저로 열기"}
+            <button type="button" className="primary" disabled={!!opening} aria-busy={opening === "pc"} onClick={() => openPage("pc")}>
+              {opening === "pc" ? "여는 중… (몇 초 걸립니다)" : remote() ? "이 기기 브라우저로 열기" : "내 PC 브라우저로 열기"}
             </button>
             {s.browser ? (
-              <button type="button" disabled={!browserUp} title={browserUp ? "" : "브라우저 상자가 아직 켜지지 않았습니다"} onClick={() => openPage("browser")}>
-                브라우저 상자로 열기
+              <button type="button" disabled={!browserUp || !!opening} aria-busy={opening === "browser"} title={browserUp ? "" : "브라우저 상자가 아직 켜지지 않았습니다"} onClick={() => openPage("browser")}>
+                {opening === "browser" ? "여는 중… (몇 초 걸립니다)" : "브라우저 상자로 열기"}
               </button>
             ) : null}
           </div>
@@ -1393,17 +1429,17 @@ function Gateway({ box, mine, service, run }: { box: Box; mine: Kind[]; service?
   const [shown, setShown] = useState(false);
   const [check, setCheck] = useState<GatewayCheck | null>(null);
   const up = service?.state === "running";
-  const read = () => {
-    call<string>("AgentServiceLog", box.spec.name).then((l) => setLog(l ?? ""), () => setLog(""));
-    // Its container running isn't it ready: how far it is, seen in the box.
-    if (up) call<GatewayCheck>("AgentGatewayCheck", box.spec.name).then(setCheck, () => setCheck(null));
-    else setCheck(null);
-  };
-  useEffect(() => {
-    read();
-    const t = window.setInterval(read, 5000);
-    return () => clearInterval(t);
-  }, [box.spec.name, service?.state]);
+  const here = useRef<HTMLDivElement>(null);
+  const read = () =>
+    Promise.all([
+      call<string>("AgentServiceLog", box.spec.name).then((l) => setLog(l ?? ""), () => setLog("")),
+      // Its container running isn't it ready: how far it is, seen in the box.
+      up ? call<GatewayCheck>("AgentGatewayCheck", box.spec.name).then(setCheck, () => setCheck(null)) : (setCheck(null), undefined),
+    ]);
+  useEffect(() => void read(), [box.spec.name, service?.state]);
+  // Often while it is on its way, seldom once it is ready.
+  const settled = up && (!!check && !check.setup && (!check.port || check.listening));
+  usePoll(read, settled ? 20000 : 5000, true, [box.spec.name, service?.state], here);
   const who = mine.find((k) => k.id === check?.agent);
   // What "running" means, in words: waiting for its setup, starting, or ready.
   const [stage, tone, more] = !service
@@ -1424,7 +1460,7 @@ function Gateway({ box, mine, service, run }: { box: Box; mine: Kind[]; service?
   const restart = () =>
     run(`docker compose -p ${box.project} restart service`, () => call("ComposeAction", { key: `gw-${Date.now()}`, project: box.project, files: [box.file], action: "restart", services: ["service"] })).then(read);
   return (
-    <div className="gateway" data-testid="agent-gateway">
+    <div ref={here} className="gateway" data-testid="agent-gateway">
       <p>
         <span className={"state " + tone} data-testid="gateway-stage">
           <span className="dot" />

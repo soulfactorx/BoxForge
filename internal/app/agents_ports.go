@@ -336,9 +336,10 @@ func (a *App) AgentWebLink(name string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := []string{"sh", agentRunPath, "openclaw", "dashboard", "--json"}
+	// Killed in the box if it takes too long: an exec given up on goes on there.
+	cmd := []string{"timeout", "-s", "KILL", "50", "sh", agentRunPath, "openclaw", "dashboard", "--json"}
 	if !a.hasRun(ctx, portHolderName(s)) {
-		cmd = []string{"sh", "-c", agentWrap, "boxforge", "openclaw", "dashboard", "--json"}
+		cmd = []string{"timeout", "-s", "KILL", "50", "sh", "-c", agentWrap, "boxforge", "openclaw", "dashboard", "--json"}
 	}
 	out, errOut, _, err := a.eng().Containers().Output(ctx, portHolderName(s), cmd, nil)
 	if err != nil {

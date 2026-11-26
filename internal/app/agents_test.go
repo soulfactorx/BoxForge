@@ -27,7 +27,7 @@ func TestAgentFiles(t *testing.T) {
 		}
 	}
 	// The gateway waits for its setup, then starts.
-	if !strings.Contains(c, "until openclaw config get gateway.mode") || !strings.Contains(c, "exec openclaw gateway --port 18789 --bind loopback") {
+	if !strings.Contains(c, "until node -e") || !strings.Contains(c, "exec openclaw gateway --port 18789 --bind loopback") {
 		t.Fatalf("service command:\n%s", c)
 	}
 	if cmd, err := agentCommand(s, "setup:openclaw", true); err != nil || strings.Join(cmd, " ") != "sh "+agentRunPath+" openclaw onboard --mode local --no-install-daemon" {

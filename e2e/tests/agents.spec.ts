@@ -388,6 +388,8 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
       await d.getByLabel(/브라우저 상자 함께 만들기/).uncheck();
       // Its gateway is kept running from the start: it waits for the setup.
       await expect(d.getByLabel(/메신저 게이트웨이처럼/)).toBeChecked();
+      // A limit its gateway runs well in.
+      await expect(d.getByLabel(/메모리 \(GB\)/)).toHaveValue("8");
     });
   }
   await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 540_000 });
@@ -424,6 +426,22 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
   await expect(page.getByTestId("gateway-stage")).toContainText("게이트웨이: 준비됨", { timeout: 180_000 });
   await expect.poll(() => sh(`docker logs ${oc}-service 2>&1`, true), { timeout: 60_000 }).toContain("[gateway] ready");
   expect(sh(`docker inspect -f '{{.RestartCount}}' ${oc}-service`)).toBe("0");
+  // What the screen asks of the box while it shows all this doesn't pile up
+  // there (piled up, the checks took the box's threads and memory).
+  for (let i = 0; i < 15; i++) {
+    expect(procs().split("\n").filter((l) => l.trim()).length).toBeLessThan(30);
+    await page.waitForTimeout(1000);
+  }
+  // Its link takes a few seconds: the button says so, and isn't pressed twice.
+  const shown = page.context().waitForEvent("page", { timeout: 90_000 });
+  const opener = page.getByTestId("agent-page").getByRole("button", { name: /내 PC 브라우저로 열기|여는 중/ });
+  await opener.click();
+  await expect(opener).toBeDisabled();
+  await expect(opener).toContainText("여는 중");
+  const view = await shown;
+  expect(view.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
+  await view.close();
+  await expect(opener).toBeEnabled();
   await page.reload();
   await panel();
   await expect(page.getByRole("tab", { name: "셸" })).toBeVisible({ timeout: 60_000 });

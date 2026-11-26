@@ -12,7 +12,9 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/soulfactorx/boxforge/internal/engine"
@@ -692,29 +694,67 @@ func (a *App) AgentSnapshotRemove(name, id string) error {
 
 // AgentSetupNeeded lists the box's agents that have to be set up first and
 // aren't yet (OpenClaw before "openclaw onboard"): the screen offers their
-// setup at once.
+// setup at once. One that can't be told (the box too busy to answer) isn't
+// listed: it is asked again.
 func (a *App) AgentSetupNeeded(name string) ([]string, error) {
 	s, _, err := readAgent(name)
 	if err != nil {
 		return nil, err
 	}
 	out := []string{}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
 	for _, id := range s.Agents {
 		k, _ := agentKind(id)
 		if k.Ready == "" {
 			continue
 		}
-		_, _, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-agent", []string{"sh", agentRunPath, "sh", "-c", k.Ready}, nil)
+		code, err := a.boxCheck(name, "ready:"+id, 20, []string{"sh", agentRunPath, "sh", "-c", k.Ready})
 		if err != nil {
 			return nil, err
 		}
-		if code != 0 {
+		if code == 1 {
 			out = append(out, id)
 		}
 	}
 	return out, nil
+}
+
+// Checks the screen makes in a box every few seconds: one at a time per
+// box, a result shared for a moment by the screens asking, and each killed
+// in the box when it takes too long (a docker exec given up on by its caller
+// goes on running in the container: piled up, they took the box's memory and
+// threads, and the gateway's with them).
+var (
+	boxChecksMu sync.Mutex
+	boxChecks   = map[string]*boxCheckEntry{}
+)
+
+type boxCheckEntry struct {
+	mu   sync.Mutex
+	at   time.Time
+	code int
+	err  error
+}
+
+func (a *App) boxCheck(name, what string, secs int, cmd []string) (int, error) {
+	key := name + "\x00" + what
+	boxChecksMu.Lock()
+	e := boxChecks[key]
+	if e == nil {
+		e = &boxCheckEntry{}
+		boxChecks[key] = e
+	}
+	boxChecksMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if time.Since(e.at) < 3*time.Second {
+		return e.code, e.err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(secs+10)*time.Second)
+	defer cancel()
+	full := append([]string{"timeout", "-s", "KILL", strconv.Itoa(secs)}, cmd...)
+	_, _, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-agent", full, nil)
+	e.at, e.code, e.err = time.Now(), code, err
+	return code, err
 }
 
 // AgentGateway is how far the box's gateway is, beyond its container
@@ -738,20 +778,17 @@ func (a *App) AgentGatewayCheck(name string) (AgentGateway, error) {
 		return AgentGateway{}, nil
 	}
 	g := AgentGateway{Agent: k.ID, Port: k.Port}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	box := agentProject(name) + "-agent"
 	if k.Ready != "" {
-		_, _, code, err := a.eng().Containers().Output(ctx, box, []string{"sh", agentRunPath, "sh", "-c", k.Ready}, nil)
+		code, err := a.boxCheck(name, "ready:"+k.ID, 20, []string{"sh", agentRunPath, "sh", "-c", k.Ready})
 		if err != nil {
 			return g, err
 		}
-		g.Setup = code != 0
+		g.Setup = code == 1
 	}
 	if k.Port > 0 && !g.Setup {
 		// The gateway shares the box's network: its localhost is the box's.
 		probe := fmt.Sprintf("require('net').connect(%d,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))", k.Port)
-		_, _, code, err := a.eng().Containers().Output(ctx, box, []string{"node", "-e", probe}, nil)
+		code, err := a.boxCheck(name, "port", 10, []string{"node", "-e", probe})
 		g.Listening = err == nil && code == 0
 	}
 	return g, nil
@@ -773,7 +810,7 @@ func (a *App) AgentVersions(name string) (map[string]string, error) {
 		if len(words) == 0 {
 			continue
 		}
-		cmd := []string{"sh", agentRunPath, words[0], "--version"}
+		cmd := []string{"timeout", "-s", "KILL", "30", "sh", agentRunPath, words[0], "--version"}
 		stdout, _, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-agent", cmd, nil)
 		if err != nil || code != 0 {
 			continue

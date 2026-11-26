@@ -1792,5 +1792,6 @@
  "켜지자마자 꺼지고 있습니다. 아래 기록에서 이유를 보세요.": "It stops as soon as it starts. See why in the log below.",
  "포트 {0}에서 답하고 있습니다. 아래에서 화면을 열 수 있습니다.": "It answers on port {0}. You can open its page below.",
  "프로그램은 돌고 있고, 아직 포트 {0}에서 답하지 않습니다. 처음 켤 때는 30초~1분쯤 걸립니다.": "The program is running, but doesn't answer on port {0} yet. The first start takes 30 seconds to a minute.",
- "{0} 전 종료 · 종료 코드 {1}": "Exited {0} ago · exit code {1}"
+ "{0} 전 종료 · 종료 코드 {1}": "Exited {0} ago · exit code {1}",
+ "여는 중… (몇 초 걸립니다)": "Opening… (takes a few seconds)"
 }
