@@ -1764,5 +1764,6 @@
  "웹 서버로 접속 중입니다: 상자의 화면과 포트는 BoxForge 서버의 같은 번호 포트(HTTPS)로 열리고, 이 BoxForge에 로그인한 브라우저에서만 열립니다. 서버에 방화벽이나 포트 포워딩이 있으면 그 번호(예: 18789)를 열어 두세요.": "Connected to the web server: the box's pages and ports open on the BoxForge server's port of the same number (HTTPS), only for browsers signed in to this BoxForge. If the server has a firewall or port forwarding, open that number (e.g. 18789).",
  "이 기기 브라우저로 열기": "Open in this device's browser",
  "이 기기에서 열기": "Open on this device",
- "BoxForge에 (보기 전용이 아닌 비밀번호로) 로그인한 브라우저에서만 열립니다. BoxForge 화면에서 다시 여세요. Only a browser signed in to BoxForge (not look-only) can open this. Open it again from BoxForge.": "Only a browser signed in to BoxForge (not look-only) can open this. Open it again from BoxForge."
+ "BoxForge에 (보기 전용이 아닌 비밀번호로) 로그인한 브라우저에서만 열립니다. BoxForge 화면에서 다시 여세요. Only a browser signed in to BoxForge (not look-only) can open this. Open it again from BoxForge.": "Only a browser signed in to BoxForge (not look-only) can open this. Open it again from BoxForge.",
+ "브라우저 상자의 화면이 아직 열리지 않습니다(1분 넘게 시작하는 중). 잠시 뒤 다시 눌러 주세요": "The browser box's screen isn't open yet (starting for over a minute). Try again in a moment"
 }

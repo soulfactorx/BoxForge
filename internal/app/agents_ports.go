@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
@@ -290,7 +291,26 @@ true`
 			return 0, fmt.Errorf("the browser box couldn't be told the address: %s", strings.TrimSpace(errOut))
 		}
 	}
-	return a.AgentPortOpen(name, browserPort)
+	local, err := a.AgentPortOpen(name, browserPort)
+	if err != nil {
+		return 0, err
+	}
+	// Its page comes up a little after the box does: answered before it is
+	// opened, so that a page that can't load yet isn't what is shown.
+	client := &http.Client{Timeout: 3 * time.Second}
+	for end := time.Now().Add(60 * time.Second); ; {
+		res, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/", local))
+		if err == nil {
+			res.Body.Close()
+			if res.StatusCode < 500 {
+				return local, nil
+			}
+		}
+		if time.Now().After(end) {
+			return 0, fmt.Errorf("브라우저 상자의 화면이 아직 열리지 않습니다(1분 넘게 시작하는 중). 잠시 뒤 다시 눌러 주세요")
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 // AgentWebLink asks an agent with a web page of its own for the address to
