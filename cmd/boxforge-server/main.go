@@ -216,6 +216,7 @@ func main() {
 	app.Start(a, srv.Emit)
 	defer app.Stop(a)
 	notePid(dir)
+	shareBoxPorts(srv, *listen, secure, *certFile, *keyFile, dir)
 
 	hs = &http.Server{Addr: *listen, Handler: srv.Handler(), ReadHeaderTimeout: 15 * time.Second}
 	scheme := "http"
@@ -310,4 +311,43 @@ var lookOnly = []string{
 	"ComposeVersion", "ComposeLogs", "ComposeHints", "ComposeJobs",
 	"AgentCatalog", "AgentBoxes", "AgentAllowFor", "AgentConnections", "AgentSnapshots", "AgentPorts",
 	"Refresh", "ContainerTop", "InspectImage", "KubeStatus", "KubeLogTail", "KubeGet", "KubeYAML", "KubeDescribe", "KubeLogs", "KubeProjectLogs", "KubeForwards",
+}
+
+// shareBoxPorts lets an AI agent box's port be opened from other devices:
+// served on a port of its own, at the address the server listens on, over
+// the server's HTTPS and only to the browsers signed in to it. A server
+// without HTTPS (one a proxy fronts, or for this machine only) shares none:
+// nothing is opened on a network unencrypted or without a sign-in.
+func shareBoxPorts(srv *webserver.Server, listen string, secure bool, certFile, keyFile, dir string) {
+	host, _, _ := net.SplitHostPort(listen)
+	app.SetShare(func(port int, target string) (int, func(), error) {
+		if !secure {
+			return 0, nil, fmt.Errorf("이 서버는 HTTPS(-tls 또는 -cert)로 열려 있지 않아, 상자의 포트를 다른 기기에 열지 않습니다. 프록시가 앞에 있으면 그 프록시에서 이 포트를 따로 열어 주세요")
+		}
+		var cert tls.Certificate
+		var err error
+		if certFile != "" {
+			cert, err = tls.LoadX509KeyPair(certFile, keyFile)
+		} else {
+			cert, _, err = webserver.Certificate(dir)
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		var ln net.Listener
+		for try := port; try < port+20 && try <= 65535; try++ {
+			if ln, err = net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(try))); err == nil {
+				break
+			}
+		}
+		if ln == nil {
+			return 0, nil, fmt.Errorf("서버의 %d~%d 포트를 모두 다른 프로그램이 쓰고 있습니다", port, min(port+19, 65535))
+		}
+		hs := &http.Server{
+			Handler: srv.ShareHandler(target), ReadHeaderTimeout: 15 * time.Second,
+			TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+		}
+		go func() { _ = hs.ServeTLS(ln, "", "") }()
+		return ln.Addr().(*net.TCPAddr).Port, func() { _ = hs.Close() }, nil
+	})
 }

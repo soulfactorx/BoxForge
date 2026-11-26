@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ test.beforeAll(async () => {
   const bin = join(__dirname, "..", ".bin", "boxforge-server");
   execFileSync("go", ["build", "-o", bin, "../cmd/boxforge-server"], { stdio: "inherit" });
   server = spawn(bin, ["-listen", `:${port}`, "-tls"], {
-    env: { ...process.env, XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), "bfe2e-server-")), BOXFORGE_PASSWORD: "right-password-1", BOXFORGE_VIEWER_PASSWORD: "just-looking-1" },
+    env: { ...process.env, XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), "bfe2e-server-")), BOXFORGE_PASSWORD: "right-password-1", BOXFORGE_VIEWER_PASSWORD: "just-looking-1", BOXFORGE_AGENT_BASE: process.env.E2E_NODE ?? "" },
     stdio: "ignore",
   });
   for (let i = 0; i < 60; i++) {
@@ -55,6 +55,43 @@ test("the look-only password looks and changes nothing", async ({ request }) => 
   expect(await (await request.post(base + "/api/call/Containers", { data: [] })).json()).toHaveProperty("result");
   for (const [m, args] of [["ContainerAction", ["x", "stop"]], ["TermOpen", ["x", 80, 24]], ["ContainerFiles", ["x", "/"]], ["Browse", [""]]] as const) {
     expect(await (await request.post(`${base}/api/call/${m}`, { data: args })).json(), m).toEqual({ error: "viewer" });
+  }
+});
+
+test("an AI agent box's port is opened from other devices over the server's HTTPS, to signed-in browsers only", async ({ playwright }) => {
+  test.setTimeout(300_000);
+  const signed = async (password: string) => {
+    const r = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+    expect((await r.post(base + "/api/login", { data: { password } })).status()).toBe(200);
+    return r;
+  };
+  const admin = await signed("right-password-1");
+  const call = async (method: string, ...args: unknown[]) => {
+    const res = await admin.post(base + "/api/call/" + method, { data: args });
+    const body = await res.json();
+    if (res.status() !== 200) throw new Error(`${method}: ${JSON.stringify(body)}`);
+    return body.result;
+  };
+  const work = mkdtempSync(join(tmpdir(), "bfe2e-share-"));
+  chmodSync(work, 0o777);
+  const name = "bfe2e-share";
+  const box = await call("AgentSave", { name, agents: [], image: process.env.E2E_ALPINE ?? "alpine:3", command: "sh", workspace: work, network: "ai", allow: ["example.org"], memory: 1, cpus: 1, pids: 128, readOnlyRoot: false }, true);
+  try {
+    await call("ComposeAction", { key: "share-1", project: box.project, files: [box.file], action: "upbuild" });
+    execFileSync("docker", ["exec", "-d", `${box.project}-agent`, "sh", "-c", `while true; do printf "HTTP/1.0 200 OK\\r\\nContent-Length: 10\\r\\n\\r\\nhello-port" | nc -l -s 127.0.0.1 -p 18081 >/dev/null; done`]);
+    const ext: number = await call("AgentPortShare", name, 18081);
+    const at = `https://127.0.0.1:${ext}/`;
+    // Signed in: the box's page, over HTTPS.
+    await expect.poll(async () => (await admin.get(at).catch(() => null))?.text() ?? "", { timeout: 30_000 }).toBe("hello-port");
+    // Not signed in, or only to look: refused, the box not reached.
+    const stranger = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+    expect((await stranger.get(at)).status()).toBe(403);
+    const viewer = await signed("just-looking-1");
+    expect((await viewer.get(at)).status()).toBe(403);
+    expect(await call("AgentPorts", name)).toEqual([{ port: 18081, local: expect.any(Number), shared: ext }]);
+  } finally {
+    await call("ComposeAction", { key: "share-2", project: box.project, files: [box.file], action: "purge" }).catch(() => {});
+    await call("AgentForget", name).catch(() => {});
   }
 });
 

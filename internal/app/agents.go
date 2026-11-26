@@ -336,7 +336,11 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 		w("    command: [\"sh\", \"-c\", %s, \"boxforge\", \"sh\", \"-c\", %s]\n", y(agentWrap), y(command))
 		w("    working_dir: /workspace\n")
 		if service != "agent" {
-			w("    restart: unless-stopped\n    depends_on: [agent]\n")
+			// One box with the agent: the same processes seen (a gateway
+			// started in a terminal is known to the one kept running, and a
+			// lock it left is checked, not guessed at) and the same
+			// localhost.
+			w("    restart: unless-stopped\n    depends_on: [agent]\n    pid: \"service:agent\"\n")
 		}
 		w("    labels:\n      io.boxforge.agent: %s\n      io.boxforge.agent.part: %s\n", y(s.Name), service)
 		w("    volumes:\n      - %s\n", y(host(s.Workspace)+":/workspace"))
@@ -371,10 +375,12 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 		if s.ReadOnlyRoot {
 			w("    read_only: true\n    tmpfs: [/tmp]\n")
 		}
-		switch s.Network {
-		case "none":
+		switch {
+		case service != "agent":
+			w("    network_mode: \"service:agent\"\n")
+		case s.Network == "none":
 			w("    network_mode: none\n")
-		case "ai":
+		case s.Network == "ai":
 			w("    networks: [inside]\n")
 		}
 		// No published ports: they are opened on this PC by BoxForge
@@ -452,9 +458,7 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 // portHolder is the part of the box its ports lead to: the service when
 // there is one (a gateway's page), else the box itself.
 func portHolder(s AgentSpec) string {
-	if s.Service != "" {
-		return "service"
-	}
+	// The service shares the agent's network: its pages are the agent's localhost.
 	return "agent"
 }
 

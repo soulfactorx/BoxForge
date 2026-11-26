@@ -217,7 +217,7 @@ BoxForge가 만든 클러스터만 다룬다. 임의의 kubeconfig는 없다. �
 - **포트**: 엔진이 공개하지 않는다(만들 때만 정해지고, 내부 네트워크는 공개할 수도 없음). BoxForge가 이 PC의 127.0.0.1에서 받아 연결마다 엔진으로 상자 안에서 `localhost:포트`에 잇는다(`agents_ports.go`: 상자의 node로, 없으면 Kubernetes 중계의 nc 스크립트로; `carryIn`). 그래서 바로 열고 닫히고(상자를 다시 만들지 않음), 어느 네트워크에서든 되고, localhost에서만 듣는 프로그램에도 닿는다. 설정의 포트는 제어판을 열 때 다시 연다(`AgentPortsEnsure`). BoxForge가 켜져 있는 동안만 열린다.
 - **브라우저 상자**: `jlesage/firefox`(`BOXFORGE_BROWSER_IMAGE`)를 `network_mode: service:<웹 화면을 내는 쪽>`으로 둔다. 그 컨테이너의 localhost가 곧 에이전트의 화면이라 안전한 주소(localhost)를 요구하는 화면(OpenClaw)도 열리고, 그 밖에는 상자만큼만 닿는다. 시작할 때만 root인 이미지라 `cap_drop: ALL`에 시작에 필요한 것(CHOWN · DAC_OVERRIDE · FOWNER · SETGID · SETUID · KILL · NET_BIND_SERVICE)만 더하고 권한 올리기를 막는다. 주소는 프로필의 `user.js` 시작 페이지로 쓰고 Firefox를 끄면 이미지가 다시 켜며 연다(DBus가 없어 실행 중인 Firefox에 넘길 수 없음). 그 화면(5800)은 포트처럼 이 PC에 연다: PC에는 그림만 오고 에이전트의 페이지 코드는 PC 브라우저에서 돌지 않는다.
 - **OpenClaw 화면**: 게이트웨이는 `--bind loopback`(상자의 localhost에만)으로 늘 켜 두고, `openclaw dashboard --json`의 한 번 쓰는 로그인 링크(`browserUrl`)를 PC 브라우저(포트 중계, 포트가 다르면 링크 속 `gatewayUrl`도 바꿈) 또는 브라우저 상자로 연다(`AgentWebLink`).
-- **늘 켜 두기**: 같은 이미지 · 같은 보호의 `service` 서비스(`restart: unless-stopped`)로 에이전트의 게이트웨이(OpenClaw `gateway --port 18789 --bind lan`, Hermes `gateway`)를 돌린다. 셸 상자와 따로라서 서비스가 죽어도 터미널은 남는다.
+- **늘 켜 두기**: 같은 이미지 · 같은 보호의 `service` 서비스(`restart: unless-stopped`, 상자와 프로세스 공간 · 네트워크를 함께 씀: `pid` · `network_mode: service:agent`. 터미널에서 켠 게이트웨이와 그 잠금을 서로 알아보고, localhost가 같다)로 에이전트의 게이트웨이(OpenClaw `gateway --port 18789 --bind lan`, Hermes `gateway`)를 돌린다. 셸 상자와 따로라서 서비스가 죽어도 터미널은 남는다.
 - **제어판**: 터미널은 `Exec`(`AgentTermOpen`) · 외부 터미널. 바뀐 파일은 작업 폴더가 git이면 `git status`/`git diff HEAD`, 아니면 상자를 만들거나 마지막으로 저장한 때 이후(`find -newermt`). 저장은 `Archive(/workspace)`를 상자가 모르는 볼륨 `bfa-<이름>-snap-<시각>`에 담고, 되돌리기는 상자 사용자로 작업 폴더를 비운 뒤 그 볼륨을 `Put`한다(소유자는 tar대로). 업데이트는 `compose build --pull --no-cache` 후 `up --build`. 삭제는 `down --volumes --rmi local` 후 복사본 볼륨과 설정 폴더를 지운다(작업 폴더는 남음).
 - 원격 엔진(SSH · 다른 PC)에서는 작업 폴더 · 키 파일이 그 엔진의 PC에 없으므로 쓸 수 없다.
 
@@ -258,6 +258,7 @@ Kiri 엔진의 설명은 Docker와 모양이 조금 다르다(실제 사용자�
 - 다른 사이트의 페이지가 보낸 요청(`Origin` 불일치)은 거절한다.
 - 암호화 없이는 네트워크에 열리지 않는다(`-tls`로 직접 만든 인증서, 또는 가진 인증서, 또는 앞단 프록시가 맡는다는 명시).
 - 서버의 화면에 창을 띄우는 일(외부 터미널, 엔진 설치)은 거절한다.
+- AI 에이전트 상자의 포트(OpenClaw 화면 등)를 다른 기기에서 열 때는(`AgentPortShare`) 서버가 그 포트를 자기 HTTPS(같은 인증서)로, `-listen`과 같은 주소의 같은 번호 포트(쓰이면 다음)에 따로 연다. 모든 요청(웹소켓 포함)은 이 사이트의 로그인 쿠키를 확인하고(쿠키는 포트와 관계없이 호스트의 것이라 함께 온다), 보기 전용 · 로그인 없음은 403(`ShareHandler`). 상자 쪽에는 서버에서 연 것처럼(`Host` · `Origin`을 127.0.0.1:포트로) 보내고, 이 사이트의 쿠키는 넘기지 않는다. HTTPS가 아닌 서버(`-insecure-network`, 127.0.0.1)는 이것을 열지 않는다.
 
 서버의 폴더나 파일을 골라야 하는 곳(Compose 프로젝트 폴더, 빌드할 폴더 등)에서는, 운영체제의 파일 창이 없으므로 화면이 서버의 폴더 목록을 받아 직접 고르는 창을 그린다(`Browse`, 보기 전용 계정에는 닫혀 있다).
 

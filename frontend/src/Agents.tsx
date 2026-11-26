@@ -1017,6 +1017,9 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
   );
 }
 
+// The browser box's own page (its picture), in the box's network.
+const browserPort = 5800;
+
 /** Its web pages and ports: opened on this PC by BoxForge, at once, the box running on. */
 function WebTab(props: {
   box: Box;
@@ -1030,12 +1033,12 @@ function WebTab(props: {
 }) {
   const { box, mine, run, showCli } = props;
   const s = box.spec;
-  const [ports, setPorts] = useState<{ port: number; local: number }[]>([]);
+  const [ports, setPorts] = useState<{ port: number; local: number; shared: number }[]>([]);
   const [adding, setAdding] = useState("");
   const [note, setNote] = useState("");
   const page = mine.find((k) => k.port); // an agent with a web page of its own (OpenClaw)
   const holder = `${box.project}-${s.service ? "service" : "agent"}`;
-  const load = () => call<{ port: number; local: number }[]>("AgentPortsEnsure", s.name).then((p) => setPorts(p ?? []), (e) => setNote(e.message));
+  const load = () => call<{ port: number; local: number; shared: number }[]>("AgentPortsEnsure", s.name).then((p) => setPorts(p ?? []), (e) => setNote(e.message));
   useEffect(() => {
     showCli(`# BoxForge가 이 PC의 127.0.0.1:포트 로 받은 연결을 docker exec ${holder} 로 상자 안의 localhost:포트 에 이어 줍니다`);
     load();
@@ -1056,38 +1059,61 @@ function WebTab(props: {
       load();
     }
   };
-  const openPC = (local: number, path = "") => openURL(`http://127.0.0.1:${local}${path}`);
+  // Where a port of the box is reached from this browser: on this PC (the
+  // desktop app), or, through BoxForge's web server, on the server's own
+  // address over its HTTPS, for the browsers signed in to it.
+  const reach = async (port: number): Promise<string | null> => {
+    let at = 0;
+    if (remote()) {
+      const ok = await run(`# https://${location.hostname}:${port} → ${holder} 안의 localhost:${port} (이 BoxForge에 로그인한 브라우저만)`, async () => (at = await call<number>("AgentPortShare", s.name, port)));
+      load();
+      return ok ? `https://${location.hostname}:${at}` : null;
+    }
+    const ok = await run(`# 127.0.0.1:${port} → ${holder} 안의 localhost:${port}`, async () => (at = await call<number>("AgentPortOpen", s.name, port)));
+    load();
+    return ok ? `http://127.0.0.1:${at}` : null;
+  };
+  const openAt = async (port: number) => {
+    const base = await reach(port);
+    if (base) openURL(base + "/");
+  };
 
   // The agent's own page (OpenClaw), signed in by its one-time link.
   const openPage = async (where: "pc" | "browser") => {
     let link = "";
     if (!(await run(`docker exec ${holder} sh /opt/boxforge/run openclaw dashboard --json`, async () => (link = await call<string>("AgentWebLink", s.name))))) return;
     if (where === "pc") {
-      let local = 0;
-      if (!(await run(`# 127.0.0.1:${page!.port} → ${holder} 안의 localhost:${page!.port}`, async () => (local = await call<number>("AgentPortOpen", s.name, page!.port))))) return;
+      const base = await reach(page!.port!);
+      if (!base) return;
+      // The link names the gateway as the box sees it (127.0.0.1:18789, and
+      // gatewayUrl=ws://127.0.0.1:18789 in it): moved to where this browser reaches it.
+      const b = new URL(base);
       const u = new URL(link);
-      u.hostname = "127.0.0.1";
-      u.port = String(local);
-      // The link also names the gateway's own address (gatewayUrl=ws://127.0.0.1:18789): moved too when the port on this PC differs.
-      if (local !== page!.port) u.hash = u.hash.split(`%3A${page!.port}`).join(`%3A${local}`).split(`:${page!.port}`).join(`:${local}`);
+      u.protocol = b.protocol;
+      u.hostname = b.hostname;
+      u.port = b.port;
+      const was = `ws://127.0.0.1:${page!.port}`;
+      const now = `${b.protocol === "https:" ? "wss" : "ws"}://${b.host}`;
+      u.hash = u.hash.split(encodeURIComponent(was)).join(encodeURIComponent(now)).split(was).join(now);
       openURL(u.toString());
-      load();
     } else {
-      let local = 0;
-      if (!(await run(`# 브라우저 상자에서 ${link.split("#")[0]} 열기`, async () => (local = await call<number>("AgentBrowserOpen", s.name, link))))) return;
+      if (!(await run(`# 브라우저 상자에서 ${link.split("#")[0]} 열기`, () => call<number>("AgentBrowserOpen", s.name, link)))) return;
       // The browser starts again with the page: a moment before its picture shows it.
-      setTimeout(() => openPC(local), 2500);
+      setTimeout(() => openAt(browserPort), 2500);
     }
   };
   const openBrowser = async () => {
-    let local = 0;
-    if (await run(`# 127.0.0.1:5800 → ${box.project}-browser 의 화면`, async () => (local = await call<number>("AgentBrowserOpen", s.name, "")))) openPC(local);
+    if (await run(`# ${box.project}-browser 의 화면`, () => call<number>("AgentBrowserOpen", s.name, ""))) openAt(browserPort);
   };
   const browserUp = props.browser?.state === "running";
 
   return (
     <div className="agent-web">
-      {remote() && <p className="warn">웹 서버로 접속한 경우: 아래 포트는 BoxForge가 도는 서버 PC에서 열립니다. 이 브라우저의 PC가 아니라서 바로 열리지 않을 수 있습니다.</p>}
+      {remote() && (
+        <p className="note-box">
+          웹 서버로 접속 중입니다: 상자의 화면과 포트는 BoxForge 서버의 같은 번호 포트(HTTPS)로 열리고, 이 BoxForge에 로그인한 브라우저에서만 열립니다. 서버에 방화벽이나 포트 포워딩이 있으면 그 번호(예: 18789)를 열어 두세요.
+        </p>
+      )}
       {page && (
         <section className="web-card" data-testid="agent-page">
           <h3>{`${page.name} 화면`}</h3>
@@ -1107,7 +1133,7 @@ function WebTab(props: {
           {s.service && props.service?.state !== "running" && <p className="warn">{`게이트웨이(${box.project}-service)가 돌고 있지 않습니다: ${props.service?.status ?? "아직 만들어지지 않음"}. "그래프 · 로그"에서 이유를 볼 수 있습니다.`}</p>}
           <div className="actions">
             <button type="button" className="primary" onClick={() => openPage("pc")}>
-              내 PC 브라우저로 열기
+              {remote() ? "이 기기 브라우저로 열기" : "내 PC 브라우저로 열기"}
             </button>
             {s.browser ? (
               <button type="button" disabled={!browserUp} title={browserUp ? "" : "브라우저 상자가 아직 켜지지 않았습니다"} onClick={() => openPage("browser")}>
@@ -1151,7 +1177,7 @@ function WebTab(props: {
             <thead>
               <tr>
                 <th>상자 안</th>
-                <th>내 PC</th>
+                <th>{remote() ? "열린 곳" : "내 PC"}</th>
                 <th />
               </tr>
             </thead>
@@ -1159,11 +1185,11 @@ function WebTab(props: {
               {ports.map((p) => (
                 <tr key={p.port}>
                   <td className="mono">localhost:{p.port}</td>
-                  <td className="mono">{p.local ? `127.0.0.1:${p.local}` : "닫힘"}</td>
+                  <td className="mono">{remote() ? (p.shared ? `https://${location.hostname}:${p.shared}` : "아직 안 엶") : p.local ? `127.0.0.1:${p.local}` : "닫힘"}</td>
                   <td className="row-actions">
-                    {p.local > 0 && (
-                      <button type="button" className="link" onClick={() => openPC(p.local)}>
-                        내 PC 브라우저로
+                    {(p.local > 0 || remote()) && (
+                      <button type="button" className="link" onClick={() => openAt(p.port)}>
+                        {remote() ? "이 기기에서 열기" : "내 PC 브라우저로"}
                       </button>
                     )}
                     {s.browser && (
@@ -1172,9 +1198,8 @@ function WebTab(props: {
                         className="link"
                         disabled={!browserUp}
                         onClick={async () => {
-                          let local = 0;
-                          if (await run(`# 브라우저 상자에서 http://127.0.0.1:${p.port}/ 열기`, async () => (local = await call<number>("AgentBrowserOpen", s.name, `http://127.0.0.1:${p.port}/`))))
-                            setTimeout(() => openPC(local), 2500);
+                          if (await run(`# 브라우저 상자에서 http://127.0.0.1:${p.port}/ 열기`, () => call<number>("AgentBrowserOpen", s.name, `http://127.0.0.1:${p.port}/`)))
+                            setTimeout(() => openAt(browserPort), 2500);
                         }}
                       >
                         브라우저 상자로

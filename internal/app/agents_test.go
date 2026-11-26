@@ -21,7 +21,7 @@ func TestAgentFiles(t *testing.T) {
 	c := f["compose.yaml"]
 	for _, want := range []string{"name: bfa-pi-work", "container_name: bfa-pi-work-agent", "container_name: bfa-pi-work-service", "container_name: bfa-pi-work-egress",
 		"cap_drop: [ALL]", "no-new-privileges:true", "pids_limit: 512", "mem_limit: 4096m", "cpus: 2", "internal: true", "HTTPS_PROXY: http://egress:8888",
-		"file: ./secrets.env", "container_name: bfa-pi-work-browser", `network_mode: "service:service"`, "cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, KILL, NET_BIND_SERVICE]", "browser: {}", `"` + ws + `:/workspace"`, "home:/home/agent"} {
+		"file: ./secrets.env", "container_name: bfa-pi-work-browser", `network_mode: "service:agent"`, `pid: "service:agent"`, "cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, KILL, NET_BIND_SERVICE]", "browser: {}", `"` + ws + `:/workspace"`, "home:/home/agent"} {
 		if !strings.Contains(c, want) {
 			t.Fatalf("compose.yaml lacks %q:\n%s", want, c)
 		}

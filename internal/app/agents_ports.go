@@ -25,8 +25,9 @@ import (
 // AgentPort is one of a box's ports and where it is open on this PC
 // (0 while it isn't).
 type AgentPort struct {
-	Port  int `json:"port"`
-	Local int `json:"local"`
+	Port   int `json:"port"`
+	Local  int `json:"local"`
+	Shared int `json:"shared"` // open to other devices on this web server's port (0: not)
 }
 
 type boxPort struct {
@@ -111,6 +112,7 @@ func (a *App) AgentPortOpen(name string, port int) (int, error) {
 // AgentPortClose closes one of a box's ports on this PC.
 func (a *App) AgentPortClose(name string, port int) {
 	key := fmt.Sprintf("%s:%d", name, port)
+	unshare(key, true)
 	boxPorts.Lock()
 	p := boxPorts.all[key]
 	delete(boxPorts.all, key)
@@ -123,6 +125,7 @@ func (a *App) AgentPortClose(name string, port int) {
 
 // closeBoxPorts closes all of a box's ports (it is being taken away).
 func closeBoxPorts(name string) {
+	unshare(name+":", false)
 	boxPorts.Lock()
 	var gone []*boxPort
 	for k, p := range boxPorts.all {
@@ -155,6 +158,11 @@ func (a *App) AgentPorts(name string) ([]AgentPort, error) {
 			if p := boxPorts.all[fmt.Sprintf("%s:%d", name, port)]; p != nil {
 				ap.Local = p.local
 			}
+			shares.Lock()
+			if sp := shares.all[fmt.Sprintf("%s:%d", name, port)]; sp != nil {
+				ap.Shared = sp.ext
+			}
+			shares.Unlock()
 			out = append(out, ap)
 		}
 	}
@@ -350,4 +358,75 @@ func firstLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// Sharing a box's port with other devices: only BoxForge's web server can,
+// and only over its own HTTPS, to the browsers signed in to it (see
+// webserver.ShareHandler). The desktop app shares nothing.
+
+var shareHook func(port int, target string) (int, func(), error)
+
+// SetShare gives the app the web server's way of sharing a port: it serves
+// target on port (or the next free one) and says which, and how to stop.
+func SetShare(f func(port int, target string) (int, func(), error)) { shareHook = f }
+
+type sharedPort struct {
+	ext  int
+	stop func()
+}
+
+var shares = struct {
+	sync.Mutex
+	all map[string]*sharedPort // like boxPorts, by "name:port"
+}{all: map[string]*sharedPort{}}
+
+// AgentPortShare opens one of a box's ports for the browsers signed in to
+// this web server, from other devices: on the server's own port of the same
+// number (or the next free one), over its HTTPS. It returns that port.
+func (a *App) AgentPortShare(name string, port int) (int, error) {
+	if shareHook == nil {
+		return 0, fmt.Errorf("다른 기기에서 여는 것은 BoxForge 웹 서버에서만 됩니다")
+	}
+	key := fmt.Sprintf("%s:%d", name, port)
+	shares.Lock()
+	if sp := shares.all[key]; sp != nil {
+		shares.Unlock()
+		return sp.ext, nil
+	}
+	shares.Unlock()
+	// One of the box's ports from now on, as one opened on its page is.
+	local, err := a.AgentPortAdd(name, port)
+	if err != nil {
+		return 0, err
+	}
+	ext, stop, err := shareHook(port, fmt.Sprintf("127.0.0.1:%d", local))
+	if err != nil {
+		return 0, err
+	}
+	shares.Lock()
+	if old := shares.all[key]; old != nil { // shared meanwhile
+		shares.Unlock()
+		stop()
+		return old.ext, nil
+	}
+	shares.all[key] = &sharedPort{ext: ext, stop: stop}
+	shares.Unlock()
+	return ext, nil
+}
+
+// unshare stops sharing what matches: one port ("name:port") or a whole
+// box ("name:").
+func unshare(prefix string, exact bool) {
+	shares.Lock()
+	var gone []*sharedPort
+	for k, sp := range shares.all {
+		if (exact && k == prefix) || (!exact && strings.HasPrefix(k, prefix)) {
+			gone = append(gone, sp)
+			delete(shares.all, k)
+		}
+	}
+	shares.Unlock()
+	for _, sp := range gone {
+		sp.stop()
+	}
 }
