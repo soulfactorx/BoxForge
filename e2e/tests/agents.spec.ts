@@ -369,7 +369,6 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
     await page.getByTestId("agent-bfe2e-oc").getByRole("button", { name: "제어판 열기" }).click();
   };
   if (standin) {
-    await open(page);
     const made = await (
       await request.post("/api/call/AgentSave", {
         data: [{ name: "bfe2e-oc", agents: ["openclaw"], workspace: work, network: "full", ports: [18789], service: "openclaw gateway --port 18789 --bind loopback", memory: 4, cpus: 2, pids: 512 }, true],
@@ -377,6 +376,7 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
     ).json();
     sh(`docker tag ${standin} boxforge-agent/bfe2e-oc:latest`);
     sh(`docker compose -f '${made.result.file}' up -d --no-build`);
+    await open(page);
     await panel();
   } else {
     await make(page, "bfe2e-oc", async (d) => {
