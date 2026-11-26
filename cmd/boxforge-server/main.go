@@ -307,7 +307,7 @@ var lookOnly = []string{
 	"Engine", "Engines", "EngineLabel", "MemoryUsed", "Version", "CheckUpdate", "Setting", "Network", "Tray", "SetupStatus", "DockerCLI",
 	"Containers", "InspectContainer", "StartLogs", "StopLogs", "StartStats", "StopStats", "ContainerSizes",
 	"Images", "ImageDefaults", "ImageHistory", "SearchImages", "Volumes", "VolumeSizes", "Networks", "DiskUsage", "Registries",
-	"ComposeVersion", "ComposeLogs", "ComposeHints",
+	"ComposeVersion", "ComposeLogs", "ComposeHints", "ComposeJobs",
 	"AgentCatalog", "AgentBoxes", "AgentAllowFor", "AgentConnections", "AgentSnapshots", "AgentPorts",
 	"Refresh", "ContainerTop", "InspectImage", "KubeStatus", "KubeLogTail", "KubeGet", "KubeYAML", "KubeDescribe", "KubeLogs", "KubeProjectLogs", "KubeForwards",
 }

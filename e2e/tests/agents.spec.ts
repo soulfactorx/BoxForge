@@ -206,6 +206,27 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   expect(all).toContain("\n300\n");
   await view.getByRole("button", { name: "닫기" }).click();
   await expect(view).toHaveCount(0);
+  // The head of the panel on a phone: its state on one line, not broken letter by letter.
+  const head = (await mobile.getByTestId("agent-state").boundingBox())!;
+  expect(head.height).toBeLessThan(40);
+
+  // A page opened while a job runs (a browser closed during a build) finds
+  // it, shows what it said, follows it to its end; another start meanwhile is refused.
+  let calls = 0;
+  await mobile.route("**/api/call/ComposeJobs", (r) =>
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ result: [{ key: "earlier-1", project: box, action: "upbuild", running: calls++ < 2, lines: ["#5 [agent 3/4] RUN npm install -g openclaw"] }] }),
+    }),
+  );
+  await mobile.reload();
+  await go(mobile, "agents");
+  await expect(mobile.getByTestId("agent-bfe2e-box")).toContainText("작업 중");
+  await mobile.getByTestId("agent-bfe2e-box").getByRole("button", { name: "제어판 열기" }).click();
+  const out = mobile.getByTestId("agent-output").filter({ visible: true });
+  await expect(out).toContainText("(진행 중이던 작업)");
+  await expect(out).toContainText("RUN npm install -g openclaw");
+  await expect(out).toContainText("끝났습니다", { timeout: 15_000 });
   await phone.close();
 
   await tabs.getByRole("button", { name: "모두 닫기", exact: true }).click();

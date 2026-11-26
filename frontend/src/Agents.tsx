@@ -42,6 +42,22 @@ interface Box {
   keys: string[];
 }
 
+interface Job {
+  key: string;
+  project: string;
+  action: string;
+  running: boolean;
+  error?: string;
+  lines: string[];
+}
+
+const jobLabel: Record<string, string> = {
+  upbuild: "만들고 시작",
+  build: "에이전트 새 버전으로 다시 만들기",
+  stop: "멈추기",
+  purge: "삭제",
+};
+
 interface Snapshot {
   id: string;
   label: string;
@@ -118,9 +134,45 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
   const byName = useMemo(() => new Map(containers.map((c) => [c.name, c])), [containers]);
   const part = (b: Box, p: "agent" | "egress" | "service" | "browser") => byName.get(`${b.project}-${p}`);
 
+  // A job a page started before (the browser closed, another device): found
+  // on the server, followed to its end, its output shown as if started here.
+  const followed = useRef(new Set<string>());
+  useEffect(() => {
+    if (busy || boxes.length === 0) return;
+    let stop = false;
+    let timer = 0;
+    (async () => {
+      const jobs = await call<Job[]>("ComposeJobs").catch(() => [] as Job[]);
+      const j = (jobs ?? []).find((j) => j.running && !followed.current.has(j.key) && boxes.some((b) => b.project === j.project));
+      if (!j || stop) return;
+      const b = boxes.find((b) => b.project === j.project)!;
+      followed.current.add(j.key);
+      setBusy(b.spec.name);
+      setOutput({ title: `${b.spec.name} · ${jobLabel[j.action] ?? j.action} (진행 중이던 작업)`, lines: j.lines.slice(-800) });
+      const off = on("compose", (l: { key: string; line: string }) => {
+        if (l.key === j.key) setOutput((o) => (o ? { ...o, lines: o.lines.concat(l.line).slice(-800) } : o));
+      });
+      const watch = async () => {
+        const now = ((await call<Job[]>("ComposeJobs").catch(() => [] as Job[])) ?? []).find((x) => x.key === j.key);
+        if (now?.running) return void (timer = window.setTimeout(watch, 2000));
+        off();
+        setBusy("");
+        setOutput((o) => (o ? { ...o, lines: o.lines.concat(now?.error ? `✖ 실패했습니다: ${now.error}` : "✔ 끝났습니다.") } : o));
+        load();
+      };
+      timer = window.setTimeout(watch, 2000);
+    })();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [boxes.map((b) => b.project).join()]);
+
   /** Runs one compose command on a box, its output shown as it comes. */
   const compose = async (b: Box, action: "upbuild" | "stop" | "build" | "purge", title: string) => {
-    const key = `a${++serial.current}`;
+    // Unique past this page: a page opened again later follows a job by it.
+    const key = `a${Date.now().toString(36)}-${++serial.current}`;
+    followed.current.add(key);
     const words: Record<string, string> = {
       upbuild: "up -d --build --remove-orphans",
       stop: "stop",

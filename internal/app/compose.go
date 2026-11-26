@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/soulfactorx/boxforge/internal/clirunner"
 )
@@ -110,9 +112,92 @@ func (a *App) ComposeAction(req ComposeRequest) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
-	return clirunner.Run(ctx, dir, env, name, full, func(line string) {
+	job, err := startComposeJob(req)
+	if err != nil {
+		return err
+	}
+	err = clirunner.Run(ctx, dir, env, name, full, func(line string) {
+		job.add(line)
 		a.emit("compose", ComposeLine{Key: req.Key, Line: line})
 	})
+	job.end(err)
+	return err
+}
+
+// ComposeJob is a compose command running (or just ended) for a project:
+// a page opened again while it runs (a browser closed and opened, another
+// device) finds it here, with what it has said so far, and goes on
+// following its "compose" events by its key.
+type ComposeJob struct {
+	Key     string   `json:"key"`
+	Project string   `json:"project"`
+	Action  string   `json:"action"`
+	Started int64    `json:"started"`
+	Running bool     `json:"running"`
+	Error   string   `json:"error,omitempty"`
+	Lines   []string `json:"lines"`
+	ended   time.Time
+}
+
+var composeJobs = struct {
+	sync.Mutex
+	all map[string]*ComposeJob // by project
+}{all: map[string]*ComposeJob{}}
+
+// startComposeJob notes a command starting, or refuses it while another
+// runs for the same project: two at once (a build still going, and "up"
+// pressed again) make the same containers and the second fails.
+func startComposeJob(req ComposeRequest) (*ComposeJob, error) {
+	project := req.Project
+	if project == "" && len(req.Files) > 0 {
+		project = req.Files[0]
+	}
+	composeJobs.Lock()
+	defer composeJobs.Unlock()
+	for k, j := range composeJobs.all { // ended a while ago: forgotten
+		if !j.Running && time.Since(j.ended) > 10*time.Minute {
+			delete(composeJobs.all, k)
+		}
+	}
+	if j := composeJobs.all[project]; j != nil && j.Running {
+		return nil, fmt.Errorf("%s 에서 이미 작업(%s)이 진행 중입니다. 끝난 뒤에 다시 하세요", project, j.Action)
+	}
+	j := &ComposeJob{Key: req.Key, Project: project, Action: req.Action, Started: time.Now().Unix(), Running: true}
+	composeJobs.all[project] = j
+	return j, nil
+}
+
+func (j *ComposeJob) add(line string) {
+	composeJobs.Lock()
+	j.Lines = append(j.Lines, line)
+	if len(j.Lines) > 800 {
+		j.Lines = j.Lines[len(j.Lines)-800:]
+	}
+	composeJobs.Unlock()
+}
+
+func (j *ComposeJob) end(err error) {
+	composeJobs.Lock()
+	j.Running = false
+	j.ended = time.Now()
+	if err != nil {
+		j.Error = err.Error()
+	}
+	composeJobs.Unlock()
+}
+
+// ComposeJobs lists the compose commands running now, and those ended in
+// the last minutes, with what each said.
+func (a *App) ComposeJobs() []ComposeJob {
+	composeJobs.Lock()
+	defer composeJobs.Unlock()
+	out := []ComposeJob{}
+	for _, j := range composeJobs.all {
+		c := *j
+		c.Lines = append([]string(nil), j.Lines...)
+		out = append(out, c)
+	}
+	return out
 }
 
 var composeService = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
