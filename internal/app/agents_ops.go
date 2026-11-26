@@ -716,3 +716,74 @@ func (a *App) AgentSetupNeeded(name string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// AgentGateway is how far the box's gateway is, beyond its container
+// running: still waiting for the setup, or answering on its port (ready).
+type AgentGateway struct {
+	Agent     string `json:"agent"` // the agent it is the gateway of ("" for another service)
+	Setup     bool   `json:"setup"` // its setup isn't done: it waits for that
+	Port      int    `json:"port"`
+	Listening bool   `json:"listening"` // something answers on its port, in the box
+}
+
+// AgentGatewayCheck looks in the box: is the gateway's setup done, and does
+// its port answer yet.
+func (a *App) AgentGatewayCheck(name string) (AgentGateway, error) {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return AgentGateway{}, err
+	}
+	k, ok := serviceKind(s)
+	if !ok {
+		return AgentGateway{}, nil
+	}
+	g := AgentGateway{Agent: k.ID, Port: k.Port}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	box := agentProject(name) + "-agent"
+	if k.Ready != "" {
+		_, _, code, err := a.eng().Containers().Output(ctx, box, []string{"sh", agentRunPath, "sh", "-c", k.Ready}, nil)
+		if err != nil {
+			return g, err
+		}
+		g.Setup = code != 0
+	}
+	if k.Port > 0 && !g.Setup {
+		// The gateway shares the box's network: its localhost is the box's.
+		probe := fmt.Sprintf("require('net').connect(%d,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))", k.Port)
+		_, _, code, err := a.eng().Containers().Output(ctx, box, []string{"node", "-e", probe}, nil)
+		g.Listening = err == nil && code == 0
+	}
+	return g, nil
+}
+
+// AgentVersions is the version of each agent installed in the box (as its
+// own "--version" says it): what "openclaw@latest" was when the box was built.
+func (a *App) AgentVersions(name string) (map[string]string, error) {
+	s, _, err := readAgent(name)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for _, id := range s.Agents {
+		k, _ := agentKind(id)
+		words := strings.Fields(k.Command)
+		if len(words) == 0 {
+			continue
+		}
+		cmd := []string{"sh", agentRunPath, words[0], "--version"}
+		stdout, _, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-agent", cmd, nil)
+		if err != nil || code != 0 {
+			continue
+		}
+		line := strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(stdout)), "\n", 2)[0])
+		// "OpenClaw 2026.11.9 (0032b1d)": the name is said beside it already.
+		line = strings.TrimSpace(strings.TrimPrefix(line, k.Name+" "))
+		if line != "" {
+			out[id] = line
+		}
+	}
+	return out, nil
+}

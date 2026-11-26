@@ -563,13 +563,21 @@ server.listen(8888);
 // instead of failing at once again and again, and starts as soon as the
 // setup in the box's terminal is done.
 func serviceCommand(s AgentSpec) string {
-	for _, id := range s.Agents {
-		k, _ := agentKind(id)
-		if k.Ready == "" || k.Service == "" || !strings.HasPrefix(s.Service, strings.Fields(k.Service)[0]+" ") {
-			continue
-		}
+	if k, ok := serviceKind(s); ok && k.Ready != "" {
 		// No "$" in it: Compose would take that for its own variable.
 		return fmt.Sprintf("if ! %s; then echo 'BoxForge: %s 설정을 기다리는 중입니다. 터미널 탭의 \"%s 설정\"(셸에서 %s)으로 설정을 마치면 바로 켜집니다.'; until %s; do sleep 10; done; fi; exec %s", k.Ready, k.Name, k.Name, k.Setup, k.Ready, s.Service)
 	}
 	return s.Service
+}
+
+// serviceKind is the agent whose gateway the box's service runs (OpenClaw's
+// "openclaw gateway …"), if it is one.
+func serviceKind(s AgentSpec) (AgentKind, bool) {
+	for _, id := range s.Agents {
+		k, _ := agentKind(id)
+		if k.Service != "" && s.Service != "" && strings.HasPrefix(s.Service+" ", strings.Fields(k.Service)[0]+" ") {
+			return k, true
+		}
+	}
+	return AgentKind{}, false
 }

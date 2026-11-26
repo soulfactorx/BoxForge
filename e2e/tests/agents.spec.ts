@@ -400,6 +400,7 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
   await expect.poll(() => sh(`docker logs ${oc}-service 2>&1`, true), { timeout: 60_000 }).toContain("설정을 기다리는 중");
   await page.getByRole("tab", { name: "웹 · 포트" }).click();
   await expect(page.getByTestId("page-setup-needed")).toBeVisible();
+  await expect(page.getByTestId("gateway-stage")).toContainText("게이트웨이: 설정을 기다리는 중", { timeout: 30_000 });
 
   // The page left half-way: its setup ends with it (else the next one
   // finds the last one still holding its lock).
@@ -407,10 +408,23 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
   await page.reload();
   await expect.poll(procs, { timeout: 30_000 }).not.toContain("onboard --mode");
 
-  // Set up (as its wizard would): the gateway starts by itself, once.
+  // Opened again it starts its setup again; set up meanwhile (as its wizard
+  // would, which may go on into OpenClaw's chat instead of ending): the screen
+  // sees it, and the gateway starts by itself, once.
+  await panel();
+  await expect(page.getByTestId("setup-needed")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("agent-facts")).toContainText(/OpenClaw \(\d/, { timeout: 60_000 }); // its version
+  await page.getByRole("button", { name: "OpenClaw 설정 닫기" }).click();
+  await expect.poll(procs, { timeout: 30_000 }).not.toContain("onboard --mode");
   sh(`docker exec ${oc}-agent sh /opt/boxforge/run openclaw onboard --non-interactive --accept-risk --mode local --no-install-daemon --skip-health --auth-choice skip`);
-  await expect.poll(() => sh(`docker logs ${oc}-service 2>&1`, true), { timeout: 180_000 }).toContain("[gateway] ready");
+  await expect(page.getByTestId("setup-done")).toContainText("OpenClaw 설정이 끝났습니다", { timeout: 30_000 });
+  await expect(page.getByTestId("setup-needed")).toHaveCount(0);
+  await page.getByRole("button", { name: "웹 화면 열러 가기" }).click();
+  // Its state says how far it is: ready once it answers on its port.
+  await expect(page.getByTestId("gateway-stage")).toContainText("게이트웨이: 준비됨", { timeout: 180_000 });
+  expect(sh(`docker logs ${oc}-service 2>&1`, true)).toContain("[gateway] ready");
   expect(sh(`docker inspect -f '{{.RestartCount}}' ${oc}-service`)).toBe("0");
+  await page.reload();
   await panel();
   await expect(page.getByRole("tab", { name: "셸" })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId("setup-needed")).toHaveCount(0);

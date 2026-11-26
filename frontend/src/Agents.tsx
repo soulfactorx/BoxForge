@@ -705,6 +705,11 @@ function Control(props: {
     if (up) call("AgentPortsEnsure", s.name).catch(() => {});
   }, [up, s.name, (s.ports ?? []).join()]);
   const mine = s.image ? [] : kinds.filter((k) => s.agents.includes(k.id));
+  // What was installed when the box was built ("@latest" then): asked of the agents themselves.
+  const [versions, setVersions] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (up && !s.image) call<Record<string, string>>("AgentVersions", s.name).then((v) => setVersions(v ?? {}), () => {});
+  }, [up, s.name, s.agents.join()]);
   const tabs: [Tab, string][] = [
     ["terminal", "터미널"],
     ["web", "웹 · 포트"],
@@ -754,10 +759,10 @@ function Control(props: {
         )}
         <IconButton icon="trash" label="상자 삭제" tone="danger" disabled={busy} onClick={() => setRemoving(true)} />
       </header>
-      <dl className="project-meta">
+      <dl className="project-meta" data-testid="agent-facts">
         <div>
           <dt>에이전트</dt>
-          <dd>{s.image ? `${s.image} (${s.command})` : mine.map((k) => k.name).join(", ")}</dd>
+          <dd>{s.image ? `${s.image} (${s.command})` : mine.map((k) => (versions[k.id] ? `${k.name} (${versions[k.id]})` : k.name)).join(", ")}</dd>
         </div>
         <div>
           <dt>작업 폴더</dt>
@@ -805,7 +810,7 @@ function Control(props: {
         <>
           {/* Kept open while another tab is looked at: what runs in it goes on, and is there on coming back. */}
           <div hidden={tab !== "terminal"}>
-            <TermTab box={box} mine={mine} run={run} showCli={showCli} onCount={props.onTerms} />
+            <TermTab box={box} mine={mine} run={run} showCli={showCli} onCount={props.onTerms} onWeb={() => setTab("web")} />
           </div>
           {tab === "web" && <WebTab box={box} mine={mine} service={service} browser={props.browser} run={run} showCli={showCli} compose={props.compose} reload={props.reload} />}
           {tab === "changes" && <ChangesTab box={box} run={run} showCli={showCli} />}
@@ -856,7 +861,21 @@ interface Term {
 }
 
 /** A box's terminals, as an editor's tabs: each one open until it is closed. */
-function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[]; run: Run; showCli: (cmd: string) => void; onCount: (n: number) => void }) {
+function TermTab({
+  box,
+  mine,
+  run,
+  showCli,
+  onCount,
+  onWeb,
+}: {
+  box: Box;
+  mine: Kind[];
+  run: Run;
+  showCli: (cmd: string) => void;
+  onCount: (n: number) => void;
+  onWeb: () => void;
+}) {
   // An agent that is a gateway with a setup (OpenClaw, Hermes) isn't opened by
   // itself: its command starts that setup, every time. A shell, or another
   // agent of the box, is.
@@ -879,15 +898,27 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
   const [active, setActive] = useState(terms[0]?.key ?? 0);
   const [unset, setUnset] = useState<string[]>([]);
   const [checked, setChecked] = useState(!withSetup);
+  const [done, setDone] = useState<string[]>([]); // set up while this was open
   const check = async () => {
     try {
-      const need = await call<string[]>("AgentSetupNeeded", box.spec.name);
-      setUnset(need ?? []);
-      return need ?? [];
+      const need = (await call<string[]>("AgentSetupNeeded", box.spec.name)) ?? [];
+      setUnset((was) => {
+        const now = was.filter((id) => !need.includes(id));
+        if (now.length) setDone((d) => [...new Set([...d, ...now])]);
+        return need;
+      });
+      return need;
     } catch {
       return [];
     }
   };
+  // The setup's wizard may go on into the agent itself (OpenClaw's chat)
+  // instead of ending: its end is seen in the box, every few seconds.
+  useEffect(() => {
+    if (!unset.length) return;
+    const t = window.setInterval(check, 5000);
+    return () => clearInterval(t);
+  }, [unset.length]);
   useEffect(() => {
     if (!withSetup) return;
     check().then((need) => {
@@ -1043,6 +1074,25 @@ function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[];
           </p>
         );
       })}
+      {done.map((id) => {
+        const k = mine.find((x) => x.id === id);
+        if (!k) return null;
+        return (
+          <p key={id} className="note-box ok" data-testid="setup-done">
+            {`${k.name} 설정이 끝났습니다. 게이트웨이가 저절로 켜지고 있습니다(30초~1분). 이 터미널은 그대로 써도 됩니다.`}
+            <span>
+              {k.port && (
+                <button type="button" className="primary" onClick={onWeb}>
+                  웹 화면 열러 가기
+                </button>
+              )}
+              <button type="button" className="link" onClick={() => setDone((d) => d.filter((x) => x !== id))}>
+                닫기
+              </button>
+            </span>
+          </p>
+        );
+      })}
       {!checked && <p className="muted">상자를 살펴보는 중…</p>}
       {checked && terms.length === 0 && <p className="empty">열린 터미널이 없습니다. 위의 "새 터미널"에서 여세요.</p>}
       {terms.map((t) => (
@@ -1106,9 +1156,14 @@ function WebTab(props: {
   const [unset, setUnset] = useState(false);
   useEffect(() => {
     if (!page?.setup) return;
-    call<string[]>("AgentSetupNeeded", s.name)
-      .then((need) => setUnset((need ?? []).includes(page.id)))
-      .catch(() => setUnset(false));
+    const look = () =>
+      call<string[]>("AgentSetupNeeded", s.name)
+        .then((need) => setUnset((need ?? []).includes(page.id)))
+        .catch(() => setUnset(false));
+    look();
+    // Set up in the terminal meanwhile: seen here too.
+    const t = window.setInterval(look, 5000);
+    return () => clearInterval(t);
   }, [page?.id, props.service?.state]);
   const holder = `${box.project}-agent`; // the service shares its network and processes
   const load = () => call<{ port: number; local: number; shared: number }[]>("AgentPortsEnsure", s.name).then((p) => setPorts(p ?? []), (e) => setNote(e.message));
@@ -1190,7 +1245,7 @@ function WebTab(props: {
       {s.service && (
         <section className="web-card">
           <h3>늘 켜 둔 서비스</h3>
-          <Gateway box={box} service={props.service} run={run} />
+          <Gateway box={box} mine={mine} service={props.service} run={run} />
         </section>
       )}
       {page && (
@@ -1326,16 +1381,44 @@ function WebTab(props: {
 }
 
 /** The gateway kept running: whether it runs, what it last said, and starting it again. */
-function Gateway({ box, service, run }: { box: Box; service?: Container; run: Run }) {
+interface GatewayCheck {
+  agent: string;
+  setup: boolean;
+  port: number;
+  listening: boolean;
+}
+
+function Gateway({ box, mine, service, run }: { box: Box; mine: Kind[]; service?: Container; run: Run }) {
   const [log, setLog] = useState("");
   const [shown, setShown] = useState(false);
-  const read = () => call<string>("AgentServiceLog", box.spec.name).then((l) => setLog(l ?? ""), () => setLog(""));
+  const [check, setCheck] = useState<GatewayCheck | null>(null);
+  const up = service?.state === "running";
+  const read = () => {
+    call<string>("AgentServiceLog", box.spec.name).then((l) => setLog(l ?? ""), () => setLog(""));
+    // Its container running isn't it ready: how far it is, seen in the box.
+    if (up) call<GatewayCheck>("AgentGatewayCheck", box.spec.name).then(setCheck, () => setCheck(null));
+    else setCheck(null);
+  };
   useEffect(() => {
     read();
     const t = window.setInterval(read, 5000);
     return () => clearInterval(t);
   }, [box.spec.name, service?.state]);
-  const up = service?.state === "running";
+  const who = mine.find((k) => k.id === check?.agent);
+  // What "running" means, in words: waiting for its setup, starting, or ready.
+  const [stage, tone, more] = !service
+    ? ["아직 만들어지지 않음", "", ""]
+    : !up
+      ? [stateLabel[service.state] ?? service.state, "", service.state === "restarting" ? "켜지자마자 꺼지고 있습니다. 아래 기록에서 이유를 보세요." : ""]
+      : !check
+        ? ["실행 중", "running", ""]
+        : check.setup
+          ? ["설정을 기다리는 중", "waiting", `${who?.name ?? "에이전트"} 설정이 끝나면 저절로 켜집니다. "터미널" 탭의 "${who?.name ?? ""} 설정"으로 마치세요.`]
+          : check.port && !check.listening
+            ? ["켜는 중…", "waiting", `프로그램은 돌고 있고, 아직 포트 ${check.port}에서 답하지 않습니다. 처음 켤 때는 30초~1분쯤 걸립니다.`]
+            : check.port
+              ? ["준비됨", "running", `포트 ${check.port}에서 답하고 있습니다. 아래에서 화면을 열 수 있습니다.`]
+              : ["실행 중", "running", ""];
   const locked = /recover-lock|cannot verify Gateway ownership/.test(log);
   const lines = log.trimEnd().split("\n");
   const restart = () =>
@@ -1343,12 +1426,13 @@ function Gateway({ box, service, run }: { box: Box; service?: Container; run: Ru
   return (
     <div className="gateway" data-testid="agent-gateway">
       <p>
-        <span className={"state " + (up ? "running" : "")}>
+        <span className={"state " + tone} data-testid="gateway-stage">
           <span className="dot" />
-          {`게이트웨이: ${service ? (stateLabel[service.state] ?? service.state) : "아직 만들어지지 않음"}`}
+          {`게이트웨이: ${stage}`}
         </span>{" "}
         <span className="muted">{service?.status}</span>
       </p>
+      {more && <p className="help">{more}</p>}
       {locked && (
         <p className="warn">
           게이트웨이의 잠금이 전에 끝난 게이트웨이에게 남아 있습니다. 셸에서 openclaw gateway recover-lock 을 실행하고, 그것이 알려 주는 확인 명령(--confirm …)을 실행한 뒤 "게이트웨이 다시 켜기"를 누르세요.
@@ -1362,6 +1446,7 @@ function Gateway({ box, service, run }: { box: Box; service?: Container; run: Ru
           {shown ? "기록 접기" : "게이트웨이 기록 보기"}
         </button>
       </div>
+      {shown && <p className="help">게이트웨이가 쓴 글 그대로입니다(최근 40줄). OpenClaw는 준비되면 "[gateway] ready"라고 씁니다.</p>}
       {shown && <pre className="log-box gateway-log">{lines.slice(-40).join("\n") || "기록이 없습니다."}</pre>}
     </div>
   );

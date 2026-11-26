@@ -1781,5 +1781,15 @@
  "설정 시작": "Start setup",
  "if ! {0}; then echo 'BoxForge: {1} 설정을 기다리는 중입니다. 터미널 탭의 \"{2} 설정\"(셸에서 {3})으로 설정을 마치면 바로 켜집니다.'; until {4}; do sleep 10; done; fi; exec {5}": "if ! {0}; then echo 'BoxForge: {1} is waiting to be set up. Finish setting it up with \"{2} setup\" in the terminal tab (in a shell: {3}) and it starts at once.'; until {4}; do sleep 10; done; fi; exec {5}",
  "설정(예: openclaw onboard)이 끝날 때까지 기다렸다가 저절로 켜집니다. 상자의 터미널이 설정부터 엽니다.": "It waits until the setup (such as openclaw onboard) is done, then starts by itself. The box's terminal opens with the setup.",
- "먼저 상자의 터미널에서 설정을 마친 뒤 켜세요. 설정 전에는 시작하자마자 꺼질 수 있습니다.": "Finish the setup in the box's terminal first, then turn this on. Before the setup it may stop as soon as it starts."
+ "먼저 상자의 터미널에서 설정을 마친 뒤 켜세요. 설정 전에는 시작하자마자 꺼질 수 있습니다.": "Finish the setup in the box's terminal first, then turn this on. Before the setup it may stop as soon as it starts.",
+ "{0} 설정이 끝나면 저절로 켜집니다. \"터미널\" 탭의 \"{1} 설정\"으로 마치세요.": "It starts by itself once {0} is set up. Finish that with \"{1} setup\" in the \"Terminal\" tab.",
+ "{0} 설정이 끝났습니다. 게이트웨이가 저절로 켜지고 있습니다(30초~1분). 이 터미널은 그대로 써도 됩니다.": "{0} is set up. Its gateway is starting by itself (30 seconds to a minute). You can keep using this terminal.",
+ "게이트웨이가 쓴 글 그대로입니다(최근 40줄). OpenClaw는 준비되면 \"[gateway] ready\"라고 씁니다.": "What the gateway wrote, as it is (the last 40 lines). OpenClaw writes \"[gateway] ready\" once it is ready.",
+ "설정을 기다리는 중": "waiting for its setup",
+ "웹 화면 열러 가기": "Go open its web page",
+ "준비됨": "ready",
+ "켜는 중…": "starting…",
+ "켜지자마자 꺼지고 있습니다. 아래 기록에서 이유를 보세요.": "It stops as soon as it starts. See why in the log below.",
+ "포트 {0}에서 답하고 있습니다. 아래에서 화면을 열 수 있습니다.": "It answers on port {0}. You can open its page below.",
+ "프로그램은 돌고 있고, 아직 포트 {0}에서 답하지 않습니다. 처음 켤 때는 30초~1분쯤 걸립니다.": "The program is running, but doesn't answer on port {0} yet. The first start takes 30 seconds to a minute."
 }
