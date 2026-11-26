@@ -80,7 +80,7 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.evaluate(() => navigator.clipboard.writeText("echo pasted-$((40+2))"));
   await pane.locator(".term-box").click({ button: "right" });
-  await expect(page.getByRole("menuitem", { name: /복사/ })).toBeDisabled();
+  await expect(page.getByRole("menuitem", { name: /^복사/ })).toBeDisabled();
   await page.getByRole("menuitem", { name: /붙여넣기/ }).click();
   await expect(rows).toContainText("echo pasted-$((40+2))");
   await pane.locator(".xterm").click();
@@ -89,7 +89,7 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await pane.locator(".term-box").click({ button: "right" });
   await page.getByRole("menuitem", { name: "모두 선택" }).click();
   await pane.locator(".term-box").click({ button: "right" });
-  await page.getByRole("menuitem", { name: /복사/ }).click();
+  await page.getByRole("menuitem", { name: /^복사/ }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("pasted-42");
 
   // The special-key bar (shown on a phone by itself; here asked for): Ctrl
@@ -186,6 +186,25 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   const knob = (await slider.boundingBox())!;
   await touch(knob.x + knob.width / 2, knob.y + knob.height / 2, area.y + 5);
   await expect.poll(last).toBeLessThan(swiped - 50);
+  // All of it as text, past the screen too: a part selected and copied, then all.
+  await phone.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await mpane.getByTestId("term-keys").getByRole("button", { name: "복사", exact: true }).click();
+  const view = mobile.getByTestId("term-text");
+  const text = view.getByLabel("터미널에 나온 글");
+  await expect(text).toHaveValue(/^1\n2\n3\n/m);
+  await text.evaluate((a: HTMLTextAreaElement) => {
+    const from = a.value.indexOf("\n150\n") + 1;
+    a.setSelectionRange(from, a.value.indexOf("\n153\n"));
+  });
+  await view.getByRole("button", { name: "고른 것 복사" }).click();
+  await expect(view).toContainText("고른 것을 복사했습니다");
+  expect(await mobile.evaluate(() => navigator.clipboard.readText())).toBe("150\n151\n152");
+  await view.getByRole("button", { name: "모두 복사" }).click();
+  const all = await mobile.evaluate(() => navigator.clipboard.readText());
+  expect(all).toContain("\n1\n2\n");
+  expect(all).toContain("\n300\n");
+  await view.getByRole("button", { name: "닫기" }).click();
+  await expect(view).toHaveCount(0);
   await phone.close();
 
   await tabs.getByRole("button", { name: "모두 닫기", exact: true }).click();

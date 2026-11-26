@@ -93,6 +93,24 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       /* for this time only */
     }
   };
+  // All the terminal has shown, as text to select from (the phone's own
+  // selection works there, scrolled past the screen as far as wanted).
+  const [text, setText] = useState<{ text: string; at: number } | null>(null);
+  const openText = () => {
+    const t = xterm.current;
+    if (!t) return;
+    const buf = t.buffer.active;
+    const lines: string[] = [];
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      const s = line?.translateToString(true) ?? "";
+      // A line wrapped on the screen is one line of text.
+      if (line?.isWrapped && lines.length) lines[lines.length - 1] += s;
+      else lines.push(s);
+    }
+    while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    setText({ text: lines.join("\n"), at: buf.viewportY / Math.max(1, buf.length) });
+  };
   const copy = async () => {
     const t = xterm.current;
     if (t?.hasSelection()) await copyText(t.getSelection());
@@ -300,7 +318,7 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       />
       {keysOn ? (
         <div className="term-keys" role="toolbar" aria-label="특수 키" data-testid="term-keys" onPointerDown={(e) => e.preventDefault()}>
-          {/* Two rows of seven, as on a phone's screen; Fn adds three more. */}
+          {/* Two rows of eight, as on a phone's screen; Fn adds three more. */}
           <div className="term-keys-row">
             <button type="button" onClick={() => press("Esc")}>Esc</button>
             <button type="button" onClick={() => press("|")}>|</button>
@@ -310,6 +328,9 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
             <button type="button" aria-label="위" onClick={() => press("Up")}>↑</button>
             <button type="button" className={fn ? "on" : ""} aria-pressed={fn} title="Home · End · PgUp · PgDn · F1~F12" onClick={() => setFn(!fn)}>
               Fn
+            </button>
+            <button type="button" title="지난 출력까지 모두 글로 보고, 골라서 복사" onClick={openText}>
+              복사
             </button>
           </div>
           <div className="term-keys-row">
@@ -323,6 +344,7 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
             <button type="button" aria-label="왼쪽" onClick={() => press("Left")}>←</button>
             <button type="button" aria-label="아래" onClick={() => press("Down")}>↓</button>
             <button type="button" aria-label="오른쪽" onClick={() => press("Right")}>→</button>
+            <button type="button" aria-label="엔터" onClick={() => press("Enter")}>↵</button>
             <button type="button" className="term-keys-hide" aria-label="특수 키 숨기기" onClick={() => showKeys(false)}>
               ×
             </button>
@@ -369,11 +391,15 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
           <button type="button" role="menuitem" onClick={() => (setMenu(null), xterm.current?.selectAll())}>
             모두 선택
           </button>
+          <button type="button" role="menuitem" onClick={() => (setMenu(null), openText())}>
+            글로 보고 골라 복사
+          </button>
           <button type="button" role="menuitem" onClick={() => (setMenu(null), xterm.current?.clear(), xterm.current?.focus())}>
             화면 지우기
           </button>
         </div>
       )}
+      {text !== null && <TextView text={text.text} at={text.at} onClose={() => (setText(null), xterm.current?.focus())} />}
       {pasting && (
         <PasteBox
           onPaste={(t) => {
@@ -403,6 +429,43 @@ function PasteBox({ onPaste }: { onPaste: (text: string) => void }) {
           취소
         </button>
       </span>
+    </div>
+  );
+}
+
+/** The terminal's text, to select from as any text is selected, and copy. */
+function TextView({ text, at, onClose }: { text: string; at: number; onClose: () => void }) {
+  const area = useRef<HTMLTextAreaElement>(null);
+  const [said, setSaid] = useState("");
+  useEffect(() => {
+    // Opened where the terminal was looking.
+    const a = area.current;
+    if (a) a.scrollTop = at * a.scrollHeight;
+  }, []);
+  const put = async (what: string, how: string) => {
+    setSaid((await copyText(what)) ? how : "복사하지 못했습니다. 길게 눌러 나오는 메뉴의 복사를 쓰세요.");
+  };
+  const picked = () => {
+    const a = area.current;
+    return a ? a.value.slice(a.selectionStart, a.selectionEnd) : "";
+  };
+  return (
+    <div className="term-text" role="dialog" aria-label="터미널 글" data-testid="term-text">
+      <div className="term-text-bar">
+        <span className="muted">길게 누르거나 끌어서 고르세요. 화면 밖의 지난 출력도 스크롤해서 고를 수 있습니다.</span>
+        <span className="spacer" />
+        <button type="button" className="primary" onPointerDown={(e) => e.preventDefault()} onClick={() => {
+          const p = picked();
+          if (p) put(p, "고른 것을 복사했습니다.");
+          else setSaid("고른 글이 없습니다.");
+        }}>
+          고른 것 복사
+        </button>
+        <button type="button" onClick={() => put(text, "모두 복사했습니다.")}>모두 복사</button>
+        <button type="button" onClick={onClose}>닫기</button>
+      </div>
+      {said && <p className="muted" role="status">{said}</p>}
+      <textarea ref={area} readOnly aria-label="터미널에 나온 글" value={text} spellCheck={false} wrap="off" />
     </div>
   );
 }
