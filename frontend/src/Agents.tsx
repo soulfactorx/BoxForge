@@ -709,7 +709,7 @@ function Control(props: {
   const [versions, setVersions] = useState<Record<string, string>>({});
   useEffect(() => {
     if (up && !s.image) call<Record<string, string>>("AgentVersions", s.name).then((v) => setVersions(v ?? {}), () => {});
-  }, [up, s.name, s.agents.join()]);
+  }, [up, s.name, (s.agents ?? []).join()]);
   const tabs: [Tab, string][] = [
     ["terminal", "터미널"],
     ["web", "웹 · 포트"],
