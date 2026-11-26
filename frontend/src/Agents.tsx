@@ -192,6 +192,7 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
     off();
     setBusy("");
     setOutput((o) => (o ? { ...o, lines: o.lines.concat(ok ? "✔ 끝났습니다." : "✖ 실패했습니다. 아래 상태 표시줄에 이유가 있습니다.") } : o));
+    load(); // its settings as now saved (changed elsewhere too: another tab, another device)
     return ok;
   };
 
@@ -845,7 +846,10 @@ interface Term {
 
 /** A box's terminals, as an editor's tabs: each one open until it is closed. */
 function TermTab({ box, mine, run, showCli, onCount }: { box: Box; mine: Kind[]; run: Run; showCli: (cmd: string) => void; onCount: (n: number) => void }) {
-  const first = box.spec.image ? "main" : (mine[0]?.id ?? "shell");
+  // An agent that is a gateway with a setup (OpenClaw, Hermes) isn't opened by
+  // itself: its command starts that setup, every time. A shell, or another
+  // agent of the box, is.
+  const first = box.spec.image ? "main" : (mine.find((k) => !k.service)?.id ?? "shell");
   const serial = useRef(0);
   const nameOf = (which: string) => (which === "shell" ? "셸" : which === "main" ? (box.spec.command ?? "") : (mine.find((k) => k.id === which)?.name ?? which));
   const make = (which: string, list: Term[]): Term => {
@@ -1037,7 +1041,7 @@ function WebTab(props: {
   const [adding, setAdding] = useState("");
   const [note, setNote] = useState("");
   const page = mine.find((k) => k.port); // an agent with a web page of its own (OpenClaw)
-  const holder = `${box.project}-${s.service ? "service" : "agent"}`;
+  const holder = `${box.project}-agent`; // the service shares its network and processes
   const load = () => call<{ port: number; local: number; shared: number }[]>("AgentPortsEnsure", s.name).then((p) => setPorts(p ?? []), (e) => setNote(e.message));
   useEffect(() => {
     showCli(`# BoxForge가 이 PC의 127.0.0.1:포트 로 받은 연결을 docker exec ${holder} 로 상자 안의 localhost:포트 에 이어 줍니다`);
@@ -1114,6 +1118,12 @@ function WebTab(props: {
           웹 서버로 접속 중입니다: 상자의 화면과 포트는 BoxForge 서버의 같은 번호 포트(HTTPS)로 열리고, 이 BoxForge에 로그인한 브라우저에서만 열립니다. 서버에 방화벽이나 포트 포워딩이 있으면 그 번호(예: 18789)를 열어 두세요.
         </p>
       )}
+      {s.service && (
+        <section className="web-card">
+          <h3>늘 켜 둔 서비스</h3>
+          <Gateway box={box} service={props.service} run={run} />
+        </section>
+      )}
       {page && (
         <section className="web-card" data-testid="agent-page">
           <h3>{`${page.name} 화면`}</h3>
@@ -1130,7 +1140,7 @@ function WebTab(props: {
               </span>
             </p>
           )}
-          {s.service && props.service?.state !== "running" && <p className="warn">{`게이트웨이(${box.project}-service)가 돌고 있지 않습니다: ${props.service?.status ?? "아직 만들어지지 않음"}. "그래프 · 로그"에서 이유를 볼 수 있습니다.`}</p>}
+
           <div className="actions">
             <button type="button" className="primary" onClick={() => openPage("pc")}>
               {remote() ? "이 기기 브라우저로 열기" : "내 PC 브라우저로 열기"}
@@ -1237,6 +1247,48 @@ function WebTab(props: {
         </form>
         {note && <p className="warn">{note}</p>}
       </section>
+    </div>
+  );
+}
+
+/** The gateway kept running: whether it runs, what it last said, and starting it again. */
+function Gateway({ box, service, run }: { box: Box; service?: Container; run: Run }) {
+  const [log, setLog] = useState("");
+  const [shown, setShown] = useState(false);
+  const read = () => call<string>("AgentServiceLog", box.spec.name).then((l) => setLog(l ?? ""), () => setLog(""));
+  useEffect(() => {
+    read();
+    const t = window.setInterval(read, 5000);
+    return () => clearInterval(t);
+  }, [box.spec.name, service?.state]);
+  const up = service?.state === "running";
+  const locked = /recover-lock|cannot verify Gateway ownership/.test(log);
+  const lines = log.trimEnd().split("\n");
+  const restart = () =>
+    run(`docker compose -p ${box.project} restart service`, () => call("ComposeAction", { key: `gw-${Date.now()}`, project: box.project, files: [box.file], action: "restart", services: ["service"] })).then(read);
+  return (
+    <div className="gateway" data-testid="agent-gateway">
+      <p>
+        <span className={"state " + (up ? "running" : "")}>
+          <span className="dot" />
+          {`게이트웨이: ${service ? (stateLabel[service.state] ?? service.state) : "아직 만들어지지 않음"}`}
+        </span>{" "}
+        <span className="muted">{service?.status}</span>
+      </p>
+      {locked && (
+        <p className="warn">
+          게이트웨이의 잠금이 전에 끝난 게이트웨이에게 남아 있습니다. 셸에서 openclaw gateway recover-lock 을 실행하고, 그것이 알려 주는 확인 명령(--confirm …)을 실행한 뒤 "게이트웨이 다시 켜기"를 누르세요.
+        </p>
+      )}
+      <div className="actions">
+        <button type="button" onClick={restart}>
+          게이트웨이 다시 켜기
+        </button>
+        <button type="button" className="link" onClick={() => setShown(!shown)}>
+          {shown ? "기록 접기" : "게이트웨이 기록 보기"}
+        </button>
+      </div>
+      {shown && <pre className="log-box gateway-log">{lines.slice(-40).join("\n") || "기록이 없습니다."}</pre>}
     </div>
   );
 }

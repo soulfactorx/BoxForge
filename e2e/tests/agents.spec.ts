@@ -115,6 +115,20 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   await keys.getByRole("button", { name: "Fn" }).click();
   await expect(keys.getByRole("button", { name: "F12" })).toBeVisible();
 
+  // A full-screen program that ended without leaving its page (a setup, a
+  // TUI): its page and what came before are both there to copy.
+  await pane.locator(".xterm").click();
+  await page.keyboard.type("printf '\\033[?1049h\\033[Hfull-screen-page\\n'\n");
+  await expect(rows).toContainText("full-screen-page");
+  await pane.locator(".term-box").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "글로 보고 골라 복사" }).click();
+  const shown = page.getByTestId("term-text").getByLabel("터미널에 나온 글");
+  await expect(shown).toContainText("keybar-ok");
+  await expect(shown).toContainText("full-screen-page");
+  await page.getByTestId("term-text").getByRole("button", { name: "닫기" }).click();
+  await pane.locator(".xterm").click();
+  await page.keyboard.type("printf '\\033[?1049l'\n");
+
   // Another page of the box and back: the same terminal, what runs in it still running.
   await page.keyboard.type("sleep 777\n");
   await expect.poll(() => inBox("ps -o args")).toContain("sleep 777");
@@ -312,6 +326,22 @@ test("a box's port opens at once, the box running on; its browser box shows the 
   await row.getByRole("button", { name: "빼기" }).click();
   await expect(ports.getByRole("row", { name: /localhost:18080/ })).toHaveCount(0);
   await expect.poll(async () => (await request.get(`http://127.0.0.1:${local}/`, { timeout: 3000 }).catch(() => null)) === null).toBe(true);
+
+  // A service kept running beside the box: its state, what it last wrote,
+  // and starting it again, from the same tab.
+  const spec = (await (await request.post("/api/call/AgentBoxes", { data: [] })).json()).result.find((b: { spec: { name: string } }) => b.spec.name === "bfe2e-web");
+  await request.post("/api/call/AgentSave", { data: [{ ...spec.spec, service: "sh -c 'echo gateway-said-hello; exec sleep 1d'" }, false] });
+  await page.getByRole("button", { name: "설정대로 다시 올리기" }).click();
+  await expect(page.getByTestId("agent-output").filter({ visible: true })).toContainText("끝났습니다", { timeout: 120_000 });
+  await page.getByRole("tab", { name: "웹 · 포트" }).click();
+  const gw = page.getByTestId("agent-gateway");
+  await expect(gw).toContainText("게이트웨이: 실행 중", { timeout: 30_000 });
+  await gw.getByRole("button", { name: "게이트웨이 기록 보기" }).click();
+  await expect(gw.locator(".gateway-log")).toContainText("gateway-said-hello");
+  // It shares the box's processes: seen from the box itself.
+  expect(sh(`docker exec ${web}-agent ps -o args`)).toContain("sleep 1d");
+  await gw.getByRole("button", { name: "게이트웨이 다시 켜기" }).click();
+  await expect(page.getByTestId("cli")).toContainText(`docker compose -p ${web} restart service`);
   sh(`docker compose -p ${web} down --volumes --remove-orphans`, true);
 });
 

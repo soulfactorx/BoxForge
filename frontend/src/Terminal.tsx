@@ -99,17 +99,25 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
   const openText = () => {
     const t = xterm.current;
     if (!t) return;
-    const buf = t.buffer.active;
-    const lines: string[] = [];
-    for (let i = 0; i < buf.length; i++) {
-      const line = buf.getLine(i);
-      const s = line?.translateToString(true) ?? "";
-      // A line wrapped on the screen is one line of text.
-      if (line?.isWrapped && lines.length) lines[lines.length - 1] += s;
-      else lines.push(s);
-    }
-    while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-    setText({ text: lines.join("\n"), at: buf.viewportY / Math.max(1, buf.length) });
+    const read = (buf: typeof t.buffer.active) => {
+      const lines: string[] = [];
+      for (let i = 0; i < buf.length; i++) {
+        const line = buf.getLine(i);
+        const s = line?.translateToString(true) ?? "";
+        // A line wrapped on the screen is one line of text.
+        if (line?.isWrapped && lines.length) lines[lines.length - 1] += s;
+        else lines.push(s);
+      }
+      while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+      return lines;
+    };
+    // A full-screen program (a setup, a TUI) shows its own page, apart from
+    // what came before; ended without leaving it, that page is still shown.
+    // Both are given: what came before first.
+    const normal = read(t.buffer.normal);
+    const lines = t.buffer.active.type === "alternate" ? [...normal, "", ...read(t.buffer.alternate)] : normal;
+    const at = t.buffer.active.type === "alternate" ? 1 : t.buffer.active.viewportY / Math.max(1, t.buffer.active.length);
+    setText({ text: lines.join("\n"), at });
   };
   const copy = async () => {
     const t = xterm.current;

@@ -77,9 +77,15 @@ func (a *App) AgentPortOpen(name string, port int) (int, error) {
 	}
 	boxPorts.Unlock()
 	var ln net.Listener
-	for try := port; try < port+20 && try <= 65535; try++ {
-		if ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(try))); err == nil {
-			break
+	if shareHook != nil {
+		// On the web server the number is for other devices (the shared
+		// port, on every address): kept free for it, this one takes any.
+		ln, err = net.Listen("tcp", "127.0.0.1:0")
+	} else {
+		for try := port; try < port+20 && try <= 65535; try++ {
+			if ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(try))); err == nil {
+				break
+			}
 		}
 	}
 	if ln == nil {
@@ -359,7 +365,10 @@ func (a *App) AgentWebLink(name string) (string, error) {
 		if why == "" {
 			why = r.Reason
 		}
-		return "", fmt.Errorf("OpenClaw's gateway isn't ready (%s): turn on \"keep running\" for its gateway, or run openclaw gateway in a terminal", why)
+		if s.Service == "" {
+			return "", fmt.Errorf("OpenClaw 게이트웨이가 켜져 있지 않습니다(%s). \"웹 · 포트\" 탭에서 \"게이트웨이 늘 켜 두기\"를 누르세요", why)
+		}
+		return "", fmt.Errorf("OpenClaw 게이트웨이가 아직 준비되지 않았습니다(%s). \"웹 · 포트\" 탭의 게이트웨이 기록에서 이유를 보고 \"게이트웨이 다시 켜기\"를 누르세요", why)
 	}
 	link := r.BrowserURL
 	if link == "" {
@@ -449,4 +458,20 @@ func unshare(prefix string, exact bool) {
 	for _, sp := range gone {
 		sp.stop()
 	}
+}
+
+// AgentServiceLog gives the last lines the box's kept-running service (a
+// gateway) wrote: why it isn't up, when it isn't.
+func (a *App) AgentServiceLog(name string) (string, error) {
+	if _, _, err := readAgent(name); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var b strings.Builder
+	err := a.eng().Containers().Logs(ctx, agentProject(name)+"-service", 60, &b)
+	if err != nil && b.Len() == 0 && ctx.Err() == nil {
+		return "", err
+	}
+	return b.String(), nil
 }
