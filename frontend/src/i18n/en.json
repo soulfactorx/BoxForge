@@ -1779,5 +1779,7 @@
  "{0} 설정이 아직 안 됐습니다. 설정({1})을 마치면 게이트웨이가 저절로 켜집니다.": "{0} isn't set up yet. Once the setup ({1}) is done, the gateway starts by itself.",
  "상자를 살펴보는 중…": "Checking the box…",
  "설정 시작": "Start setup",
- "if ! {0}; then echo 'BoxForge: {1} 설정을 기다리는 중입니다. 터미널 탭의 \"{2} 설정\"(셸에서 {3})으로 설정을 마치면 바로 켜집니다.'; until {4}; do sleep 10; done; fi; exec {5}": "if ! {0}; then echo 'BoxForge: {1} is waiting to be set up. Finish setting it up with \"{2} setup\" in the terminal tab (in a shell: {3}) and it starts at once.'; until {4}; do sleep 10; done; fi; exec {5}"
+ "if ! {0}; then echo 'BoxForge: {1} 설정을 기다리는 중입니다. 터미널 탭의 \"{2} 설정\"(셸에서 {3})으로 설정을 마치면 바로 켜집니다.'; until {4}; do sleep 10; done; fi; exec {5}": "if ! {0}; then echo 'BoxForge: {1} is waiting to be set up. Finish setting it up with \"{2} setup\" in the terminal tab (in a shell: {3}) and it starts at once.'; until {4}; do sleep 10; done; fi; exec {5}",
+ "설정(예: openclaw onboard)이 끝날 때까지 기다렸다가 저절로 켜집니다. 상자의 터미널이 설정부터 엽니다.": "It waits until the setup (such as openclaw onboard) is done, then starts by itself. The box's terminal opens with the setup.",
+ "먼저 상자의 터미널에서 설정을 마친 뒤 켜세요. 설정 전에는 시작하자마자 꺼질 수 있습니다.": "Finish the setup in the box's terminal first, then turn this on. Before the setup it may stop as soon as it starts."
 }

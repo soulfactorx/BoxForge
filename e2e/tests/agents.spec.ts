@@ -386,6 +386,8 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
       await d.getByLabel(/Pi Coding Agent/).uncheck();
       await d.getByLabel(/^OpenClaw \(/).check();
       await d.getByLabel(/브라우저 상자 함께 만들기/).uncheck();
+      // Its gateway is kept running from the start: it waits for the setup.
+      await expect(d.getByLabel(/메신저 게이트웨이처럼/)).toBeChecked();
     });
   }
   await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 540_000 });

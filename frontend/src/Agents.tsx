@@ -14,6 +14,7 @@ interface Kind {
   service?: string;
   port?: number;
   setup?: string;
+  ready?: string;
 }
 
 interface Spec {
@@ -433,6 +434,11 @@ function MakeDialog(props: {
       if (!portList.includes(k.port)) setPorts((p) => (p.trim() ? `${p}, ${k.port}` : String(k.port)));
       set({ browser: true });
     }
+    // Its gateway kept running: it waits for the setup, and starts once that is done.
+    if (k?.service && k.ready) {
+      if (on && !spec.service) set({ service: k.service });
+      if (!on && spec.service === k.service) set({ service: "" });
+    }
   };
   const portList = ports
     .split(/[,\s]+/)
@@ -606,7 +612,11 @@ function MakeDialog(props: {
               <label>
                 서비스 명령
                 <input value={spec.service} onChange={(e) => set({ service: e.target.value })} />
-                <span className="help">먼저 상자의 터미널에서 설정(예: openclaw onboard)을 마친 뒤 켜세요. 설정 전에는 시작하자마자 꺼질 수 있습니다.</span>
+                <span className="help">
+                  {services.some((k) => k.ready)
+                    ? "설정(예: openclaw onboard)이 끝날 때까지 기다렸다가 저절로 켜집니다. 상자의 터미널이 설정부터 엽니다."
+                    : "먼저 상자의 터미널에서 설정을 마친 뒤 켜세요. 설정 전에는 시작하자마자 꺼질 수 있습니다."}
+                </span>
               </label>
             )}
           </fieldset>
