@@ -384,7 +384,7 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
   } else {
     await make(page, "bfe2e-oc", async (d) => {
       await d.getByLabel(/Pi Coding Agent/).uncheck();
-      await d.getByLabel(/OpenClaw/).check();
+      await d.getByLabel(/^OpenClaw \(/).check();
       await d.getByLabel(/브라우저 상자 함께 만들기/).uncheck();
     });
   }
