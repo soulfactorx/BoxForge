@@ -329,7 +329,8 @@ func (a *App) AgentWebLink(name string) (string, error) {
 	}
 	has := false
 	for _, id := range s.Agents {
-		has = has || id == "openclaw"
+		k, _ := agentKind(id)
+		has = has || k.Link == "openclaw"
 	}
 	if !has {
 		return "", fmt.Errorf("the box has no agent with a sign-in link")

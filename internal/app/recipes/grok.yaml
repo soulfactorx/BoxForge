@@ -1,0 +1,16 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: grok
+name: Grok CLI
+group: guide
+order: 90
+command: grok
+about: xAI의 Grok 모델로 돌리는 터미널 에이전트. 상자의 터미널에서 직접 설치합니다.
+guide:
+  - title: 설치
+    command: npm install -g @vibe-kit/grok-cli
+  - title: 실행 (먼저 "API 키" 탭에 GROK_API_KEY 를 넣습니다)
+    command: grok
+keys: [GROK_API_KEY]
+hosts: [api.x.ai, "@packages"]
+note: GROK_API_KEY 에 xAI의 API 키를 넣습니다.
+version: grok --version

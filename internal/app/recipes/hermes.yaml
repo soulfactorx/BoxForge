@@ -1,0 +1,36 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: hermes
+name: Hermes Agent
+group: hot
+order: 40
+command: hermes
+about: Nous Research의 다용도 에이전트. 스스로 도구 · 스킬을 익히고, 메신저(텔레그램 · 디스코드 등)와 예약 작업으로도 돕니다. 웹 화면에서 설정 · 키 · 대화를 다룹니다.
+docs: https://github.com/NousResearch/hermes-agent
+# What its installer and its own package manager need from the system.
+apt: [xz-utils, libatomic1, ffmpeg]
+# Its own installer, as the box's user, into the box's home (kept in the
+# home volume): it brings its own uv and Python, and later installs and
+# updates its tools there itself. The browser and computer-use parts are
+# left out (a box has no screen; add them with "hermes pm install chromium").
+homeInstall: |
+  RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
+      | bash -s -- --non-interactive --skip-browser --skip-computer-use \
+   && hermes --version
+keys: [OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, NOUS_API_KEY, TELEGRAM_BOT_TOKEN, DISCORD_BOT_TOKEN]
+hosts: [openrouter.ai, "*.nousresearch.com", "@anthropic", "@openai", "@google", "@packages", "@github"]
+note: 처음 열면 설정 마법사(hermes setup)가 뜹니다. 웹 화면(대시보드)은 설정 전에도 열리고, 그곳에서도 키와 설정을 바꿀 수 있습니다. 메신저로 쓰려면 hermes gateway setup 을 실행합니다.
+# Both kept running: its web page, and its gateway (messengers, scheduled jobs).
+service: |
+  hermes dashboard --host 127.0.0.1 --port 9119 --no-open
+  hermes gateway
+port: 9119
+setup: hermes setup
+# Set up once a model provider's key or sign-in is there (its own .env, its
+# sign-ins, or the box's API keys); the sample .env it starts with has none.
+ready: grep -qsE '^[A-Z0-9_]+_(API_KEY|TOKEN)=.+' "$HOME/.hermes/.env" || test -s "$HOME/.hermes/auth.json" || env | grep -qE '^[A-Z0-9_]+_API_KEY=.'
+doctor: hermes doctor
+update: hermes update
+version: hermes --version
+memory: 4
+pids: 1024
+network: full

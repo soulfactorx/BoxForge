@@ -1,0 +1,26 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: openclaw
+name: OpenClaw
+group: hot
+order: 30
+command: openclaw
+about: 늘 켜 두고 웹 화면 · 메신저 · 터미널로 대화하는 개인 비서형 에이전트. 메모리를 많이 씁니다(8 GB 권장).
+docs: https://docs.openclaw.ai
+# Into the box user's own home (kept in the box's home volume): OpenClaw
+# installs its plugins and updates itself there.
+homeInstall: RUN npm install -g openclaw@latest --allow-scripts=openclaw && openclaw --version
+keys: [OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, OPENCLAW_GATEWAY_TOKEN, TELEGRAM_BOT_TOKEN]
+hosts: ["@anthropic", "@openai", "@google", openrouter.ai, api.x.ai, "@packages", "@github"]
+note: 처음 열면 설정 마법사(openclaw onboard)가 뜹니다. 설정을 마치면 게이트웨이가 저절로 켜지고, "웹 · 포트" 탭에서 화면을 엽니다.
+service: openclaw gateway --port 18789 --bind loopback
+port: 18789
+link: openclaw
+gate: true
+setup: openclaw onboard --mode local --no-install-daemon
+ready: openclaw-config
+doctor: openclaw doctor
+update: npm install -g openclaw@latest --allow-scripts=openclaw
+version: openclaw --version
+memory: 8
+pids: 1024
+network: full

@@ -1,0 +1,17 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: copilot
+name: GitHub Copilot CLI
+group: guide
+order: 70
+command: copilot
+about: GitHub Copilot의 터미널 에이전트. 상자의 터미널에서 직접 설치합니다.
+docs: https://github.com/github/copilot-cli
+guide:
+  - title: 설치
+    command: npm install -g @github/copilot
+  - title: 실행 (안에서 /login 으로 GitHub 기기 코드 로그인)
+    command: copilot
+keys: [GH_TOKEN]
+hosts: ["@copilot", "@packages"]
+note: copilot 안에서 /login 으로 GitHub 기기 코드 로그인을 합니다.
+version: copilot --version

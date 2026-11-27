@@ -2,21 +2,44 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { call, on, openURL, remote, type Container, type Run } from "./bridge";
 import { pick } from "./PathPicker";
 import Terminal from "./Terminal";
-import { Dialog, IconButton } from "./ui";
+import { copyText, Dialog, IconButton } from "./ui";
 
+/** An agent a box can have: a recipe (internal/app/agent_recipes.go). */
 interface Kind {
   id: string;
   name: string;
+  group: "ready" | "hot" | "guide";
   command: string;
+  about?: string;
+  docs?: string;
+  guide?: { title: string; command: string }[];
   keys: string[];
   hosts: string[];
   note: string;
   service?: string;
   port?: number;
+  link?: string;
   setup?: string;
   ready?: string;
+  gate?: boolean;
+  doctor?: string;
+  update?: string;
   memory?: number;
+  pids?: number;
+  network?: Spec["network"];
+  source?: string;
 }
+
+// The three kinds of agent, as the screen offers them.
+const groups: [Kind["group"], string, string][] = [
+  ["ready", "바로 쓰기", "가볍고 안정적인 에이전트. 상자를 만들 때 설치합니다."],
+  [
+    "hot",
+    "다용도 · 새로 뜨는 에이전트",
+    "늘 켜 두고 웹 화면 · 메신저로도 쓰는 에이전트. 만든 이가 정한 방법으로 상자 사용자의 홈에 설치해서, 플러그인 · 도구를 스스로 더하고 업데이트합니다. 메모리 · 네트워크 · 늘 켜 둘 것이 그에 맞게 정해집니다.",
+  ],
+  ["guide", "설치 안내만", "CPU 종류나 환경을 많이 타는 에이전트. 빈 상자를 만들고, 상자의 터미널에서 안내대로 직접 설치합니다."],
+];
 
 interface Spec {
   name: string;
@@ -136,12 +159,19 @@ interface Props {
 export default function Agents({ containers, run, showCli, onOpen }: Props) {
   const [kinds, setKinds] = useState<Kind[]>([]);
   const [presets, setPresets] = useState<Record<string, string[]>>({});
+  const [recipes, setRecipes] = useState<{ dir: string; problems: string[] }>({
+    dir: "",
+    problems: [],
+  });
   const [boxes, setBoxes] = useState<Box[]>([]);
   const [making, setMaking] = useState<Spec | null>(null);
   const [editing, setEditing] = useState(false);
   const [opened, setOpened] = useState("");
   const [busy, setBusy] = useState("");
-  const [output, setOutput] = useState<{ title: string; lines: string[] } | null>(null);
+  const [output, setOutput] = useState<{
+    title: string;
+    lines: string[];
+  } | null>(null);
   const [visited, setVisited] = useState<string[]>([]);
   const [termCount, setTermCount] = useState<Record<string, number>>({});
   const openBox = (name: string) => {
@@ -150,11 +180,21 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
   };
   const serial = useRef(0);
 
-  const load = () => call<Box[]>("AgentBoxes").then((b) => setBoxes(b ?? []), () => {});
+  const load = () =>
+    call<Box[]>("AgentBoxes").then(
+      (b) => setBoxes(b ?? []),
+      () => {},
+    );
   useEffect(() => {
-    call<{ kinds: Kind[]; presets: Record<string, string[]> }>("AgentCatalog").then((c) => {
+    call<{
+      kinds: Kind[];
+      presets: Record<string, string[]>;
+      recipes: string;
+      problems: string[];
+    }>("AgentCatalog").then((c) => {
       setKinds(c.kinds);
       setPresets(c.presets);
+      setRecipes({ dir: c.recipes, problems: c.problems ?? [] });
     });
     load();
     showCli("docker compose ls -a --filter name=bfa-");
@@ -177,7 +217,10 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
       const b = boxes.find((b) => b.project === j.project)!;
       followed.current.add(j.key);
       setBusy(b.spec.name);
-      setOutput({ title: `${b.spec.name} · ${jobLabel[j.action] ?? j.action} (진행 중이던 작업)`, lines: j.lines.slice(-800) });
+      setOutput({
+        title: `${b.spec.name} · ${jobLabel[j.action] ?? j.action} (진행 중이던 작업)`,
+        lines: j.lines.slice(-800),
+      });
       const off = on("compose", (l: { key: string; line: string }) => {
         if (l.key === j.key) setOutput((o) => (o ? { ...o, lines: o.lines.concat(l.line).slice(-800) } : o));
       });
@@ -186,7 +229,14 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
         if (now?.running) return void (timer = window.setTimeout(watch, 2000));
         off();
         setBusy("");
-        setOutput((o) => (o ? { ...o, lines: o.lines.concat(now?.error ? `✖ 실패했습니다: ${now.error}` : "✔ 끝났습니다.") } : o));
+        setOutput((o) =>
+          o
+            ? {
+                ...o,
+                lines: o.lines.concat(now?.error ? `✖ 실패했습니다: ${now.error}` : "✔ 끝났습니다."),
+              }
+            : o,
+        );
         load();
       };
       timer = window.setTimeout(watch, 2000);
@@ -216,11 +266,23 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
       if (l.key === key) setOutput((o) => (o ? { ...o, lines: o.lines.concat(l.line).slice(-800) } : o));
     });
     const ok = await run(`docker compose -p ${b.project} -f ${b.file} ${words[action]}`, () =>
-      call("ComposeAction", { key, project: b.project, files: [b.file], action }),
+      call("ComposeAction", {
+        key,
+        project: b.project,
+        files: [b.file],
+        action,
+      }),
     );
     off();
     setBusy("");
-    setOutput((o) => (o ? { ...o, lines: o.lines.concat(ok ? "✔ 끝났습니다." : "✖ 실패했습니다. 아래 상태 표시줄에 이유가 있습니다.") } : o));
+    setOutput((o) =>
+      o
+        ? {
+            ...o,
+            lines: o.lines.concat(ok ? "✔ 끝났습니다." : "✖ 실패했습니다. 아래 상태 표시줄에 이유가 있습니다."),
+          }
+        : o,
+    );
     load(); // its settings as now saved (changed elsewhere too: another tab, another device)
     return ok;
   };
@@ -310,8 +372,8 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
             </button>
           </header>
           <p className="lead">
-            AI 에이전트(Pi, Claude Code, OpenClaw 등)를 컨테이너 상자 안에서 돌립니다. 상자 안의 에이전트는 고른 작업 폴더 하나만 보고, 관리자 권한 없이,
-            정한 CPU · 메모리 안에서, 허락한 주소에만 연결합니다. 무엇을 바꿨는지 보고, 저장해 둔 때로 되돌릴 수 있습니다.
+            AI 에이전트(Pi, Claude Code, OpenClaw 등)를 컨테이너 상자 안에서 돌립니다. 상자 안의 에이전트는 고른 작업 폴더 하나만 보고, 관리자 권한 없이, 정한 CPU · 메모리 안에서, 허락한 주소에만
+            연결합니다. 무엇을 바꿨는지 보고, 저장해 둔 때로 되돌릴 수 있습니다.
           </p>
           {output && <Output output={output} busy={!!busy} onClose={() => setOutput(null)} />}
           {boxes.length === 0 ? (
@@ -376,17 +438,7 @@ export default function Agents({ containers, run, showCli, onOpen }: Props) {
           )}
         </>
       )}
-      {making && (
-        <MakeDialog
-          kinds={kinds}
-          presets={presets}
-          initial={making}
-          editing={editing}
-          onClose={() => setMaking(null)}
-          onSave={save}
-          showCli={showCli}
-        />
-      )}
+      {making && <MakeDialog kinds={kinds} presets={presets} recipes={recipes} initial={making} editing={editing} onClose={() => setMaking(null)} onSave={save} showCli={showCli} />}
     </section>
   );
 }
@@ -417,6 +469,7 @@ function Output({ output, busy, onClose }: { output: { title: string; lines: str
 function MakeDialog(props: {
   kinds: Kind[];
   presets: Record<string, string[]>;
+  recipes: { dir: string; problems: string[] };
   initial: Spec;
   editing: boolean;
   onClose: () => void;
@@ -453,18 +506,28 @@ function MakeDialog(props: {
   }, [defaults, chosen, extra, presets]);
 
   const services = kinds.filter((k) => k.service && spec.agents.includes(k.id));
+  const [netNote, setNetNote] = useState("");
   const toggleAgent = (id: string, on: boolean) => {
-    set({ agents: on ? [...spec.agents.filter((a) => a !== id), id] : spec.agents.filter((a) => a !== id) });
-    // An agent with a web page of its own (OpenClaw): its port, and a browser box to see it in.
+    set({
+      agents: on ? [...spec.agents.filter((a) => a !== id), id] : spec.agents.filter((a) => a !== id),
+    });
     const k = kinds.find((x) => x.id === id);
-    if (on && k?.port) {
+    if (!k) return;
+    // An agent with a web page of its own (OpenClaw, Hermes): its port, and a browser box to see it in.
+    if (on && k.port) {
       if (!portList.includes(k.port)) setPorts((p) => (p.trim() ? `${p}, ${k.port}` : String(k.port)));
       set({ browser: true });
     }
-    // A limit it runs well in (the gateway and the agent each have it).
-    if (on && k?.memory) setSpec((x) => (x.memory && x.memory < k.memory! ? { ...x, memory: k.memory! } : x));
-    // Its gateway kept running: it waits for the setup, and starts once that is done.
-    if (k?.service && k.ready) {
+    // Limits it runs well in (the box and what is kept running each have them).
+    if (on && k.memory) setSpec((x) => (x.memory && x.memory < k.memory! ? { ...x, memory: k.memory! } : x));
+    if (on && k.pids) setSpec((x) => (x.pids && x.pids < k.pids! ? { ...x, pids: k.pids! } : x));
+    // The network it needs (a many-sided agent fetches its plugins and tools).
+    if (on && k.network && k.network !== spec.network && spec.network === "ai") {
+      set({ network: k.network });
+      setNetNote(`${k.name}은(는) 플러그인 · 도구를 받으러 인터넷에 나가야 해서 네트워크를 "${networkLabel[k.network]}"로 바꿨습니다. 아래에서 다시 바꿀 수 있습니다.`);
+    }
+    // What it keeps running (its gateway, its page): one that has to be set up first waits for that.
+    if (k.service && (k.group === "hot" || k.ready)) {
       if (on && !spec.service) set({ service: k.service });
       if (!on && spec.service === k.service) set({ service: "" });
     }
@@ -482,7 +545,10 @@ function MakeDialog(props: {
     command: own ? spec.command : "",
     allow: spec.network === "ai" ? allow : [],
     ports: portList,
-    readOnly: readOnly.split("\n").map((l) => l.trim()).filter(Boolean),
+    readOnly: readOnly
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean),
   };
 
   useEffect(() => {
@@ -517,16 +583,41 @@ function MakeDialog(props: {
           <legend>넣을 에이전트</legend>
           {!own && (
             <div className="agent-kinds">
-              {kinds.map((k) => (
-                <label key={k.id} className="check">
-                  <input type="checkbox" checked={spec.agents.includes(k.id)} onChange={(e) => toggleAgent(k.id, e.target.checked)} />
-                  <span>
-                    {k.name} <span className="muted">({k.command})</span>
-                  </span>
-                </label>
-              ))}
+              {groups.map(([g, title, help]) => {
+                const list = kinds.filter((k) => k.group === g);
+                if (!list.length) return null;
+                return (
+                  <div key={g} className="agent-group" data-testid={`agent-group-${g}`}>
+                    <h4>{title}</h4>
+                    <p className="help">{help}</p>
+                    <div className="kind-list">
+                      {list.map((k) => (
+                        <label key={k.id} className="check">
+                          <input type="checkbox" checked={spec.agents.includes(k.id)} onChange={(e) => toggleAgent(k.id, e.target.checked)} />
+                          <span>
+                            {k.name} <span className="muted">({k.command})</span>
+                            {k.source && (
+                              <span className="chip mine" title={k.source}>
+                                내 레시피
+                              </span>
+                            )}
+                            {k.about && <span className="kind-about">{k.about}</span>}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
+          {!own && netNote && <p className="note-box">{netNote}</p>}
+          {!own && (
+            <span className="help">
+              {`에이전트 목록은 레시피 파일에서 옵니다. 새로 뜨는 에이전트는 레시피(YAML) 하나를 이 폴더에 넣으면 목록에 나옵니다: ${props.recipes.dir} (형식: docs/AGENT-RECIPES.md)`}
+            </span>
+          )}
+          {!own && props.recipes.problems.map((p) => <p key={p} className="warn">{`읽지 못한 레시피: ${p}`}</p>)}
           <label className="check">
             <input type="checkbox" checked={own} onChange={(e) => setOwn(e.target.checked)} />
             <span>내가 가진 이미지로 (에이전트를 넣지 않음)</span>
@@ -605,14 +696,19 @@ function MakeDialog(props: {
                     setExtra(lines.filter((l) => l && !auto.has(l)));
                   }}
                 />
-                <span className="help">고른 에이전트가 쓰는 주소가 미리 들어 있습니다. *.example.com 은 그 아래 모두, host:port 는 그 포트만 허용합니다. 나중에 "연결 기록"에서 막힌 주소를 눌러 바로 허용할 수도 있습니다.</span>
+                <span className="help">
+                  고른 에이전트가 쓰는 주소가 미리 들어 있습니다. *.example.com 은 그 아래 모두, host:port 는 그 포트만 허용합니다. 나중에 "연결 기록"에서 막힌 주소를 눌러 바로 허용할 수도 있습니다.
+                </span>
               </label>
             </>
           )}
           <label>
             내 PC에 열 포트 <span className="muted">(선택, 쉼표로)</span>
             <input value={ports} placeholder="예: 18789, 3000" onChange={(e) => setPorts(e.target.value)} />
-            <span className="help">상자 안 프로그램의 화면(OpenClaw의 18789, 만든 웹앱 등)을 내 PC의 브라우저에서 엽니다. 이 PC에서만(127.0.0.1) 열립니다. 나중에 제어판의 "웹 · 포트"에서 상자를 다시 만들지 않고 바로 더하거나 뺄 수 있습니다.</span>
+            <span className="help">
+              상자 안 프로그램의 화면(OpenClaw의 18789, 만든 웹앱 등)을 내 PC의 브라우저에서 엽니다. 이 PC에서만(127.0.0.1) 열립니다. 나중에 제어판의 "웹 · 포트"에서 상자를 다시 만들지 않고 바로
+              더하거나 뺄 수 있습니다.
+            </span>
           </label>
           <label className="check">
             <input type="checkbox" checked={!!spec.browser} onChange={(e) => set({ browser: e.target.checked })} />
@@ -639,12 +735,14 @@ function MakeDialog(props: {
             </label>
             {spec.service !== undefined && spec.service !== "" && (
               <label>
-                서비스 명령
-                <input value={spec.service} onChange={(e) => set({ service: e.target.value })} />
+                서비스 명령 <span className="muted">(한 줄에 하나, 모두 켜 둠)</span>
+                <textarea className="mono" rows={Math.max(2, spec.service.split("\n").length)} value={spec.service} onChange={(e) => set({ service: e.target.value })} />
                 <span className="help">
-                  {services.some((k) => k.ready)
+                  {services.some((k) => k.gate)
                     ? "설정(예: openclaw onboard)이 끝날 때까지 기다렸다가 저절로 켜집니다. 상자의 터미널이 설정부터 엽니다."
-                    : "먼저 상자의 터미널에서 설정을 마친 뒤 켜세요. 설정 전에는 시작하자마자 꺼질 수 있습니다."}
+                    : services.some((k) => k.group === "hot")
+                      ? "상자와 함께 켜지고, 하나가 꺼지면 모두 다시 켭니다."
+                      : "먼저 상자의 터미널에서 설정을 마친 뒤 켜세요. 설정 전에는 시작하자마자 꺼질 수 있습니다."}
                 </span>
               </label>
             )}
@@ -674,8 +772,8 @@ function MakeDialog(props: {
             </span>
           </label>
           <p className="help">
-            늘 켜져 있는 보호: 관리자(root)가 아닌 사용자로 실행, 리눅스 특권 모두 빼기(cap_drop ALL), 권한 올리기 막기(no-new-privileges). API 키는 상자 안에서만 읽는
-            파일로 넣어 컨테이너 설정(docker inspect)에 나오지 않습니다. 0은 제한 없음입니다.
+            늘 켜져 있는 보호: 관리자(root)가 아닌 사용자로 실행, 리눅스 특권 모두 빼기(cap_drop ALL), 권한 올리기 막기(no-new-privileges). API 키는 상자 안에서만 읽는 파일로 넣어 컨테이너 설정(docker
+            inspect)에 나오지 않습니다. 0은 제한 없음입니다.
           </p>
         </fieldset>
 
@@ -688,11 +786,7 @@ function MakeDialog(props: {
           <button type="button" onClick={props.onClose} disabled={saving}>
             취소
           </button>
-          <button
-            type="submit"
-            className="primary"
-            disabled={saving || !spec.name || !spec.workspace || (own ? !spec.image || !spec.command : spec.agents.length === 0)}
-          >
+          <button type="submit" className="primary" disabled={saving || !spec.name || !spec.workspace || (own ? !spec.image || !spec.command : spec.agents.length === 0)}>
             {editing ? "저장하고 다시 만들기" : "만들고 시작"}
           </button>
         </div>
@@ -734,10 +828,19 @@ function Control(props: {
     if (up) call("AgentPortsEnsure", s.name).catch(() => {});
   }, [up, s.name, (s.ports ?? []).join()]);
   const mine = s.image ? [] : kinds.filter((k) => s.agents.includes(k.id));
+  const selfUpdating = mine.filter((k) => k.group !== "ready" && k.update);
+  const [ask, setAsk] = useState<{ which: string[]; n: number }>({
+    which: [],
+    n: 0,
+  });
   // What was installed when the box was built ("@latest" then): asked of the agents themselves.
   const [versions, setVersions] = useState<Record<string, string>>({});
   useEffect(() => {
-    if (up && !s.image) call<Record<string, string>>("AgentVersions", s.name).then((v) => setVersions(v ?? {}), () => {});
+    if (up && !s.image)
+      call<Record<string, string>>("AgentVersions", s.name).then(
+        (v) => setVersions(v ?? {}),
+        () => {},
+      );
   }, [up, s.name, (s.agents ?? []).join()]);
   const tabs: [Tab, string][] = [
     ["terminal", "터미널"],
@@ -771,8 +874,22 @@ function Control(props: {
           <button
             type="button"
             disabled={busy}
+            title={selfUpdating.length ? "홈에 설치한 에이전트는 그 자신의 업데이트 명령을 터미널에서 실행합니다(상자가 켜져 있어야 함)" : "에이전트를 새 버전으로 받아 상자를 다시 만듭니다"}
             onClick={async () => {
-              if (await props.compose("build", `${s.name} · 에이전트 새 버전으로 다시 만들기`)) await props.compose("upbuild", `${s.name} · 새 버전으로 시작`);
+              // Put in when the image is built: built again. Put in the
+              // home: updated there by its own command (the home volume
+              // keeps it, a new image wouldn't reach it).
+              if (mine.some((k) => k.group === "ready")) {
+                if (!(await props.compose("build", `${s.name} · 에이전트 새 버전으로 다시 만들기`))) return;
+                if (!(await props.compose("upbuild", `${s.name} · 새 버전으로 시작`))) return;
+              }
+              if (selfUpdating.length) {
+                setTab("terminal");
+                setAsk((a) => ({
+                  which: selfUpdating.map((k) => `update:${k.id}`),
+                  n: a.n + 1,
+                }));
+              }
             }}
           >
             에이전트 업데이트
@@ -799,9 +916,7 @@ function Control(props: {
         </div>
         <div>
           <dt>한도</dt>
-          <dd>
-            {`CPU ${s.cpus || "제한 없음"} · 메모리 ${s.memory ? `${s.memory} GB` : "제한 없음"} · 프로세스 ${s.pids || "제한 없음"}`}
-          </dd>
+          <dd>{`CPU ${s.cpus || "제한 없음"} · 메모리 ${s.memory ? `${s.memory} GB` : "제한 없음"} · 프로세스 ${s.pids || "제한 없음"}`}</dd>
         </div>
         {(s.ports ?? []).length > 0 && (
           <div>
@@ -839,7 +954,7 @@ function Control(props: {
         <>
           {/* Kept open while another tab is looked at: what runs in it goes on, and is there on coming back. */}
           <div hidden={tab !== "terminal"}>
-            <TermTab box={box} mine={mine} run={run} showCli={showCli} onCount={props.onTerms} onWeb={() => setTab("web")} />
+            <TermTab box={box} mine={mine} run={run} showCli={showCli} onCount={props.onTerms} onWeb={() => setTab("web")} ask={ask} />
           </div>
           {tab === "web" && <WebTab box={box} mine={mine} service={service} browser={props.browser} run={run} showCli={showCli} compose={props.compose} reload={props.reload} />}
           {tab === "changes" && <ChangesTab box={box} run={run} showCli={showCli} />}
@@ -897,6 +1012,7 @@ function TermTab({
   showCli,
   onCount,
   onWeb,
+  ask,
 }: {
   box: Box;
   mine: Kind[];
@@ -904,25 +1020,40 @@ function TermTab({
   showCli: (cmd: string) => void;
   onCount: (n: number) => void;
   onWeb: () => void;
+  ask?: { which: string[]; n: number }; // terminals asked for from outside (the agents' update)
 }) {
   // An agent that is a gateway with a setup (OpenClaw, Hermes) isn't opened by
   // itself: its command starts that setup, every time. A shell, or another
-  // agent of the box, is.
-  const first = box.spec.image ? "main" : (mine.find((k) => !k.service)?.id ?? "shell");
+  // agent of the box, is; not one of a guide, which is put in by hand.
+  const first = box.spec.image ? "main" : (mine.find((k) => !k.service && k.group !== "guide")?.id ?? "shell");
   const serial = useRef(0);
-  const setupOf = (which: string) => (which.startsWith("setup:") ? mine.find((k) => k.id === which.slice(6)) : undefined);
+  // "setup:hermes", "doctor:hermes", "update:hermes", "guide:codex:0": an agent's own command.
+  const actionOf = (which: string) => {
+    const [action, id, n] = which.split(":");
+    const k = id ? mine.find((x) => x.id === id) : undefined;
+    if (!k) return undefined;
+    const cmd = action === "setup" ? k.setup : action === "doctor" ? k.doctor : action === "update" ? k.update : action === "guide" ? k.guide?.[+n]?.command : "";
+    const what = action === "setup" ? "설정" : action === "doctor" ? "진단" : action === "update" ? "업데이트" : (k.guide?.[+n]?.title ?? "설치");
+    return { k, action, cmd: cmd ?? "", label: `${k.name} ${what}` };
+  };
   const nameOf = (which: string) => {
-    const set = setupOf(which);
-    if (set) return `${set.name} 설정`;
+    const a = actionOf(which);
+    if (a) return a.label;
     return which === "shell" ? "셸" : which === "main" ? (box.spec.command ?? "") : (mine.find((k) => k.id === which)?.name ?? which);
   };
   const make = (which: string, list: Term[]): Term => {
     const same = list.filter((t) => t.which === which).length;
-    return { key: ++serial.current, which, label: same ? `${nameOf(which)} ${same + 1}` : nameOf(which), ended: false };
+    return {
+      key: ++serial.current,
+      which,
+      label: same ? `${nameOf(which)} ${same + 1}` : nameOf(which),
+      ended: false,
+    };
   };
   // An agent not set up yet (OpenClaw before "openclaw onboard"): its setup
   // opens first, and its gateway waits for it.
-  const withSetup = mine.some((k) => k.setup);
+  // (A guide's agent: whether it is put in yet.)
+  const withSetup = mine.some((k) => k.ready);
   const [terms, setTerms] = useState<Term[]>(() => (withSetup ? [] : [make(first, [])]));
   const [active, setActive] = useState(terms[0]?.key ?? 0);
   const [unset, setUnset] = useState<string[]>([]);
@@ -944,11 +1075,15 @@ function TermTab({
   // The setup's wizard may go on into the agent itself (OpenClaw's chat)
   // instead of ending: its end is seen in the box, every few seconds.
   const termRef = useRef<HTMLDivElement>(null);
-  usePoll(check, 5000, unset.length > 0, [], termRef);
+  const kindOf = (id: string) => mine.find((k) => k.id === id);
+  const needSetup = unset.filter((id) => kindOf(id)?.group !== "guide" && kindOf(id)?.setup);
+  const notIn = unset.filter((id) => kindOf(id)?.group === "guide");
+  usePoll(check, 5000, needSetup.length > 0, [], termRef);
   useEffect(() => {
     if (!withSetup) return;
     check().then((need) => {
-      const t = make(need.length ? `setup:${need[0]}` : first, []);
+      const set = need.find((id) => kindOf(id)?.group !== "guide" && kindOf(id)?.setup);
+      const t = make(set ? `setup:${set}` : first, []);
       setTerms([t]);
       setActive(t.key);
       setChecked(true);
@@ -961,6 +1096,13 @@ function TermTab({
     setTerms([...terms, t]);
     setActive(t.key);
   };
+  // Asked for from outside (the agents' update): opened here.
+  useEffect(() => {
+    if (!ask?.which.length) return;
+    const more = ask.which.map((w) => make(w, terms));
+    setTerms([...terms, ...more]);
+    setActive(more[more.length - 1].key);
+  }, [ask?.n]);
   const close = (keys: number[]) => {
     const rest = terms.filter((t) => !keys.includes(t.key));
     setTerms(rest);
@@ -1019,7 +1161,7 @@ function TermTab({
     }
   };
   const cliOf = (which: string) =>
-    `docker exec -it ${box.project}-agent sh /opt/boxforge/run ${which === "shell" ? "shell" : which === "main" ? (box.spec.command ?? "") : (setupOf(which)?.setup ?? mine.find((k) => k.id === which)?.command ?? "")}`;
+    `docker exec -it ${box.project}-agent sh /opt/boxforge/run ${which === "shell" ? "shell" : which === "main" ? (box.spec.command ?? "") : actionOf(which) ? actionOf(which)!.cmd : (mine.find((k) => k.id === which)?.command ?? "")}`;
 
   const opener = (which: string) => (
     <>
@@ -1031,11 +1173,19 @@ function TermTab({
     <div ref={termRef} className={"agent-term" + (big ? " big" : "")} style={{ ["--term-h" as string]: `${height}px` }}>
       <div className="graph-bar">
         <span className="muted">새 터미널:</span>
-        {(box.spec.image ? ["main"] : mine.flatMap((k) => (k.setup ? [k.id, `setup:${k.id}`] : [k.id]))).concat("shell").map((w) => (
-          <button key={w} type="button" className="chip" title={`${nameOf(w)}를 새 탭에서 엽니다`} onClick={() => add(w)}>
-            + {opener(w)}
-          </button>
-        ))}
+        {(box.spec.image
+          ? ["main"]
+          : mine.flatMap((k) =>
+              // A guide's agent once it is put in; each one's setup and check-up.
+              (k.group === "guide" && notIn.includes(k.id) ? [] : [k.id]).concat(k.setup && k.group !== "guide" ? [`setup:${k.id}`] : [], k.doctor ? [`doctor:${k.id}`] : []),
+            )
+        )
+          .concat("shell")
+          .map((w) => (
+            <button key={w} type="button" className="chip" title={`${nameOf(w)}를 새 탭에서 엽니다`} onClick={() => add(w)}>
+              + {opener(w)}
+            </button>
+          ))}
         <span className="spacer" />
         <button type="button" aria-pressed={big} title={big ? "원래 크기로 (Shift+Esc)" : "창 전체로 크게"} onClick={() => setBig(!big)}>
           {big ? "원래 크기로" : "크게 보기"}
@@ -1083,13 +1233,15 @@ function TermTab({
         </div>
       )}
       {kind && <p className="help">{kind.note}</p>}
-      {unset.map((id) => {
+      {needSetup.map((id) => {
         const k = mine.find((x) => x.id === id);
         if (!k) return null;
         const on = cur?.which === `setup:${id}` && !cur.ended;
         return (
           <p key={id} className="note-box" data-testid="setup-needed">
-            {`${k.name} 설정이 아직 안 됐습니다. 설정(${k.setup})을 마치면 게이트웨이가 저절로 켜집니다.`}
+            {k.gate
+              ? `${k.name} 설정이 아직 안 됐습니다. 설정(${k.setup})을 마치면 게이트웨이가 저절로 켜집니다.`
+              : `${k.name} 설정이 아직 안 됐습니다. 설정(${k.setup})을 마치면 바로 쓸 수 있습니다.`}
             {!on && (
               <span>
                 <button type="button" className="primary" onClick={() => add(`setup:${id}`)}>
@@ -1100,14 +1252,55 @@ function TermTab({
           </p>
         );
       })}
+      {notIn.map((id) => {
+        const k = kindOf(id);
+        if (!k) return null;
+        return (
+          <section key={id} className="guide-card" data-testid="agent-guide">
+            <h3>{`${k.name} 설치 안내`}</h3>
+            {k.about && <p className="muted">{k.about}</p>}
+            <ol>
+              {(k.guide ?? []).map((g, i) => (
+                <li key={i}>
+                  <span>{g.title}</span>
+                  <code className="mono">{g.command}</code>
+                  <span className="actions">
+                    <button type="button" onClick={() => add(`guide:${id}:${i}`)}>
+                      터미널에서 실행
+                    </button>
+                    <button type="button" className="link" onClick={() => copyText(g.command)}>
+                      복사
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ol>
+            <p className="help">
+              {`상자 사용자의 홈에 설치되어(상자의 홈 볼륨) 상자를 다시 만들어도 남습니다. 직접 셸을 열어 위 명령을 쳐도 됩니다.${box.spec.network === "ai" ? ' 네트워크가 "AI 서비스만"이라 설치에 필요한 주소(npm 등)는 이 에이전트를 고를 때 허용 목록에 넣었습니다. 막히면 "연결 기록"에서 허용하세요.' : ""}`}
+              {k.docs && (
+                <>
+                  {" "}
+                  <a href={k.docs} onClick={(e) => (e.preventDefault(), openURL(k.docs!))}>
+                    공식 안내
+                  </a>
+                </>
+              )}
+            </p>
+          </section>
+        );
+      })}
       {done.map((id) => {
         const k = mine.find((x) => x.id === id);
         if (!k) return null;
         return (
           <p key={id} className="note-box ok" data-testid="setup-done">
-            {`${k.name} 설정이 끝났습니다. 게이트웨이가 저절로 켜지고 있습니다(30초~1분). 이 터미널은 그대로 써도 됩니다.`}
+            {k.group === "guide"
+              ? `${k.name}이(가) 설치됐습니다. 위의 "새 터미널"에서 "+ ${k.name}"으로 엽니다.`
+              : k.gate
+                ? `${k.name} 설정이 끝났습니다. 게이트웨이가 저절로 켜지고 있습니다(30초~1분). 이 터미널은 그대로 써도 됩니다.`
+                : `${k.name} 설정이 끝났습니다. 이 터미널은 그대로 써도 됩니다.`}
             <span>
-              {k.port && (
+              {!!k.port && (
                 <button type="button" className="primary" onClick={onWeb}>
                   웹 화면 열러 가기
                 </button>
@@ -1131,7 +1324,8 @@ function TermTab({
             command={cliOf(t.which)}
             onEnd={() => {
               setTerms((all) => all.map((x) => (x.key === t.key ? { ...x, ended: true } : x)));
-              if (t.which.startsWith("setup:")) check();
+              // Set up, put in, updated: seen at once.
+              if (/^(setup|guide|update):/.test(t.which)) check();
             }}
             open={(cols, rows) => call<string>("AgentTermOpen", box.spec.name, t.which, cols, rows)}
           />
@@ -1191,7 +1385,11 @@ function WebTab(props: {
   // Set up in the terminal meanwhile: seen here too (asked only until then).
   usePoll(look, 5000, unset, [], webRef);
   const holder = `${box.project}-agent`; // the service shares its network and processes
-  const load = () => call<{ port: number; local: number; shared: number }[]>("AgentPortsEnsure", s.name).then((p) => setPorts(p ?? []), (e) => setNote(e.message));
+  const load = () =>
+    call<{ port: number; local: number; shared: number }[]>("AgentPortsEnsure", s.name).then(
+      (p) => setPorts(p ?? []),
+      (e) => setNote(e.message),
+    );
   useEffect(() => {
     showCli(`# BoxForge가 이 PC의 127.0.0.1:포트 로 받은 연결을 docker exec ${holder} 로 상자 안의 localhost:포트 에 이어 줍니다`);
     load();
@@ -1218,7 +1416,10 @@ function WebTab(props: {
   const reach = async (port: number): Promise<string | null> => {
     let at = 0;
     if (remote()) {
-      const ok = await run(`# https://${location.hostname}:${port} → ${holder} 안의 localhost:${port} (이 BoxForge에 로그인한 브라우저만)`, async () => (at = await call<number>("AgentPortShare", s.name, port)));
+      const ok = await run(
+        `# https://${location.hostname}:${port} → ${holder} 안의 localhost:${port} (이 BoxForge에 로그인한 브라우저만)`,
+        async () => (at = await call<number>("AgentPortShare", s.name, port)),
+      );
       load();
       return ok ? `https://${location.hostname}:${at}` : null;
     }
@@ -1244,8 +1445,9 @@ function WebTab(props: {
     }
   };
   const openPageNow = async (where: "pc" | "browser") => {
-    let link = "";
-    if (!(await run(`docker exec ${holder} sh /opt/boxforge/run openclaw dashboard --json`, async () => (link = await call<string>("AgentWebLink", s.name))))) return;
+    // OpenClaw's page opens signed in, by its one-time link; another's (Hermes) is its address.
+    let link = `http://127.0.0.1:${page!.port}/`;
+    if (page!.link === "openclaw" && !(await run(`docker exec ${holder} sh /opt/boxforge/run openclaw dashboard --json`, async () => (link = await call<string>("AgentWebLink", s.name))))) return;
     if (where === "pc") {
       const base = await reach(page!.port!);
       if (!base) return;
@@ -1275,7 +1477,8 @@ function WebTab(props: {
     <div ref={webRef} className="agent-web">
       {remote() && (
         <p className="note-box">
-          웹 서버로 접속 중입니다: 상자의 화면과 포트는 BoxForge 서버의 같은 번호 포트(HTTPS)로 열리고, 이 BoxForge에 로그인한 브라우저에서만 열립니다. 서버에 방화벽이나 포트 포워딩이 있으면 그 번호(예: 18789)를 열어 두세요.
+          웹 서버로 접속 중입니다: 상자의 화면과 포트는 BoxForge 서버의 같은 번호 포트(HTTPS)로 열리고, 이 BoxForge에 로그인한 브라우저에서만 열립니다. 서버에 방화벽이나 포트 포워딩이 있으면 그
+          번호(예: 18789)를 열어 두세요.
         </p>
       )}
       {s.service && (
@@ -1288,19 +1491,33 @@ function WebTab(props: {
         <section className="web-card" data-testid="agent-page">
           <h3>{`${page.name} 화면`}</h3>
           <p className="muted">
-            {`${page.name}의 웹 화면을 로그인된 상태로 엽니다. 브라우저 상자는 격리된 Firefox라서, 그 화면의 코드가 내 PC의 브라우저에서 돌지 않습니다(내 PC에는 그림만 보입니다).`}
+            {`${page.name}의 웹 화면을 ${page.link === "openclaw" ? "로그인된 상태로 " : ""}엽니다(상자 안의 127.0.0.1:${page.port}). 브라우저 상자는 격리된 Firefox라서, 그 화면의 코드가 내 PC의 브라우저에서 돌지 않습니다(내 PC에는 그림만 보입니다).`}
           </p>
-          {unset && (
+          {unset && page.gate && (
             <p className="note-box" data-testid="page-setup-needed">
               {`${page.name} 설정이 아직 안 됐습니다. "터미널" 탭의 "설정 시작"(${page.setup})으로 설정을 마치면 게이트웨이가 저절로 켜지고, 그 뒤에 화면이 열립니다.`}
             </p>
           )}
           {!s.service && (
             <p className="note-box">
-              {`게이트웨이가 켜져 있어야 화면이 열립니다. 상자의 터미널에서 설정(openclaw onboard)을 마쳤다면 "늘 켜 두기"로 게이트웨이를 켜세요.`}
+              {page.gate
+                ? `게이트웨이가 켜져 있어야 화면이 열립니다. 상자의 터미널에서 설정(${page.setup})을 마쳤다면 "늘 켜 두기"로 게이트웨이를 켜세요.`
+                : `화면을 내는 프로그램이 켜져 있어야 화면이 열립니다. "늘 켜 두기"로 켜세요.`}
               <span>
-                <button type="button" onClick={() => saveSpec({ ...s, service: page.service ?? "", ports: [...new Set([...(s.ports ?? []), page.port!])] }, `${s.name} · 게이트웨이 늘 켜 두기`)}>
-                  게이트웨이 늘 켜 두기
+                <button
+                  type="button"
+                  onClick={() =>
+                    saveSpec(
+                      {
+                        ...s,
+                        service: page.service ?? "",
+                        ports: [...new Set([...(s.ports ?? []), page.port!])],
+                      },
+                      `${s.name} · 게이트웨이 늘 켜 두기`,
+                    )
+                  }
+                >
+                  {page.gate ? "게이트웨이 늘 켜 두기" : "늘 켜 두기"}
                 </button>
               </span>
             </p>
@@ -1311,7 +1528,13 @@ function WebTab(props: {
               {opening === "pc" ? "여는 중… (몇 초 걸립니다)" : remote() ? "이 기기 브라우저로 열기" : "내 PC 브라우저로 열기"}
             </button>
             {s.browser ? (
-              <button type="button" disabled={!browserUp || !!opening} aria-busy={opening === "browser"} title={browserUp ? "" : "브라우저 상자가 아직 켜지지 않았습니다"} onClick={() => openPage("browser")}>
+              <button
+                type="button"
+                disabled={!browserUp || !!opening}
+                aria-busy={opening === "browser"}
+                title={browserUp ? "" : "브라우저 상자가 아직 켜지지 않았습니다"}
+                onClick={() => openPage("browser")}
+              >
                 {opening === "browser" ? "여는 중… (몇 초 걸립니다)" : "브라우저 상자로 열기"}
               </button>
             ) : null}
@@ -1346,7 +1569,10 @@ function WebTab(props: {
 
       <section className="web-card" data-testid="agent-ports">
         <h3>포트</h3>
-        <p className="muted">상자 안 프로그램의 포트를 내 PC의 같은 번호(쓰이고 있으면 다음 빈 번호)로 엽니다. 이 PC에서만(127.0.0.1) 열리고, 상자를 다시 만들지 않고 바로 열리고 닫힙니다. BoxForge가 켜져 있는 동안 열려 있습니다.</p>
+        <p className="muted">
+          상자 안 프로그램의 포트를 내 PC의 같은 번호(쓰이고 있으면 다음 빈 번호)로 엽니다. 이 PC에서만(127.0.0.1) 열리고, 상자를 다시 만들지 않고 바로 열리고 닫힙니다. BoxForge가 켜져 있는 동안 열려
+          있습니다.
+        </p>
         {ports.length > 0 && (
           <table className="grid">
             <thead>
@@ -1432,13 +1658,16 @@ function Gateway({ box, mine, service, run }: { box: Box; mine: Kind[]; service?
   const here = useRef<HTMLDivElement>(null);
   const read = () =>
     Promise.all([
-      call<string>("AgentServiceLog", box.spec.name).then((l) => setLog(l ?? ""), () => setLog("")),
+      call<string>("AgentServiceLog", box.spec.name).then(
+        (l) => setLog(l ?? ""),
+        () => setLog(""),
+      ),
       // Its container running isn't it ready: how far it is, seen in the box.
       up ? call<GatewayCheck>("AgentGatewayCheck", box.spec.name).then(setCheck, () => setCheck(null)) : (setCheck(null), undefined),
     ]);
   useEffect(() => void read(), [box.spec.name, service?.state]);
   // Often while it is on its way, seldom once it is ready.
-  const settled = up && (!!check && !check.setup && (!check.port || check.listening));
+  const settled = up && !!check && !check.setup && (!check.port || check.listening);
   usePoll(read, settled ? 20000 : 5000, true, [box.spec.name, service?.state], here);
   const who = mine.find((k) => k.id === check?.agent);
   // What "running" means, in words: waiting for its setup, starting, or ready.
@@ -1458,7 +1687,15 @@ function Gateway({ box, mine, service, run }: { box: Box; mine: Kind[]; service?
   const locked = /recover-lock|cannot verify Gateway ownership/.test(log);
   const lines = log.trimEnd().split("\n");
   const restart = () =>
-    run(`docker compose -p ${box.project} restart service`, () => call("ComposeAction", { key: `gw-${Date.now()}`, project: box.project, files: [box.file], action: "restart", services: ["service"] })).then(read);
+    run(`docker compose -p ${box.project} restart service`, () =>
+      call("ComposeAction", {
+        key: `gw-${Date.now()}`,
+        project: box.project,
+        files: [box.file],
+        action: "restart",
+        services: ["service"],
+      }),
+    ).then(read);
   return (
     <div ref={here} className="gateway" data-testid="agent-gateway">
       <p>
@@ -1471,7 +1708,8 @@ function Gateway({ box, mine, service, run }: { box: Box; mine: Kind[]; service?
       {more && <p className="help">{more}</p>}
       {locked && (
         <p className="warn">
-          게이트웨이의 잠금이 전에 끝난 게이트웨이에게 남아 있습니다. 셸에서 openclaw gateway recover-lock 을 실행하고, 그것이 알려 주는 확인 명령(--confirm …)을 실행한 뒤 "게이트웨이 다시 켜기"를 누르세요.
+          게이트웨이의 잠금이 전에 끝난 게이트웨이에게 남아 있습니다. 셸에서 openclaw gateway recover-lock 을 실행하고, 그것이 알려 주는 확인 명령(--confirm …)을 실행한 뒤 "게이트웨이 다시 켜기"를
+          누르세요.
         </p>
       )}
       <div className="actions">
@@ -1489,7 +1727,11 @@ function Gateway({ box, mine, service, run }: { box: Box; mine: Kind[]; service?
 }
 
 function ChangesTab({ box, run, showCli }: { box: Box; run: Run; showCli: (cmd: string) => void }) {
-  const [data, setData] = useState<{ git: boolean; since: number; files: { status: string; path: string }[] } | null>(null);
+  const [data, setData] = useState<{
+    git: boolean;
+    since: number;
+    files: { status: string; path: string }[];
+  } | null>(null);
   const [error, setError] = useState("");
   const [shown, setShown] = useState<{ path: string; text: string } | null>(null);
   const read = () => {
@@ -1500,7 +1742,14 @@ function ChangesTab({ box, run, showCli }: { box: Box; run: Run; showCli: (cmd: 
     );
   };
   useEffect(read, [box.spec.name]);
-  const label: Record<string, string> = { M: "고침", A: "더함", D: "지움", R: "이름 바꿈", "??": "새 파일", changed: "바뀜" };
+  const label: Record<string, string> = {
+    M: "고침",
+    A: "더함",
+    D: "지움",
+    R: "이름 바꿈",
+    "??": "새 파일",
+    changed: "바뀜",
+  };
   return (
     <div className="agent-changes">
       <div className="graph-bar">
@@ -1525,7 +1774,14 @@ function ChangesTab({ box, run, showCli }: { box: Box; run: Run; showCli: (cmd: 
             <button
               type="button"
               className="link"
-              onClick={() => run(`docker exec ${box.project}-agent git -C /workspace diff -- ${f.path}`, async () => setShown({ path: f.path, text: await call<string>("AgentDiff", box.spec.name, f.path) }))}
+              onClick={() =>
+                run(`docker exec ${box.project}-agent git -C /workspace diff -- ${f.path}`, async () =>
+                  setShown({
+                    path: f.path,
+                    text: await call<string>("AgentDiff", box.spec.name, f.path),
+                  }),
+                )
+              }
             >
               {f.path}
             </button>
@@ -1629,9 +1885,16 @@ function NetworkTab({ box, run, showCli, reload }: { box: Box; run: Run; showCli
 function SnapshotsTab({ box, run, showCli }: { box: Box; run: Run; showCli: (cmd: string) => void }) {
   const [list, setList] = useState<Snapshot[]>([]);
   const [label, setLabel] = useState("");
-  const [asking, setAsking] = useState<{ snap: Snapshot; what: "restore" | "remove" } | null>(null);
+  const [asking, setAsking] = useState<{
+    snap: Snapshot;
+    what: "restore" | "remove";
+  } | null>(null);
   const [working, setWorking] = useState(false);
-  const load = () => call<Snapshot[]>("AgentSnapshots", box.spec.name).then((l) => setList(l ?? []), () => {});
+  const load = () =>
+    call<Snapshot[]>("AgentSnapshots", box.spec.name).then(
+      (l) => setList(l ?? []),
+      () => {},
+    );
   useEffect(() => {
     showCli(`docker volume ls --filter name=${box.project}-snap-`);
     load();
@@ -1652,8 +1915,8 @@ function SnapshotsTab({ box, run, showCli }: { box: Box; run: Run; showCli: (cmd
   return (
     <div className="agent-snapshots">
       <p className="muted">
-        작업 폴더를 지금 상태 그대로 저장해 둡니다. 에이전트에게 큰 일을 맡기기 전에 저장하면, 결과가 마음에 들지 않을 때 그때로 되돌릴 수 있습니다. 복사본은 상자 밖(볼륨)에 있어
-        에이전트가 건드릴 수 없습니다.
+        작업 폴더를 지금 상태 그대로 저장해 둡니다. 에이전트에게 큰 일을 맡기기 전에 저장하면, 결과가 마음에 들지 않을 때 그때로 되돌릴 수 있습니다. 복사본은 상자 밖(볼륨)에 있어 에이전트가 건드릴 수
+        없습니다.
       </p>
       <div className="graph-bar">
         <input aria-label="저장 이름" value={label} placeholder="이름 (선택, 예: 리팩터링 전)" onChange={(e) => setLabel(e.target.value)} />
@@ -1728,8 +1991,8 @@ function KeysTab({ box, mine, run, showCli, reload }: { box: Box; mine: Kind[]; 
   return (
     <div className="agent-keys">
       <p className="muted">
-        API 키는 이 PC의 상자 설정 폴더에 나만 읽을 수 있는 파일로 두고, 상자 안에는 /run/secrets/agent_env 로만 넣습니다. 컨테이너 설정(docker inspect)과 내보내기 파일에는 들어가지
-        않습니다. 넣은 키는 다시 보여 주지 않습니다. 에이전트를 다시 열면 적용됩니다. 구독 로그인을 쓰는 에이전트는 키 없이 터미널에서 로그인해도 됩니다.
+        API 키는 이 PC의 상자 설정 폴더에 나만 읽을 수 있는 파일로 두고, 상자 안에는 /run/secrets/agent_env 로만 넣습니다. 컨테이너 설정(docker inspect)과 내보내기 파일에는 들어가지 않습니다. 넣은
+        키는 다시 보여 주지 않습니다. 에이전트를 다시 열면 적용됩니다. 구독 로그인을 쓰는 에이전트는 키 없이 터미널에서 로그인해도 됩니다.
       </p>
       <ul className="key-list" data-testid="agent-keys">
         {box.keys.map((k) => (

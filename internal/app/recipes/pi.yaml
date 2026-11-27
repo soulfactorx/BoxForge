@@ -1,0 +1,12 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: pi
+name: Pi Coding Agent
+group: ready
+order: 10
+command: pi
+about: 가볍고 빠른 코딩 에이전트. 여러 회사의 모델을 구독 계정이나 API 키로 씁니다.
+install: RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+keys: [ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY]
+hosts: ["@anthropic", "@openai", "@google", "@copilot", api.x.ai, openrouter.ai, api.groq.com, api.mistral.ai, api.cerebras.ai]
+note: pi 안에서 /login 으로 구독 계정에 로그인하거나 API 키를 넣습니다.
+version: pi --version

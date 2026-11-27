@@ -21,84 +21,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 )
-
-// AgentKind is an agent a box can have put in.
-type AgentKind struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Command string   `json:"command"` // what starts it in the box
-	Install string   `json:"install"` // the Dockerfile lines that put it in
-	Keys    []string `json:"keys"`    // the API key settings it reads
-	Hosts   []string `json:"hosts"`   // what it needs to reach, for "AI services only"
-	Note    string   `json:"note"`    // how to sign in, in a few words
-	// Service is what runs it as an always-on service (a gateway that
-	// answers in chat apps), and the port its own page is on.
-	Service string `json:"service,omitempty"`
-	Port    int    `json:"port,omitempty"`
-	// Setup is the command that sets it up first (a gateway needs it before
-	// it can run), and Ready a shell test that is true once that is done.
-	Setup string `json:"setup,omitempty"`
-	Ready string `json:"ready,omitempty"`
-	// Memory is the least memory limit (GB) it runs well in: OpenClaw's
-	// gateway takes about 2 GB by itself and more as it works.
-	Memory float64 `json:"memory,omitempty"`
-}
-
-var anthropicHosts = []string{"api.anthropic.com", "console.anthropic.com", "claude.ai", "platform.claude.com", "statsig.anthropic.com"}
-var openaiHosts = []string{"api.openai.com", "auth.openai.com", "chatgpt.com", "*.chatgpt.com"}
-var googleHosts = []string{"generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com", "accounts.google.com", "www.googleapis.com", "play.googleapis.com"}
-var copilotHosts = []string{"github.com", "api.github.com", "api.githubcopilot.com", "*.githubcopilot.com", "copilot-proxy.githubusercontent.com"}
-
-func join(lists ...[]string) []string {
-	var out []string
-	for _, l := range lists {
-		out = append(out, l...)
-	}
-	return out
-}
-
-// agentKinds, in the order offered: the one used most first.
-var agentKinds = []AgentKind{
-	{ID: "pi", Name: "Pi Coding Agent", Command: "pi", Install: "RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
-		Keys:  []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY"},
-		Hosts: join(anthropicHosts, openaiHosts, googleHosts, copilotHosts, []string{"api.x.ai", "openrouter.ai", "api.groq.com", "api.mistral.ai", "api.cerebras.ai"}),
-		Note:  "pi 안에서 /login 으로 구독 계정에 로그인하거나 API 키를 넣습니다."},
-	{ID: "claude", Name: "Claude Code", Command: "claude", Install: "RUN npm install -g @anthropic-ai/claude-code",
-		Keys: []string{"ANTHROPIC_API_KEY"}, Hosts: anthropicHosts,
-		Note: "처음 실행하면 로그인 주소가 나옵니다. 내 PC의 브라우저에서 열고 받은 코드를 붙여 넣습니다."},
-	{ID: "codex", Name: "Codex CLI", Command: "codex", Install: "RUN npm install -g @openai/codex",
-		Keys: []string{"OPENAI_API_KEY"}, Hosts: openaiHosts,
-		Note: "codex login --device-auth 로 내 PC의 브라우저에서 로그인하거나 API 키를 넣습니다."},
-	{ID: "gemini", Name: "Gemini CLI", Command: "gemini", Install: "RUN npm install -g @google/gemini-cli",
-		Keys: []string{"GEMINI_API_KEY"}, Hosts: googleHosts,
-		Note: "구글 로그인은 주소와 코드로 합니다(브라우저 없이). API 키도 됩니다."},
-	{ID: "copilot", Name: "GitHub Copilot CLI", Command: "copilot", Install: "RUN npm install -g @github/copilot",
-		Keys: []string{"GH_TOKEN"}, Hosts: copilotHosts,
-		Note: "copilot 안에서 /login 으로 GitHub 기기 코드 로그인을 합니다."},
-	{ID: "cursor", Name: "Cursor CLI", Command: "cursor-agent",
-		Install: "RUN curl -fsSL https://cursor.com/install | HOME=/opt/cursor bash \\\n && chmod -R a+rX /opt/cursor \\\n && ln -sf /opt/cursor/.local/bin/cursor-agent /usr/local/bin/cursor-agent",
-		Keys:    []string{"CURSOR_API_KEY"}, Hosts: []string{"cursor.com", "*.cursor.com", "*.cursor.sh"},
-		Note: "cursor-agent login 으로 로그인하거나 CURSOR_API_KEY 를 넣습니다."},
-	{ID: "grok", Name: "Grok CLI", Command: "grok", Install: "RUN npm install -g @vibe-kit/grok-cli",
-		Keys: []string{"GROK_API_KEY"}, Hosts: []string{"api.x.ai"},
-		Note: "GROK_API_KEY 에 xAI의 API 키를 넣습니다."},
-	{ID: "openclaw", Name: "OpenClaw", Command: "openclaw", Install: "RUN npm install -g openclaw@latest --allow-scripts=openclaw",
-		Keys:    []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "OPENCLAW_GATEWAY_TOKEN", "TELEGRAM_BOT_TOKEN"},
-		Hosts:   join(anthropicHosts, openaiHosts, googleHosts, []string{"openrouter.ai", "api.x.ai"}),
-		Note:    "먼저 여기서 openclaw onboard --mode local --no-install-daemon 으로 설정합니다. 그다음 \"웹 · 포트\" 탭에서 \"게이트웨이 늘 켜 두기\"를 누르고, \"내 PC 브라우저로 열기\"나 \"브라우저 상자로 열기\"로 화면을 엽니다(로그인된 링크로 열림).",
-		Service: "openclaw gateway --port 18789 --bind loopback", Port: 18789,
-		Setup: "openclaw onboard --mode local --no-install-daemon", Ready: openclawReady, Memory: 8},
-	{ID: "hermes", Name: "Hermes Agent", Command: "hermes",
-		Install: "RUN python3 -m venv /opt/hermes && /opt/hermes/bin/pip install --no-cache-dir hermes-agent \\\n && ln -sf /opt/hermes/bin/hermes /usr/local/bin/hermes",
-		Keys:    []string{"OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN"},
-		Hosts:   join([]string{"openrouter.ai", "*.nousresearch.com"}, anthropicHosts, openaiHosts),
-		Note:    "hermes setup 으로 모델을 정합니다. 메신저로 쓰려면 hermes gateway setup 후 \"늘 켜 두기\"를 켭니다.",
-		Service: "hermes gateway", Setup: "hermes setup"},
-}
 
 // AgentPresets are more addresses a box with "AI services only" can be
 // let to reach, by what they are for.
@@ -107,21 +34,6 @@ var AgentPresets = map[string][]string{
 	"github":    {"github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com", "raw.githubusercontent.com"},
 	"messenger": {"api.telegram.org", "discord.com", "*.discord.com", "gateway.discord.gg", "*.discord.gg", "cdn.discordapp.com", "slack.com", "*.slack.com", "web.whatsapp.com", "*.whatsapp.net", "*.whatsapp.com"},
 	"local-ai":  {"host.docker.internal:11434", "host.docker.internal:1234"},
-}
-
-// AgentCatalog gives the screen what agents a box can have and the address
-// groups it can open.
-func (a *App) AgentCatalog() map[string]any {
-	return map[string]any{"kinds": agentKinds, "presets": AgentPresets}
-}
-
-func agentKind(id string) (AgentKind, bool) {
-	for _, k := range agentKinds {
-		if k.ID == id {
-			return k, true
-		}
-	}
-	return AgentKind{}, false
 }
 
 // AgentSpec is a box as the user chose it; kept as spec.json beside its files.
@@ -223,9 +135,11 @@ func (s *AgentSpec) check() error {
 			return fmt.Errorf("write the command that starts the agent in that image")
 		}
 	}
-	if strings.ContainsAny(s.Command+s.Service, "\n\r") {
+	if strings.ContainsAny(s.Command, "\n\r") {
 		return fmt.Errorf("a command is one line")
 	}
+	// What is kept running: a program a line.
+	s.Service = strings.TrimSpace(strings.ReplaceAll(s.Service, "\r", ""))
 	s.Workspace = strings.TrimSpace(s.Workspace)
 	if !filepath.IsAbs(s.Workspace) && !strings.HasPrefix(s.Workspace, "/") {
 		return fmt.Errorf("write the work folder's whole path (like /home/me/project or C:\\work\\project)")
@@ -353,6 +267,9 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 		w("    labels:\n      io.boxforge.agent: %s\n      io.boxforge.agent.part: %s\n", y(s.Name), service)
 		w("    volumes:\n      - %s\n", y(host(s.Workspace)+":/workspace"))
 		w("      - ./run.sh:%s:ro\n", agentRunPath)
+		if service != "agent" {
+			w("      - ./service.sh:%s:ro\n", agentServicePath)
+		}
 		if image == "" {
 			w("      - home:/home/agent\n")
 		}
@@ -397,7 +314,7 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 	main := "exec tail -f /dev/null"
 	agent("agent", main)
 	if s.Service != "" {
-		agent("service", serviceCommand(s))
+		agent("service", "exec sh "+agentServicePath)
 	}
 	if s.Network == "ai" {
 		w("  egress:\n    image: %s\n    container_name: %s-egress\n    init: true\n", y(agentBase()), project)
@@ -442,17 +359,45 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 	w("\nsecrets:\n  agent_env:\n    file: ./secrets.env\n")
 	files["compose.yaml"] = b.String()
 	files["run.sh"] = agentRun
+	if s.Service != "" {
+		files["service.sh"] = serviceScript(s)
+	}
 
 	if image == "" {
 		var d strings.Builder
 		d.WriteString("# The agent's image: BoxForge writes it for the box.\nARG BASE=node:24-bookworm-slim\nFROM ${BASE}\nARG UID=1000\nARG GID=1000\n")
-		d.WriteString("RUN apt-get update && apt-get install -y --no-install-recommends \\\n    git curl ca-certificates ripgrep python3 python3-venv procps less jq openssh-client \\\n && rm -rf /var/lib/apt/lists/*\n")
+		// The system's part, once for all its agents: what they all may
+		// use, and what each one's recipe asks for.
+		pkgs := []string{"git", "curl", "ca-certificates", "ripgrep", "python3", "python3-venv", "procps", "less", "jq", "openssh-client", "xz-utils", "unzip", "libatomic1"}
+		for _, k := range kinds {
+			for _, p := range k.Apt {
+				if !slices.Contains(pkgs, p) {
+					pkgs = append(pkgs, p)
+				}
+			}
+		}
+		d.WriteString("RUN apt-get update && apt-get install -y --no-install-recommends \\\n    " + strings.Join(pkgs, " ") + " \\\n && rm -rf /var/lib/apt/lists/*\n")
 		d.WriteString("RUN userdel -r node 2>/dev/null; (getent group $GID >/dev/null || groupadd -g $GID agent) \\\n && useradd -m -o -u $UID -g $GID -s /bin/bash agent\n")
 		for _, k := range kinds {
-			d.WriteString("# " + k.Name + "\n" + k.Install + "\n")
+			if k.Install != "" {
+				d.WriteString("# " + k.Name + "\n" + k.Install + "\n")
+			}
 		}
 		d.WriteString("ENV HOME=/home/agent NPM_CONFIG_PREFIX=/home/agent/.npm-global PATH=/home/agent/.npm-global/bin:/home/agent/.local/bin:$PATH\n")
-		d.WriteString("USER agent\nWORKDIR /workspace\n")
+		d.WriteString("USER agent\n")
+		// Into the user's home, as the user: the box's home volume starts
+		// as a copy of it, and keeps what the agent adds and updates there.
+		home := false
+		for _, k := range kinds {
+			if k.HomeInstall != "" {
+				if !home {
+					d.WriteString("WORKDIR /home/agent\n")
+					home = true
+				}
+				d.WriteString("# " + k.Name + " (into the home)\n" + k.HomeInstall + "\n")
+			}
+		}
+		d.WriteString("WORKDIR /workspace\n")
 		files["Dockerfile"] = d.String()
 		files[".dockerignore"] = "*\n"
 	}
@@ -561,25 +506,50 @@ server.on("connect", (req, sock, head) => {
 server.listen(8888);
 `
 
-// serviceCommand is what the kept-running service runs: an agent's gateway
-// that has to be set up first waits for that (quietly, saying so once)
-// instead of failing at once again and again, and starts as soon as the
-// setup in the box's terminal is done.
-func serviceCommand(s AgentSpec) string {
-	if k, ok := serviceKind(s); ok && k.Ready != "" {
-		// No "$" in it: Compose would take that for its own variable.
-		return fmt.Sprintf("if ! %s; then echo 'BoxForge: %s 설정을 기다리는 중입니다. 터미널 탭의 \"%s 설정\"(셸에서 %s)으로 설정을 마치면 바로 켜집니다.'; until %s; do sleep 10; done; fi; exec %s", k.Ready, k.Name, k.Name, k.Setup, k.Ready, s.Service)
+// agentServicePath is where the service's script is in the box.
+const agentServicePath = "/opt/boxforge/service"
+
+// serviceScript is what the kept-running service runs: each line of the
+// box's service a program (Hermes keeps its page and its gateway). An
+// agent's gateway that has to be set up first waits for that (quietly,
+// saying so once) instead of failing at once again and again, and starts as
+// soon as the setup in the box's terminal is done. When one of them ends,
+// the service ends, and the engine starts it all again.
+func serviceScript(s AgentSpec) string {
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n# BoxForge: what this box keeps running (written by BoxForge).\n")
+	if k, ok := serviceKind(s); ok && k.Gate && k.Ready != "" {
+		fmt.Fprintf(&b, "ready() {\n%s\n}\n", k.Ready)
+		fmt.Fprintf(&b, "if ! ready; then\n  echo %s\n  until ready; do sleep 10; done\nfi\n",
+			shQuote(fmt.Sprintf("BoxForge: %s 설정을 기다리는 중입니다. 터미널 탭의 \"%s 설정\"(셸에서 %s)으로 설정을 마치면 바로 켜집니다.", k.Name, k.Name, k.Setup)))
 	}
-	return s.Service
+	var lines []string
+	for _, l := range strings.Split(s.Service, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) == 1 {
+		b.WriteString("exec " + lines[0] + "\n")
+		return b.String()
+	}
+	b.WriteString("pids=\n")
+	for _, l := range lines {
+		fmt.Fprintf(&b, "echo %s\n%s &\npids=\"$pids $!\"\n", shQuote("BoxForge: 켭니다: "+l), l)
+	}
+	b.WriteString("while :; do\n  sleep 5\n  for p in $pids; do\n    if ! kill -0 \"$p\" 2>/dev/null; then echo 'BoxForge: 하나가 끝나서 모두 다시 켭니다.'; exit 1; fi\n  done\ndone\n")
+	return b.String()
 }
+
+// shQuote is s as one word for sh.
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // openclawReady is true (0) once OpenClaw is set up: its config names the
 // gateway's mode. Read by a few lines of node (tens of milliseconds, tens of
 // MB), not by the openclaw command (seconds, hundreds of MB, dozens of
 // threads): it is asked every few seconds while the screen waits, and in the
 // gateway's wait. A config node can't read as JSON is asked of openclaw.
-// 1 is "not set up"; any other code is "can't tell". No "$" in it: it goes
-// into compose.yaml.
+// 1 is "not set up"; any other code is "can't tell".
 const openclawReady = `node -e 'const f=(process.env.OPENCLAW_CONFIG_PATH||process.env.HOME+"/.openclaw/openclaw.json");let c;try{c=JSON.parse(require("fs").readFileSync(f,"utf8"))}catch(e){if(e.code==="ENOENT")process.exit(1);const r=require("child_process").spawnSync("openclaw",["config","get","gateway.mode"],{stdio:"ignore"});process.exit(r.status===0?0:r.status===1?1:3)}process.exit(c&&c.gateway&&c.gateway.mode?0:1)'`
 
 // serviceKind is the agent whose gateway the box's service runs (OpenClaw's

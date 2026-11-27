@@ -1,0 +1,17 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: codex
+name: Codex CLI
+group: guide
+order: 50
+command: codex
+about: OpenAI의 코딩 에이전트. CPU 종류 · 환경에 따라 설치가 까다로워, 상자의 터미널에서 직접 설치합니다.
+docs: https://github.com/openai/codex
+guide:
+  - title: 설치
+    command: npm install -g @openai/codex
+  - title: 로그인 (내 PC의 브라우저에서 코드 입력)
+    command: codex login --device-auth
+keys: [OPENAI_API_KEY]
+hosts: ["@openai", "@packages"]
+note: codex login --device-auth 로 내 PC의 브라우저에서 로그인하거나 API 키를 넣습니다.
+version: codex --version

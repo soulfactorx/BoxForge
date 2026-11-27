@@ -1,0 +1,17 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: cursor
+name: Cursor CLI
+group: guide
+order: 80
+command: cursor-agent
+about: Cursor의 터미널 에이전트. 설치 스크립트가 CPU 종류를 보고 받습니다. 상자의 터미널에서 직접 설치합니다.
+docs: https://cursor.com/cli
+guide:
+  - title: 설치 (내 홈의 ~/.local/bin 에 들어갑니다)
+    command: curl -fsSL https://cursor.com/install | bash
+  - title: 로그인
+    command: cursor-agent login
+keys: [CURSOR_API_KEY]
+hosts: [cursor.com, "*.cursor.com", "*.cursor.sh", "@packages"]
+note: cursor-agent login 으로 로그인하거나 CURSOR_API_KEY 를 넣습니다.
+version: cursor-agent --version

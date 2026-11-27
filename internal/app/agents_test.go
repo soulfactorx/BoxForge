@@ -1,7 +1,10 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -26,9 +29,11 @@ func TestAgentFiles(t *testing.T) {
 			t.Fatalf("compose.yaml lacks %q:\n%s", want, c)
 		}
 	}
-	// The gateway waits for its setup, then starts.
-	if !strings.Contains(c, "until node -e") || !strings.Contains(c, "exec openclaw gateway --port 18789 --bind loopback") {
-		t.Fatalf("service command:\n%s", c)
+	// The gateway waits for its setup, then starts: in a script of its own.
+	sv := f["service.sh"]
+	if !strings.Contains(c, "./service.sh:"+agentServicePath+":ro") || !strings.Contains(c, "exec sh "+agentServicePath) ||
+		!strings.Contains(sv, "until ready") || !strings.Contains(sv, "exec openclaw gateway --port 18789 --bind loopback") {
+		t.Fatalf("service:\n%s\n%s", c, sv)
 	}
 	if cmd, err := agentCommand(s, "setup:openclaw", true); err != nil || strings.Join(cmd, " ") != "sh "+agentRunPath+" openclaw onboard --mode local --no-install-daemon" {
 		t.Fatalf("setup = %v, %v", cmd, err)
@@ -40,8 +45,11 @@ func TestAgentFiles(t *testing.T) {
 	if strings.Contains(c, "ports:") || strings.Contains(c, "FORWARD") {
 		t.Fatalf("compose.yaml publishes ports:\n%s", c)
 	}
-	if !strings.Contains(f["Dockerfile"], "@earendil-works/pi-coding-agent") || !strings.Contains(f["Dockerfile"], "openclaw@latest") {
-		t.Fatalf("Dockerfile:\n%s", f["Dockerfile"])
+	// Pi as root, like any program; OpenClaw as the user, into its home.
+	df := f["Dockerfile"]
+	pi, user, oc := strings.Index(df, "@earendil-works/pi-coding-agent"), strings.Index(df, "USER agent"), strings.Index(df, "openclaw@latest")
+	if pi < 0 || user < pi || oc < user || !strings.Contains(df, "libatomic1") {
+		t.Fatalf("Dockerfile:\n%s", df)
 	}
 	if !strings.Contains(f["egress/allow.txt"], "*.example.com\n") || f["egress/proxy.js"] == "" {
 		t.Fatal("egress files")
@@ -74,10 +82,20 @@ noise
 // A terminal outside the app gets its command line read again by cmd.exe
 // and by WSL's shell: only plain words survive both.
 func TestAgentCommandPlainWords(t *testing.T) {
-	plain := regexp.MustCompile(`^[A-Za-z0-9_./:=-]+$`)
-	for _, k := range agentKinds {
+	plain := regexp.MustCompile(`^[A-Za-z0-9_./:=@-]+$`) // @: a package's version, as cmd.exe and sh leave it
+	kinds, problems := loadRecipes()
+	if len(problems) > 0 || len(kinds) < 9 {
+		t.Fatalf("recipes: %d, %v", len(kinds), problems)
+	}
+	for _, k := range kinds {
 		s := AgentSpec{Name: "x", Agents: []string{k.ID}}
-		for _, which := range []string{k.ID, "main", "shell"} {
+		whiches := []string{k.ID, "main", "shell"}
+		for _, a := range []struct{ name, cmd string }{{"setup", k.Setup}, {"doctor", k.Doctor}, {"update", k.Update}} {
+			if a.cmd != "" {
+				whiches = append(whiches, a.name+":"+k.ID)
+			}
+		}
+		for _, which := range whiches {
 			cmd, err := agentCommand(s, which, true)
 			if err != nil {
 				t.Fatal(err)
@@ -102,5 +120,49 @@ func TestAgentCommandPlainWords(t *testing.T) {
 	f := agentFiles(AgentSpec{Name: "x", Agents: []string{"pi"}, Workspace: "/w", Network: "none"}, func(p string) string { return p })
 	if !strings.Contains(f["compose.yaml"], "./run.sh:/opt/boxforge/run:ro") || !strings.Contains(f["run.sh"], `exec "$@"`) {
 		t.Fatal("run.sh isn't put in the box")
+	}
+}
+
+// Hermes keeps two programs running, and doesn't wait for its setup (its
+// page is where it is set up too); each started, the service ends when one does.
+func TestAgentServiceScript(t *testing.T) {
+	k, _ := agentKind("hermes")
+	s := AgentSpec{Name: "h", Agents: []string{"hermes"}, Service: k.Service}
+	sv := serviceScript(s)
+	if strings.Contains(sv, "until ready") || !strings.Contains(sv, "hermes dashboard --host 127.0.0.1 --port 9119 --no-open &") ||
+		!strings.Contains(sv, "hermes gateway &") || !strings.Contains(sv, "exit 1") {
+		t.Fatalf("%s", sv)
+	}
+	df := agentFiles(s, func(p string) string { return p })["Dockerfile"]
+	if !strings.Contains(df, "WORKDIR /home/agent") || !strings.Contains(df, "hermes-agent/main/scripts/install.sh") || !strings.Contains(df, "ffmpeg") {
+		t.Fatalf("%s", df)
+	}
+	// A guide's agent isn't put in.
+	g := agentFiles(AgentSpec{Name: "g", Agents: []string{"codex"}}, func(p string) string { return p })["Dockerfile"]
+	if strings.Contains(g, "@openai/codex") {
+		t.Fatalf("%s", g)
+	}
+	if cmd, err := agentCommand(AgentSpec{Agents: []string{"cursor"}}, "guide:cursor:0", true); err != nil || cmd[2] != "sh" || cmd[3] != "-c" || !strings.Contains(cmd[4], "| bash") {
+		t.Fatalf("%q %v", cmd, err)
+	}
+}
+
+// The user's recipes: a new one, one in place of a built-in one, a bad one said.
+func TestUserRecipes(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BOXFORGE_AGENT_RECIPES", dir)
+	os.WriteFile(filepath.Join(dir, "newbot.yaml"), []byte("id: newbot\nname: New Bot\ngroup: hot\ncommand: newbot\nhosts: [\"@anthropic\", x.example]\nhomeInstall: RUN npm install -g newbot\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "pi.yaml"), []byte("id: pi\nname: My Pi\ncommand: pi\ninstall: RUN true\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte("id: Bad Id\nname: x\ncommand: x\n"), 0o644)
+	kinds, problems := loadRecipes()
+	byID := map[string]AgentKind{}
+	for _, k := range kinds {
+		byID[k.ID] = k
+	}
+	if byID["newbot"].Group != "hot" || !slices.Contains(byID["newbot"].Hosts, "api.anthropic.com") || byID["pi"].Name != "My Pi" || len(problems) != 1 {
+		t.Fatalf("%+v %v", byID["newbot"], problems)
+	}
+	if kinds[len(kinds)-1].ID != "newbot" {
+		t.Fatal("the user's own come last")
 	}
 }

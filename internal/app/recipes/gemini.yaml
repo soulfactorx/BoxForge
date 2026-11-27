@@ -1,0 +1,17 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: gemini
+name: Gemini CLI
+group: guide
+order: 60
+command: gemini
+about: Google의 코딩 에이전트. 상자의 터미널에서 직접 설치합니다.
+docs: https://github.com/google-gemini/gemini-cli
+guide:
+  - title: 설치
+    command: npm install -g @google/gemini-cli
+  - title: 실행 (처음에 로그인 방법을 고릅니다)
+    command: gemini
+keys: [GEMINI_API_KEY]
+hosts: ["@google", "@packages"]
+note: 구글 로그인은 주소와 코드로 합니다(브라우저 없이). API 키도 됩니다.
+version: gemini --version

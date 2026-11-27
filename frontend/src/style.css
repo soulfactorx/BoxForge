@@ -1388,3 +1388,18 @@ tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .gateway-log { max-height: 260px; overflow: auto; font-size: 12px; }
 .state.waiting .dot { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
 .note-box.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+/* AI agents: the three kinds of agent, a guide's steps. */
+.agent-group { margin: 0 0 12px; }
+.agent-group h4 { margin: 4px 0 2px; font-size: 13px; }
+.agent-group > .help { margin: 0 0 6px; }
+.agent-group .check > span { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; }
+.kind-about { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.chip.mine { font-size: 11px; padding: 0 6px; }
+.guide-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 8px 0; }
+.guide-card h3 { margin: 0 0 4px; font-size: 14px; }
+.guide-card ol { margin: 6px 0; padding-left: 20px; display: grid; gap: 8px; }
+.guide-card li { display: grid; gap: 4px; }
+.guide-card code { display: block; padding: 6px 8px; border-radius: 6px; background: var(--code-bg, var(--accent-soft)); overflow-x: auto; white-space: pre; }
+.guide-card .actions { display: flex; gap: 8px; align-items: center; }
+.agent-kinds .agent-group { grid-column: 1 / -1; }
+.kind-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 16px; }

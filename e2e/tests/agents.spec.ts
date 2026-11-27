@@ -20,6 +20,9 @@ test.afterAll(() => {
   sh(`docker compose -p bfa-bfe2e-web down --volumes --remove-orphans`, true);
   sh(`docker compose -p bfa-bfe2e-oc down --volumes --remove-orphans`, true);
   sh(`docker rmi boxforge-agent/bfe2e-oc:latest`, true);
+  sh(`docker compose -p bfa-bfe2e-hm down --volumes --remove-orphans`, true);
+  sh(`docker rmi boxforge-agent/bfe2e-hm:latest`, true);
+  sh(`docker compose -p bfa-bfe2e-guide down --volumes --rmi local --remove-orphans`, true);
   sweep();
 });
 
@@ -446,4 +449,89 @@ test("an OpenClaw box opens with its setup; its gateway waits for that, then sta
   await panel();
   await expect(page.getByRole("tab", { name: "셸" })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId("setup-needed")).toHaveCount(0);
+});
+
+test("a Hermes box: installed as its maker has it, its page and its gateway kept running, its setup, its check-up", async ({ page, request }) => {
+  // Hermes is installed from the internet by its own installer. Where builds
+  // can't reach it, E2E_HERMES_IMAGE names an image with Hermes in the home.
+  const standin = process.env.E2E_HERMES_IMAGE;
+  test.skip(!!process.env.E2E_NO_AGENT_BUILD && !standin, "builds can't reach the internet here");
+  const hm = "bfa-bfe2e-hm";
+  const panel = async () => {
+    await go(page, "agents");
+    await page.getByTestId("agent-bfe2e-hm").getByRole("button", { name: "제어판 열기" }).click();
+  };
+  if (standin) {
+    const kinds = (await (await request.post("/api/call/AgentCatalog", { data: [] })).json()).result.kinds;
+    const k = kinds.find((x: { id: string }) => x.id === "hermes");
+    const made = await (
+      await request.post("/api/call/AgentSave", {
+        data: [{ name: "bfe2e-hm", agents: ["hermes"], workspace: work, network: k.network, ports: [k.port], service: k.service, memory: k.memory, cpus: 2, pids: k.pids }, true],
+      })
+    ).json();
+    sh(`docker tag ${standin} boxforge-agent/bfe2e-hm:latest`);
+    sh(`docker compose -f '${made.result.file}' up -d --no-build`);
+    await open(page);
+    await panel();
+  } else {
+    await make(page, "bfe2e-hm", async (d) => {
+      await d.getByLabel(/Pi Coding Agent/).uncheck();
+      await d.getByLabel(/^Hermes Agent \(/).check();
+      await d.getByLabel(/브라우저 상자 함께 만들기/).uncheck();
+      // Set for it: the internet (it fetches its tools), its page and its gateway kept running.
+      await expect(d).toContainText("네트워크를 \"인터넷 전체\"로 바꿨습니다");
+      await expect(d.getByRole("textbox", { name: /서비스 명령/ })).toHaveValue(/hermes dashboard[\s\S]*hermes gateway/);
+    });
+  }
+  await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 900_000 });
+  // Installed into the box user's home, as its installer does it.
+  expect(sh(`docker exec ${hm}-agent sh -c 'command -v hermes; id -u'`)).toMatch(/^\/home\/agent\/.*hermes\n\d+$/);
+
+  // Not set up: the terminal opens with its setup; its version and check-up are at hand.
+  await expect(page.getByRole("tab", { name: "Hermes Agent 설정" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("setup-needed")).toContainText("Hermes Agent 설정이 아직 안 됐습니다");
+  await expect(page.getByTestId("agent-facts")).toContainText(/Hermes Agent \(.+\)/, { timeout: 90_000 });
+  await page.getByRole("button", { name: "+ Hermes Agent 진단" }).click();
+  await expect(page.getByRole("tab", { name: "Hermes Agent 진단" })).toBeVisible();
+  await expect(page.getByTestId("cli")).toContainText(`docker exec -it ${hm}-agent sh /opt/boxforge/run hermes doctor`);
+
+  // Its page and its gateway both kept running; its page opens here before the setup (keys are set there too).
+  await page.getByRole("tab", { name: "웹 · 포트" }).click();
+  await expect(page.getByTestId("gateway-stage")).toContainText("게이트웨이: 준비됨", { timeout: 300_000 });
+  const log = sh(`docker logs ${hm}-service 2>&1`, true);
+  expect(log).toContain("켭니다: hermes dashboard");
+  expect(log).toContain("켭니다: hermes gateway");
+  const shown = page.context().waitForEvent("page", { timeout: 90_000 });
+  await page.getByTestId("agent-page").getByRole("button", { name: /내 PC 브라우저로 열기/ }).click();
+  const view = await shown;
+  await view.waitForLoadState();
+  await expect(view).toHaveTitle(/Hermes/, { timeout: 60_000 });
+  await view.close();
+
+  // A key put in (as its setup or its page would): set up, seen at once.
+  sh(`docker exec ${hm}-agent sh -c 'mkdir -p ~/.hermes && echo OPENROUTER_API_KEY=sk-or-e2e >> ~/.hermes/.env'`);
+  await page.getByRole("tab", { name: "터미널" }).click();
+  await expect(page.getByTestId("setup-done")).toContainText("Hermes Agent 설정이 끝났습니다", { timeout: 30_000 });
+  expect(sh(`docker inspect -f '{{.RestartCount}}' ${hm}-service`)).toBe("0");
+});
+
+test("an agent of a guide: an empty box, installed from its terminal by the steps shown", async ({ page }) => {
+  test.skip(!!process.env.E2E_NO_AGENT_BUILD, "builds can't reach the internet here");
+  await make(page, "bfe2e-guide", async (d) => {
+    await d.getByLabel(/Pi Coding Agent/).uncheck();
+    await d.getByLabel(/^Gemini CLI \(/).check();
+  });
+  await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 540_000 });
+  // Not put in when the box was made: its steps instead.
+  expect(sh(`docker exec bfa-bfe2e-guide-agent sh -c 'command -v gemini || echo none'`)).toBe("none");
+  const guide = page.getByTestId("agent-guide");
+  await expect(guide).toContainText("Gemini CLI 설치 안내");
+  await expect(guide).toContainText("npm install -g @google/gemini-cli");
+  await expect(page.getByRole("button", { name: "+ Gemini CLI", exact: true })).toHaveCount(0);
+  await guide.getByRole("button", { name: "터미널에서 실행" }).first().click();
+  // Through the box's network ("AI services only": the package registry is let through for it).
+  await expect(page.getByTestId("setup-done")).toContainText("Gemini CLI이(가) 설치됐습니다", { timeout: 300_000 });
+  await expect(guide).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "+ Gemini CLI", exact: true })).toBeVisible();
+  expect(sh(`docker exec bfa-bfe2e-guide-agent sh -c 'command -v gemini'`)).toMatch(/^\/home\/agent\//);
 });

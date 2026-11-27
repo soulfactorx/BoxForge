@@ -1,0 +1,13 @@
+# BoxForge agent recipe: see docs/AGENT-RECIPES.md.
+id: claude
+name: Claude Code
+group: ready
+order: 20
+command: claude
+about: Anthropic의 코딩 에이전트.
+docs: https://docs.anthropic.com/en/docs/claude-code
+install: RUN npm install -g @anthropic-ai/claude-code
+keys: [ANTHROPIC_API_KEY]
+hosts: ["@anthropic"]
+note: 처음 실행하면 로그인 주소가 나옵니다. 내 PC의 브라우저에서 열고 받은 코드를 붙여 넣습니다.
+version: claude --version

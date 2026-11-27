@@ -15,6 +15,7 @@
 //   E2E_NODE=mirror.gcr.io/library/node:24-bookworm-slim (AI agent boxes' base)
 //   E2E_BROWSER=mirror.gcr.io/jlesage/firefox:latest (their browser box)
 //   E2E_OPENCLAW_IMAGE=<an image with OpenClaw in it> (the OpenClaw box, where builds can't install it)
+//   E2E_HERMES_IMAGE=<an image with Hermes in /home/agent> (the Hermes box, likewise)
 // Where builds can't reach the internet, E2E_NO_AGENT_BUILD=1 skips building a real agent.
 import { defineConfig } from "@playwright/test";
 import { mkdtempSync } from "node:fs";

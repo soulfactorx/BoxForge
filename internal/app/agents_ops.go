@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -236,6 +237,8 @@ func (a *App) AgentSetKey(name, key, value string) error {
 // agentCommand is what runs in the box for one of its agents, or its shell:
 // plain words through agentRun where the box has it (made by 0.37.1 or
 // later), else agentWrap on the command line.
+var plainWords = regexp.MustCompile(`^[A-Za-z0-9_./:=@ -]+$`)
+
 func agentCommand(s AgentSpec, which string, run bool) ([]string, error) {
 	var words []string
 	switch which {
@@ -248,8 +251,21 @@ func agentCommand(s AgentSpec, which string, run bool) ([]string, error) {
 			words = strings.Fields(k.Command)
 		}
 	default:
-		// "setup:openclaw": the agent's own setup.
-		id, setup := strings.CutPrefix(which, "setup:")
+		// "openclaw", or one of its own commands: "setup:openclaw",
+		// "doctor:hermes", "update:hermes", "guide:codex:0" (a step of its
+		// guide).
+		action, id, _ := strings.Cut(which, ":")
+		if id == "" {
+			action, id = "", which
+		}
+		step := -1
+		if action == "guide" {
+			var n string
+			id, n, _ = strings.Cut(id, ":")
+			if v, err := strconv.Atoi(n); err == nil {
+				step = v
+			}
+		}
 		ok := false
 		for _, a := range s.Agents {
 			if a == id {
@@ -257,12 +273,38 @@ func agentCommand(s AgentSpec, which string, run bool) ([]string, error) {
 			}
 		}
 		k, known := agentKind(id)
-		if !ok || !known || (setup && k.Setup == "") {
+		if !ok || !known {
 			return nil, fmt.Errorf("the box has no agent %q", which)
 		}
-		words = strings.Fields(k.Command)
-		if setup {
-			words = strings.Fields(k.Setup)
+		cmd := ""
+		switch action {
+		case "":
+			words = strings.Fields(k.Command)
+		case "setup":
+			cmd = k.Setup
+		case "doctor":
+			cmd = k.Doctor
+		case "update":
+			cmd = k.Update
+		case "guide":
+			if step >= 0 && step < len(k.Guide) {
+				cmd = k.Guide[step].Command
+			}
+		}
+		if action != "" {
+			if strings.TrimSpace(cmd) == "" {
+				return nil, fmt.Errorf("%s has no %s", k.Name, action)
+			}
+			if !run {
+				return []string{"sh", "-c", agentWrap, "boxforge", "sh", "-c", cmd}, nil
+			}
+			// Plain words as they are (a terminal outside the app takes
+			// only those); a command line of its own (a guide's may have a
+			// pipe) through sh.
+			words = strings.Fields(cmd)
+			if !plainWords.MatchString(cmd) {
+				words = []string{"sh", "-c", cmd}
+			}
 		}
 	}
 	if len(words) == 0 {
@@ -783,7 +825,8 @@ func (a *App) AgentGatewayCheck(name string) (AgentGateway, error) {
 		if err != nil {
 			return g, err
 		}
-		g.Setup = code == 1
+		// Only one that waits for it waits: Hermes's page opens before.
+		g.Setup = code == 1 && k.Gate
 	}
 	if k.Port > 0 && !g.Setup {
 		// The gateway shares the box's network: its localhost is the box's.
@@ -806,11 +849,11 @@ func (a *App) AgentVersions(name string) (map[string]string, error) {
 	defer cancel()
 	for _, id := range s.Agents {
 		k, _ := agentKind(id)
-		words := strings.Fields(k.Command)
-		if len(words) == 0 {
-			continue
+		v := k.Version
+		if v == "" {
+			v = strings.Fields(k.Command)[0] + " --version"
 		}
-		cmd := []string{"timeout", "-s", "KILL", "30", "sh", agentRunPath, words[0], "--version"}
+		cmd := []string{"timeout", "-s", "KILL", "30", "sh", agentRunPath, "sh", "-c", v}
 		stdout, _, code, err := a.eng().Containers().Output(ctx, agentProject(name)+"-agent", cmd, nil)
 		if err != nil || code != 0 {
 			continue
