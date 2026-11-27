@@ -1844,5 +1844,7 @@
  "실행 (먼저 \"API 키\" 탭에 GROK_API_KEY 를 넣습니다)": "Run it (first put GROK_API_KEY in the \"API keys\" tab)",
  "{0}은(는) 설치할 때 여러 곳에서 받아 오므로 네트워크를 \"{1}\"로 바꿨습니다. 아래에서 다시 바꿀 수 있습니다.": "{0} fetches from many places while installing, so the network was set to \"{1}\". You can change it below.",
  "휴대폰 입력: 단어마다 보내기로 (키보드가 잘 안 맞을 때)": "Phone typing: send a word at a time (if the keyboard doesn't get on)",
- "휴대폰 입력: 치는 대로 바로 보내기로": "Phone typing: send each letter as typed"
+ "휴대폰 입력: 치는 대로 바로 보내기로": "Phone typing: send each letter as typed",
+ "[ $(( $(date +{0}) - started )) -gt 120 ] && wait=5 echo \"BoxForge: 끝났습니다(코드 $code), ${wait}초 뒤 다시 켭니다: $1\" sleep \"$wait\" [ \"$wait\" -lt 60 ] && wait=$((wait * 2)) done }": "[ $(( $(date +{0}) - started )) -gt 120 ] && wait=5 echo \"BoxForge: ended (code $code); starting it again in ${wait}s: $1\" sleep \"$wait\" [ \"$wait\" -lt 60 ] && wait=$((wait * 2)) done }",
+ "keep() { wait=5 while :; do echo \"BoxForge: 켭니다: $1\" started=$(date +{0}) sh -c \"$1\" code=$?": "keep() { wait=5 while :; do echo \"BoxForge: starting: $1\" started=$(date +{0}) sh -c \"$1\" code=$?"
 }
