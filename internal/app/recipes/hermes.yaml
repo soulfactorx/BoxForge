@@ -12,9 +12,20 @@ apt: [xz-utils, libatomic1, ffmpeg]
 # home volume): it brings its own uv and Python, and later installs and
 # updates its tools there itself. The browser and computer-use parts are
 # left out (a box has no screen; add them with "hermes pm install chromium").
+#
+# Its installer fails the whole install when only its web page's build does,
+# and that build runs on the node it fetches for itself, which crashed
+# (exited 139) on an ARM VM. Then the page is built once more on the box's
+# own node; failing that too, Hermes is there all the same (its terminal,
+# its gateway), its page not.
 homeInstall: |
   RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
       | bash -s -- --non-interactive --skip-browser --skip-computer-use \
+   || { command -v hermes >/dev/null || exit 1; \
+        echo "BoxForge: Hermes는 설치됐고 웹 화면 빌드만 실패했습니다. 이 상자의 node로 다시 빌드합니다."; \
+        H="$HOME/.hermes/hermes-agent"; \
+        node "$H/scripts/build/web.mjs" --source "$H" --icons "$H" --out "$H/hermes_cli/web_dist" \
+        || echo "BoxForge: 웹 화면은 빌드하지 못했습니다. 터미널의 hermes 와 메신저 게이트웨이는 쓸 수 있습니다."; } \
    && hermes --version
 keys: [OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, NOUS_API_KEY, TELEGRAM_BOT_TOKEN, DISCORD_BOT_TOKEN]
 hosts: [openrouter.ai, "*.nousresearch.com", "@anthropic", "@openai", "@google", "@packages", "@github"]

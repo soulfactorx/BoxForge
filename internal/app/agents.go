@@ -240,11 +240,14 @@ func agentFiles(s AgentSpec, host func(string) string) map[string]string {
 
 	agent := func(service, command string) {
 		w("  %s:\n", service)
-		if image == "" {
-			// The same for the service: Compose builds it once, and doesn't
-			// go looking for an image of that name on Docker Hub.
+		if image == "" && service == "agent" {
 			w("    build:\n      context: .\n      args:\n        BASE: %s\n        UID: %q\n        GID: %q\n", y(agentBase()), strconv.Itoa(uid), strconv.Itoa(gid))
 			w("    image: boxforge-agent/%s:latest\n", s.Name)
+		} else if image == "" {
+			// The agent's image, built once (built for each, the two builds
+			// ran side by side: twice the memory and the time, a small
+			// machine's build running out), and not looked for on Docker Hub.
+			w("    image: boxforge-agent/%s:latest\n    pull_policy: never\n", s.Name)
 		} else {
 			w("    image: %s\n", y(image))
 		}
@@ -533,11 +536,15 @@ func serviceScript(s AgentSpec) string {
 		b.WriteString("exec " + lines[0] + "\n")
 		return b.String()
 	}
-	b.WriteString("pids=\n")
+	// Each kept running by itself: one that ends (Hermes's page failing to
+	// build) is started again, a little later each time, and the others
+	// (its gateway) go on.
+	b.WriteString("keep() {\n  wait=5\n  while :; do\n    echo \"BoxForge: 켭니다: $1\"\n    started=$(date +%s)\n    sh -c \"$1\"\n    code=$?\n")
+	b.WriteString("    [ $(( $(date +%s) - started )) -gt 120 ] && wait=5\n    echo \"BoxForge: 끝났습니다(코드 $code), ${wait}초 뒤 다시 켭니다: $1\"\n    sleep \"$wait\"\n    [ \"$wait\" -lt 60 ] && wait=$((wait * 2))\n  done\n}\n")
 	for _, l := range lines {
-		fmt.Fprintf(&b, "echo %s\n%s &\npids=\"$pids $!\"\n", shQuote("BoxForge: 켭니다: "+l), l)
+		fmt.Fprintf(&b, "keep %s &\n", shQuote(l))
 	}
-	b.WriteString("while :; do\n  sleep 5\n  for p in $pids; do\n    if ! kill -0 \"$p\" 2>/dev/null; then echo 'BoxForge: 하나가 끝나서 모두 다시 켭니다.'; exit 1; fi\n  done\ndone\n")
+	b.WriteString("wait\n")
 	return b.String()
 }
 

@@ -129,11 +129,16 @@ func TestAgentServiceScript(t *testing.T) {
 	k, _ := agentKind("hermes")
 	s := AgentSpec{Name: "h", Agents: []string{"hermes"}, Service: k.Service}
 	sv := serviceScript(s)
-	if strings.Contains(sv, "until ready") || !strings.Contains(sv, "hermes dashboard --host 127.0.0.1 --port 9119 --no-open &") ||
-		!strings.Contains(sv, "hermes gateway &") || !strings.Contains(sv, "exit 1") {
+	if strings.Contains(sv, "until ready") || !strings.Contains(sv, "keep 'hermes dashboard --host 127.0.0.1 --port 9119 --no-open' &") ||
+		!strings.Contains(sv, "keep 'hermes gateway' &") || strings.Contains(sv, "exit 1") {
 		t.Fatalf("%s", sv)
 	}
-	df := agentFiles(s, func(p string) string { return p })["Dockerfile"]
+	files := agentFiles(s, func(p string) string { return p })
+	// Built once, for the box; the service takes that image.
+	if c := files["compose.yaml"]; strings.Count(c, "build:") != 1 || !strings.Contains(c, "pull_policy: never") {
+		t.Fatalf("%s", c)
+	}
+	df := files["Dockerfile"]
 	if !strings.Contains(df, "WORKDIR /home/agent") || !strings.Contains(df, "hermes-agent/main/scripts/install.sh") || !strings.Contains(df, "ffmpeg") {
 		t.Fatalf("%s", df)
 	}
