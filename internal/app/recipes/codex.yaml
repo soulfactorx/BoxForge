@@ -12,6 +12,9 @@ guide:
   - title: 로그인 (내 PC의 브라우저에서 코드 입력)
     command: codex login --device-auth
 keys: [OPENAI_API_KEY]
-hosts: ["@openai", "@packages"]
+hosts: ["@openai", "@packages", "@github", nodejs.org]
 note: codex login --device-auth 로 내 PC의 브라우저에서 로그인하거나 API 키를 넣습니다.
 version: codex --version
+# Installers fetch from many places (native modules fetch node headers):
+# the whole internet to start with, which the box can be changed from.
+network: full

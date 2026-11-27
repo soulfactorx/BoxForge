@@ -524,7 +524,11 @@ function MakeDialog(props: {
     // The network it needs (a many-sided agent fetches its plugins and tools).
     if (on && k.network && k.network !== spec.network && spec.network === "ai") {
       set({ network: k.network });
-      setNetNote(`${k.name}은(는) 플러그인 · 도구를 받으러 인터넷에 나가야 해서 네트워크를 "${networkLabel[k.network]}"로 바꿨습니다. 아래에서 다시 바꿀 수 있습니다.`);
+      setNetNote(
+        k.group === "guide"
+          ? `${k.name}은(는) 설치할 때 여러 곳에서 받아 오므로 네트워크를 "${networkLabel[k.network]}"로 바꿨습니다. 아래에서 다시 바꿀 수 있습니다.`
+          : `${k.name}은(는) 플러그인 · 도구를 받으러 인터넷에 나가야 해서 네트워크를 "${networkLabel[k.network]}"로 바꿨습니다. 아래에서 다시 바꿀 수 있습니다.`,
+      );
     }
     // What it keeps running (its gateway, its page): one that has to be set up first waits for that.
     if (k.service && (k.group === "hot" || k.ready)) {

@@ -12,6 +12,9 @@ guide:
   - title: 실행 (처음에 로그인 방법을 고릅니다)
     command: gemini
 keys: [GEMINI_API_KEY]
-hosts: ["@google", "@packages"]
+hosts: ["@google", "@packages", "@github", nodejs.org]
 note: 구글 로그인은 주소와 코드로 합니다(브라우저 없이). API 키도 됩니다.
 version: gemini --version
+# Installers fetch from many places (native modules fetch node headers):
+# the whole internet to start with, which the box can be changed from.
+network: full

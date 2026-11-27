@@ -520,6 +520,8 @@ test("an agent of a guide: an empty box, installed from its terminal by the step
   await make(page, "bfe2e-guide", async (d) => {
     await d.getByLabel(/Pi Coding Agent/).uncheck();
     await d.getByLabel(/^Gemini CLI \(/).check();
+    // Its installer fetches from many places (node headers for a native module): the whole internet.
+    await expect(d).toContainText("설치할 때 여러 곳에서 받아 오므로 네트워크를 \"인터넷 전체\"로 바꿨습니다");
   });
   await expect(page.getByTestId("agent-state")).toContainText("실행 중", { timeout: 540_000 });
   // Not put in when the box was made: its steps instead.
@@ -529,7 +531,6 @@ test("an agent of a guide: an empty box, installed from its terminal by the step
   await expect(guide).toContainText("npm install -g @google/gemini-cli");
   await expect(page.getByRole("button", { name: "+ Gemini CLI", exact: true })).toHaveCount(0);
   await guide.getByRole("button", { name: "터미널에서 실행" }).first().click();
-  // Through the box's network ("AI services only": the package registry is let through for it).
   await expect(page.getByTestId("setup-done")).toContainText("Gemini CLI이(가) 설치됐습니다", { timeout: 300_000 });
   await expect(guide).toHaveCount(0);
   await expect(page.getByRole("button", { name: "+ Gemini CLI", exact: true })).toBeVisible();

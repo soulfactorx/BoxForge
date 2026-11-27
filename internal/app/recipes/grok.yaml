@@ -11,6 +11,9 @@ guide:
   - title: 실행 (먼저 "API 키" 탭에 GROK_API_KEY 를 넣습니다)
     command: grok
 keys: [GROK_API_KEY]
-hosts: [api.x.ai, "@packages"]
+hosts: [api.x.ai, "@packages", "@github", nodejs.org]
 note: GROK_API_KEY 에 xAI의 API 키를 넣습니다.
 version: grok --version
+# Installers fetch from many places (native modules fetch node headers):
+# the whole internet to start with, which the box can be changed from.
+network: full

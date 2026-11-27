@@ -12,6 +12,9 @@ guide:
   - title: 실행 (안에서 /login 으로 GitHub 기기 코드 로그인)
     command: copilot
 keys: [GH_TOKEN]
-hosts: ["@copilot", "@packages"]
+hosts: ["@copilot", "@packages", "@github", nodejs.org]
 note: copilot 안에서 /login 으로 GitHub 기기 코드 로그인을 합니다.
 version: copilot --version
+# Installers fetch from many places (native modules fetch node headers):
+# the whole internet to start with, which the box can be changed from.
+network: full

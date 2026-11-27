@@ -12,6 +12,9 @@ guide:
   - title: 로그인
     command: cursor-agent login
 keys: [CURSOR_API_KEY]
-hosts: [cursor.com, "*.cursor.com", "*.cursor.sh", "@packages"]
+hosts: [cursor.com, "*.cursor.com", "*.cursor.sh", "@packages", "@github", nodejs.org]
 note: cursor-agent login 으로 로그인하거나 CURSOR_API_KEY 를 넣습니다.
 version: cursor-agent --version
+# Installers fetch from many places (native modules fetch node headers):
+# the whole internet to start with, which the box can be changed from.
+network: full
