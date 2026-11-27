@@ -225,6 +225,32 @@ test("an agent box: keys kept out of the container's settings, only listed addre
   expect(all).toContain("\n300\n");
   await view.getByRole("button", { name: "닫기" }).click();
   await expect(view).toHaveCount(0);
+  // A phone's keyboard composing a word at a time (Samsung's, Google's, even
+  // for English) and Korean letter by letter (ㅎ→하→한): each letter reaches
+  // the program as it is made, not a word later with spaces between.
+  await mpane.locator(".xterm").tap();
+  // The keyboard's events, as a phone's keyboard gives them.
+  const ime = (steps: [string, ...string[]][]) =>
+    mobile.evaluate((steps) => {
+      const ta = document.querySelector('[data-testid="term-pane"]:not([hidden]) .xterm-helper-textarea') as HTMLTextAreaElement;
+      for (const [what, ...args] of steps) {
+        if (what === "input") {
+          ta.value = args[0];
+          ta.dispatchEvent(new InputEvent("input", { inputType: args[1], data: args[2], bubbles: true }));
+        } else ta.dispatchEvent(new CompositionEvent(what, { bubbles: true, data: args[0] ?? "" }));
+      }
+    }, steps);
+  const composing = (before: string, parts: string[]): [string, ...string[]][] => parts.flatMap((p) => [["compositionupdate", p], ["input", before + p, "insertCompositionText", p]] as [string, ...string[]][]);
+  await ime([["compositionstart"], ...composing("", ["e", "ec", "ech", "echo"]), ["compositionend", "echo"], ["input", "echo ", "insertText", " "]]);
+  await ime([["compositionstart"], ...composing("echo ", ["ㅎ", "하", "한", "한ㄱ", "한그"])]);
+  // Still being composed, and already with the program (a word later, before).
+  await expect(mrows).toContainText("echo 한그", { timeout: 10_000 });
+  await ime([...composing("echo ", ["한글"]), ["compositionend", "한글"], ["input", "echo 한글 ", "insertText", " "]]);
+  await ime([["compositionstart"], ...composing("echo 한글 ", ["o", "ok"]), ["compositionend", "ok"]]);
+  await expect(mrows).toContainText("echo 한글 ok", { timeout: 10_000 });
+  await mobile.keyboard.press("Enter");
+  await expect.poll(() => mrows.innerText()).toMatch(/^한글 ok$/m);
+  expect(await mrows.innerText()).not.toMatch(/한 글|echoecho|okok/);
   // The head of the panel on a phone: its state on one line, not broken letter by letter.
   const head = (await mobile.getByTestId("agent-state").boundingBox())!;
   expect(head.height).toBeLessThan(40);

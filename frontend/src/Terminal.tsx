@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { call, callOnLeave, on, type Run, remote } from "./bridge";
 import { copyText } from "./ui";
-import { keySeq, withMods, type Mods } from "./termkeys";
+import { InputMirror, isCharacterKey, isPrintable, keySeq, toTerminalText, withMods, type Mods } from "./termkeys";
 
 // Ctrl and Alt on the key bar: off, for the next key (one tap), or held (two quick taps).
 type Hold = 0 | 1 | 2;
@@ -51,6 +51,25 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
   const ended = useRef(onEnd);
   ended.current = onEnd;
   const box = useRef<HTMLDivElement>(null);
+  // A phone's keyboard sent letter by letter (on), or a word at a time as
+  // xterm does (for a keyboard that doesn't get on with it): remembered.
+  const [liveInput, setLiveInput] = useState(() => {
+    try {
+      return localStorage.getItem("bf.termInput") !== "word";
+    } catch {
+      return true;
+    }
+  });
+  const liveRef = useRef(liveInput);
+  liveRef.current = liveInput;
+  const chooseLive = (on: boolean) => {
+    setLiveInput(on);
+    try {
+      localStorage.setItem("bf.termInput", on ? "live" : "word");
+    } catch {
+      /* for this time only */
+    }
+  };
   const [note, setNote] = useState("");
   // The menu a right click opens, where it opened; and pasting by hand where the clipboard can't be read.
   const [menu, setMenu] = useState<{ x: number; y: number; selected: boolean } | null>(null);
@@ -222,15 +241,110 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       pending += data;
       flush();
     };
+    const raw = (data: string) => {
+      if (!data) return;
+      pending += data;
+      flush();
+    };
+
+    // A phone's keyboard, letter by letter as it is typed (termkeys.ts's
+    // InputMirror): what is in xterm's input box is followed and sent at
+    // once, rather than a word later when the keyboard ends its composing.
+    // Its events are heard before xterm's (capture), xterm's left as they
+    // are; what xterm then sends of the same letters is dropped. Letters
+    // from a real key (a Bluetooth keyboard: not 229) or a paste don't go
+    // through the box: xterm's are sent. Enter and the arrows always are.
+    const live = () => touch() && liveRef.current;
+    const mirror = new InputMirror();
+    const textarea = term.textarea;
+    let composing = false;
+    // Whether what xterm sends now comes from a real key: on while that event is handled.
+    let realKey = false;
+    let realTimer = 0;
+    const allowXterm = () => {
+      realKey = true;
+      clearTimeout(realTimer);
+      realTimer = window.setTimeout(() => (realKey = false), 0);
+    };
+    // What a key just sent through xterm: when it shows in the box too, not sent again.
+    let keySent = "";
+    let keySentUsed = false;
+    let keySentTimer = 0;
+    const onInput = (e: Event) => {
+      if (e.target !== textarea || !textarea || !live()) return;
+      const { deletes, add: added } = mirror.update(textarea.value);
+      raw("\x7f".repeat(deletes));
+      let add = added;
+      if (keySent && add.startsWith(keySent)) {
+        if (keySentUsed) mirror.consumeFirstAdded(Array.from(add).length);
+        add = add.slice(keySent.length);
+        keySent = "";
+      }
+      if (!add) return;
+      const text = toTerminalText(add);
+      const h = holdRef.current;
+      if (h.ctrl || h.alt) {
+        // Ctrl or Alt tapped on the key bar: on the first new letter, which
+        // taken back later sends no DEL.
+        const first = Array.from(text)[0];
+        raw(withMods(first, { ctrl: h.ctrl > 0, alt: h.alt > 0, shift: false }));
+        used();
+        mirror.consumeFirstAdded(Array.from(add).length);
+        raw(text.slice(first.length));
+      } else {
+        raw(text);
+      }
+      // A new line sent: the box emptied, as xterm does on Enter.
+      if (text.includes("\r") && !composing) {
+        textarea.value = "";
+        mirror.reset();
+      }
+    };
+    const onCompositionStart = () => (composing = true);
+    const onCompositionEnd = () => (composing = false);
+    // xterm empties the box on Enter, Ctrl+C and losing focus (with no input event).
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target !== textarea) return;
+      keySent = "";
+      // Not while composing: Enter then makes xterm end the composition and send it once more.
+      if (isCharacterKey(e) && !composing) allowXterm();
+      if (e.key === "Enter" || (e.ctrlKey && (e.key === "c" || e.key === "C"))) {
+        setTimeout(() => {
+          if (textarea && textarea.value === "") mirror.reset();
+        }, 0);
+      }
+    };
+    const onKeyPress = (e: KeyboardEvent) => {
+      if (e.target === textarea && isCharacterKey(e) && !composing) allowXterm();
+    };
+    const onPaste = () => allowXterm();
+    const onFocusOut = () => mirror.reset();
+    const screenEl = box.current;
+    if (touch()) {
+      screenEl.addEventListener("input", onInput, true);
+      screenEl.addEventListener("keypress", onKeyPress, true);
+      screenEl.addEventListener("paste", onPaste, true);
+      screenEl.addEventListener("compositionstart", onCompositionStart, true);
+      screenEl.addEventListener("compositionend", onCompositionEnd, true);
+      screenEl.addEventListener("keydown", onKeyDown, true);
+      screenEl.addEventListener("focusout", onFocusOut, true);
+    }
     const typed = term.onData((data) => {
+      if (live() && isPrintable(data)) {
+        // From the input box: sent already.
+        if (!realKey) return;
+        keySent = data;
+        keySentUsed = holdRef.current.ctrl > 0 || holdRef.current.alt > 0;
+        clearTimeout(keySentTimer);
+        keySentTimer = window.setTimeout(() => (keySent = ""), 100);
+      }
       // Ctrl or Alt tapped on the key bar applies to the next key typed.
       const h = holdRef.current;
       if ((h.ctrl || h.alt) && data.length === 1) {
         data = withMods(data, { ctrl: h.ctrl > 0, alt: h.alt > 0, shift: false });
         used();
       }
-      pending += data;
-      flush();
+      raw(data);
     });
     // A finger drawn up or down the terminal scrolls what it has shown, as a
     // page does (xterm's own scrolling is made for a mouse wheel), going on a
@@ -305,6 +419,18 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
       screen.removeEventListener("touchstart", touchStart);
       screen.removeEventListener("touchmove", touchMove);
       screen.removeEventListener("touchend", touchEnd);
+      for (const [type, fn] of [
+        ["input", onInput],
+        ["keypress", onKeyPress],
+        ["paste", onPaste],
+        ["compositionstart", onCompositionStart],
+        ["compositionend", onCompositionEnd],
+        ["keydown", onKeyDown],
+        ["focusout", onFocusOut],
+      ] as [string, EventListener][])
+        screenEl.removeEventListener(type, fn, true);
+      clearTimeout(realTimer);
+      clearTimeout(keySentTimer);
       window.removeEventListener("pagehide", leave);
       if (session) call("TermClose", session).catch(() => {});
       term.dispose();
@@ -321,7 +447,7 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
         </div>
       )}
       <div
-        className="term-box"
+        className={"term-box" + (touch() && liveInput ? " live-input" : "")}
         ref={box}
         data-testid="terminal"
         onContextMenu={(e) => {
@@ -410,6 +536,11 @@ export default function Terminal({ id, name, showCli, run, open, command, onEnd 
           <button type="button" role="menuitem" onClick={() => (setMenu(null), xterm.current?.clear(), xterm.current?.focus())}>
             화면 지우기
           </button>
+          {touch() && (
+            <button type="button" role="menuitem" onClick={() => (setMenu(null), chooseLive(!liveInput), xterm.current?.focus())}>
+              {liveInput ? "휴대폰 입력: 단어마다 보내기로 (키보드가 잘 안 맞을 때)" : "휴대폰 입력: 치는 대로 바로 보내기로"}
+            </button>
+          )}
         </div>
       )}
       {text !== null && <TextView text={text.text} at={text.at} onClose={() => (setText(null), xterm.current?.focus())} />}

@@ -1403,3 +1403,10 @@ tr.picked td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .guide-card .actions { display: flex; gap: 8px; align-items: center; }
 .agent-kinds .agent-group { grid-column: 1 / -1; }
 .kind-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 16px; }
+/*
+ * A phone's keyboard sent letter by letter: the program shows each letter
+ * at once, so xterm's line of what is being composed is hidden (else each
+ * shows twice). Not display: none: xterm sizes its input box by that line,
+ * and a box of no size makes Android keyboards stop typing into it.
+ */
+.term-box.live-input .composition-view { opacity: 0 !important; }

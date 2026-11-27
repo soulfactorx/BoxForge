@@ -1842,5 +1842,7 @@
  "실행 (안에서 /login 으로 GitHub 기기 코드 로그인)": "Run it (sign in with /login and GitHub's device code)",
  "설치 (내 홈의 ~/.local/bin 에 들어갑니다)": "Install (it goes into ~/.local/bin in the home)",
  "실행 (먼저 \"API 키\" 탭에 GROK_API_KEY 를 넣습니다)": "Run it (first put GROK_API_KEY in the \"API keys\" tab)",
- "{0}은(는) 설치할 때 여러 곳에서 받아 오므로 네트워크를 \"{1}\"로 바꿨습니다. 아래에서 다시 바꿀 수 있습니다.": "{0} fetches from many places while installing, so the network was set to \"{1}\". You can change it below."
+ "{0}은(는) 설치할 때 여러 곳에서 받아 오므로 네트워크를 \"{1}\"로 바꿨습니다. 아래에서 다시 바꿀 수 있습니다.": "{0} fetches from many places while installing, so the network was set to \"{1}\". You can change it below.",
+ "휴대폰 입력: 단어마다 보내기로 (키보드가 잘 안 맞을 때)": "Phone typing: send a word at a time (if the keyboard doesn't get on)",
+ "휴대폰 입력: 치는 대로 바로 보내기로": "Phone typing: send each letter as typed"
 }

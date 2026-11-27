@@ -55,3 +55,58 @@ export function keySeq(key: string, m: Mods, appCursor: boolean): string {
   if (ss3[key]) return any(m) ? `\x1b[1;${param(m)}${ss3[key]}` : `\x1bO${ss3[key]}`;
   return withMods(key, m); // a character: | ~ / - …
 }
+
+/**
+ * A phone's keyboard, followed by what is in xterm's input box rather than
+ * by its keyboard events (as soulfactorx/pi-desktop's terminal does).
+ *
+ * Samsung's and Google's keyboards compose even English a word at a time,
+ * and xterm sends only what a composition ends with: what is typed shows in
+ * a line under the terminal and reaches the program a word later (Korean
+ * came out with spaces between its letters). The order and contents of
+ * those events differ from keyboard to keyboard; the box's value doesn't
+ * lie. So each time it changes it is compared with the last: letters gone
+ * are sent as DEL, letters new are sent at once. A Korean letter being made
+ * (ㅎ→하→한) is written and written again as it changes.
+ *
+ * A letter sent with Ctrl or Alt held went to the program as a control
+ * key: marked used, so the keyboard taking it back later sends no DEL.
+ */
+export class InputMirror {
+  private value = "";
+  private plain: boolean[] = [];
+
+  /** The box's new value: how many DELs to send, and what is new. */
+  update(next: string): { deletes: number; add: string } {
+    const chars = Array.from(next);
+    const prev = Array.from(this.value);
+    let common = 0;
+    while (common < prev.length && common < chars.length && prev[common] === chars[common]) common++;
+    const deletes = this.plain.slice(common).filter(Boolean).length;
+    const add = chars.slice(common).join("");
+    this.value = next;
+    this.plain = [...this.plain.slice(0, common), ...chars.slice(common).map(() => true)];
+    return { deletes, add };
+  }
+
+  /** The first letter of what update just gave was sent with Ctrl or Alt. */
+  consumeFirstAdded(addLength: number): void {
+    const at = this.plain.length - addLength;
+    if (addLength > 0 && at >= 0) this.plain[at] = false;
+  }
+
+  /** The box was emptied from outside (xterm does on Enter, Ctrl+C, losing focus). */
+  reset(): void {
+    this.value = "";
+    this.plain = [];
+  }
+}
+
+/** A phone keyboard's new line is the terminal's Enter. */
+export const toTerminalText = (text: string) => text.replace(/\r?\n/g, "\r");
+
+/** Letters only, no control keys. */
+export const isPrintable = (data: string) => data.length > 0 && !/[\x00-\x1f\x7f]/.test(data);
+
+/** A real key that makes one letter (a Bluetooth keyboard): not a phone keyboard's 229. */
+export const isCharacterKey = (e: KeyboardEvent) => e.keyCode !== 229 && Array.from(e.key).length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey;
