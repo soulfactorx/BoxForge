@@ -162,6 +162,9 @@ func TestUserRecipes(t *testing.T) {
 	if byID["newbot"].Group != "hot" || !slices.Contains(byID["newbot"].Hosts, "api.anthropic.com") || byID["pi"].Name != "My Pi" || len(problems) != 1 {
 		t.Fatalf("%+v %v", byID["newbot"], problems)
 	}
+	if g := byID["gemini"].Ready; !strings.HasSuffix(g, "|| exit 1") {
+		t.Fatalf("a guide's agent not there is 1, not dash's 127: %q", g)
+	}
 	if kinds[len(kinds)-1].ID != "newbot" {
 		t.Fatal("the user's own come last")
 	}

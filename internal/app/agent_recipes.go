@@ -156,7 +156,8 @@ func parseRecipe(data []byte, source string) (AgentKind, error) {
 	}
 	// A guide's agent is there once its command is.
 	if k.Group == "guide" && k.Ready == "" {
-		k.Ready = "command -v " + strings.Fields(k.Command)[0] + " >/dev/null 2>&1"
+		// (dash's "command -v" ends 127 for one that isn't there: 1 is "not yet".)
+		k.Ready = "command -v " + strings.Fields(k.Command)[0] + " >/dev/null 2>&1 || exit 1"
 	}
 	var hosts []string
 	for _, h := range k.Hosts {
